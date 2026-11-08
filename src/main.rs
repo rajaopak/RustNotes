@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 use eframe::egui;
 use rustnotes::app::{RustNotesApp, load_app_icon};
 use rustnotes::crash_handler::setup_panic_handler;
