@@ -1133,3 +1133,62 @@ fn test_image_object_rotation_bounds_and_transform() {
         "Tinggi bounding box visual setelah rotasi 90 CW harus sesuai width"
     );
 }
+
+#[test]
+fn test_text_object_rotation_on_page_rotate() {
+    let mut page = crate::model::Page::with_size(crate::model::PageTemplate::Blank, 800.0, 1100.0);
+    page.objects.push(DrawObject::Text {
+        id: "text-rot-test".into(),
+        x: 100.0,
+        y: 200.0,
+        text: "Rotated Text".into(),
+        font_size: 20.0,
+        color: dummy_color(),
+        rotation: 0.0,
+    });
+
+    // 1. Rotate 90 CW: (x, y) -> (1100 - y = 900, x = 100), rotation -> FRAC_PI_2 (90 deg)
+    rotate_page_content(&mut page, 90);
+    assert_eq!(page.width, 1100.0);
+    assert_eq!(page.height, 800.0);
+    assert_eq!(page.rotation, 90);
+
+    if let DrawObject::Text { x, y, rotation, .. } = &page.objects[0] {
+        assert!(
+            (x - 900.0).abs() < 1e-4,
+            "Posisi x teks setelah rotasi 90 CW harus 900"
+        );
+        assert!(
+            (y - 100.0).abs() < 1e-4,
+            "Posisi y teks setelah rotasi 90 CW harus 100"
+        );
+        assert!(
+            (rotation - std::f32::consts::FRAC_PI_2).abs() < 1e-4,
+            "Sudut rotasi teks harus 90 derajat (pi/2)"
+        );
+    } else {
+        panic!("Expected Text object");
+    }
+
+    // 2. Rotate 180: (x, y) -> (1100 - x = 200, 800 - y = 700), rotation -> PI/2 + PI = 3*PI/2 (270 deg)
+    rotate_page_content(&mut page, 180);
+    assert_eq!(page.rotation, 270);
+    if let DrawObject::Text { x, y, rotation, .. } = &page.objects[0] {
+        assert!(
+            (x - 200.0).abs() < 1e-4,
+            "Posisi x teks setelah rotasi 180 harus 200"
+        );
+        assert!(
+            (y - 700.0).abs() < 1e-4,
+            "Posisi y teks setelah rotasi 180 harus 700"
+        );
+        let expected_rot =
+            (std::f32::consts::FRAC_PI_2 + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU);
+        assert!(
+            (rotation - expected_rot).abs() < 1e-4,
+            "Sudut rotasi teks harus 270 derajat"
+        );
+    } else {
+        panic!("Expected Text object");
+    }
+}

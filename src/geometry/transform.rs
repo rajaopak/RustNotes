@@ -241,10 +241,11 @@ pub fn rotate_object(obj: &mut DrawObject, origin: Pos2, angle_rad: f32) {
                 *y = ny - *height / 2.0;
             }
         },
-        DrawObject::Text { x, y, .. } => {
+        DrawObject::Text { x, y, rotation, .. } => {
             let (nx, ny) = rotate_pt(*x, *y);
             *x = nx;
             *y = ny;
+            *rotation = (*rotation + angle_rad).rem_euclid(std::f32::consts::TAU);
         }
         DrawObject::StickyNote { x, y, .. } => {
             let (nx, ny) = rotate_pt(*x, *y);
@@ -366,11 +367,12 @@ fn rotate_object_90_cw(obj: &mut DrawObject, old_h: f32) {
                 }
             }
         },
-        DrawObject::Text { x, y, .. } => {
+        DrawObject::Text { x, y, rotation, .. } => {
             let nx = old_h - *y;
             let ny = *x;
             *x = nx;
             *y = ny;
+            *rotation = (*rotation + std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::TAU);
         }
         DrawObject::StickyNote {
             x,
@@ -477,11 +479,12 @@ fn rotate_object_90_ccw(obj: &mut DrawObject, old_w: f32) {
                 }
             }
         },
-        DrawObject::Text { x, y, .. } => {
+        DrawObject::Text { x, y, rotation, .. } => {
             let nx = *y;
             let ny = old_w - *x;
             *x = nx;
             *y = ny;
+            *rotation = (*rotation - std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::TAU);
         }
         DrawObject::StickyNote {
             x,
@@ -583,9 +586,10 @@ fn rotate_object_180(obj: &mut DrawObject, old_w: f32, old_h: f32) {
                 }
             }
         },
-        DrawObject::Text { x, y, .. } => {
+        DrawObject::Text { x, y, rotation, .. } => {
             *x = old_w - *x;
             *y = old_h - *y;
+            *rotation = (*rotation + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU);
         }
         DrawObject::StickyNote {
             x,

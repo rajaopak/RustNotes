@@ -522,6 +522,7 @@ impl RustNotesApp {
                                                         y,
                                                         text,
                                                         color,
+                                                        rotation,
                                                         ..
                                                     } => {
                                                         let pos =
@@ -534,13 +535,18 @@ impl RustNotesApp {
                                                         } else {
                                                             text.clone()
                                                         };
-                                                        painter.text(
-                                                            pos,
-                                                            egui::Align2::LEFT_TOP,
+                                                        let galley = painter.layout_no_wrap(
                                                             preview_text,
                                                             FontId::proportional(8.0),
                                                             color.to_color32(),
                                                         );
+                                                        let mut text_shape = egui::epaint::TextShape::new(
+                                                            pos,
+                                                            galley,
+                                                            color.to_color32(),
+                                                        );
+                                                        text_shape.angle = *rotation;
+                                                        painter.add(text_shape);
                                                     }
                                                 }
                                             }

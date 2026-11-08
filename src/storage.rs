@@ -646,6 +646,7 @@ fn draw_egui_text(
     font_size_pt: f32,
     color: [u8; 4],
     scale: f32,
+    rotation: f32,
 ) {
     if text.trim().is_empty() {
         return;
@@ -661,15 +662,16 @@ fn draw_egui_text(
     let atlas_w = font_image.width();
     let atlas_h = font_image.height();
 
+    let cos_a = rotation.cos();
+    let sin_a = rotation.sin();
+    let is_rotated = rotation.abs() > 1e-4;
+
     for row in &galley.rows {
         for glyph in &row.glyphs {
             let uv_rect = glyph.uv_rect;
             if uv_rect.is_nothing() {
                 continue;
             }
-            let glyph_x_px = ((x_pt + glyph.pos.x + uv_rect.offset.x) * scale).round() as i32;
-            let glyph_y_px = ((y_pt + glyph.pos.y + uv_rect.offset.y) * scale).round() as i32;
-
             let u_min = uv_rect.min[0] as usize;
             let v_min = uv_rect.min[1] as usize;
             let u_max = uv_rect.max[0] as usize;
@@ -691,12 +693,24 @@ fn draw_egui_text(
                     let coverage = font_image[(u, v)];
                     if coverage > 0.005 {
                         let eff_alpha = ((color[3] as f32 * coverage).clamp(0.0, 255.0)) as u8;
-                        blend_pixel(
-                            img,
-                            glyph_x_px + dx as i32,
-                            glyph_y_px + dy as i32,
-                            [color[0], color[1], color[2], eff_alpha],
-                        );
+                        let (px, py) = if is_rotated {
+                            let lx = glyph.pos.x + uv_rect.offset.x + dx as f32;
+                            let ly = glyph.pos.y + uv_rect.offset.y + dy as f32;
+                            let rx = lx * cos_a - ly * sin_a;
+                            let ry = lx * sin_a + ly * cos_a;
+                            (
+                                ((x_pt + rx) * scale).round() as i32,
+                                ((y_pt + ry) * scale).round() as i32,
+                            )
+                        } else {
+                            (
+                                ((x_pt + glyph.pos.x + uv_rect.offset.x + dx as f32) * scale)
+                                    .round() as i32,
+                                ((y_pt + glyph.pos.y + uv_rect.offset.y + dy as f32) * scale)
+                                    .round() as i32,
+                            )
+                        };
+                        blend_pixel(img, px, py, [color[0], color[1], color[2], eff_alpha]);
                     }
                 }
             }
@@ -1063,6 +1077,7 @@ pub fn export_page_to_png(
                     14.0,
                     [40, 40, 40, 255],
                     scale,
+                    0.0,
                 );
             }
             crate::model::DrawObject::Text {
@@ -1071,6 +1086,7 @@ pub fn export_page_to_png(
                 text,
                 font_size,
                 color,
+                rotation,
                 ..
             } => {
                 draw_egui_text(
@@ -1082,6 +1098,7 @@ pub fn export_page_to_png(
                     *font_size,
                     [color.r, color.g, color.b, color.a],
                     scale,
+                    *rotation,
                 );
             }
         }
@@ -1533,6 +1550,7 @@ mod tests {
                 b: 200,
                 a: 255,
             },
+            rotation: 0.0,
         });
 
         let out_png = dir.join("test_page.png");

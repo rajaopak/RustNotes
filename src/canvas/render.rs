@@ -330,6 +330,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                         text: String::new(),
                         font_size: (state.stroke_width * 4.0 + 14.0).clamp(12.0, 72.0),
                         color: state.stroke_color.into(),
+                        rotation: 0.0,
                     };
                     page.objects.push(new_text);
                     state.spatial_grid.rebuild(&page.objects);
@@ -1028,6 +1029,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     text: String::new(),
                     font_size: (state.stroke_width * 4.0 + 14.0).clamp(12.0, 72.0),
                     color: state.stroke_color.into(),
+                    rotation: 0.0,
                 };
                 page.objects.push(new_text);
                 state.spatial_grid.rebuild(&page.objects);

@@ -43,6 +43,7 @@ pub fn object_bounds(obj: &DrawObject) -> Rect {
             y,
             font_size,
             text,
+            rotation,
             ..
         } => {
             let lines: Vec<&str> = text.lines().collect();
@@ -50,7 +51,24 @@ pub fn object_bounds(obj: &DrawObject) -> Rect {
             let max_line_len = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f32;
             let approx_w = max_line_len * (font_size * 0.58).max(8.0);
             let approx_h = line_count * (font_size * 1.35).max(18.0);
-            Rect::from_min_size(Pos2::new(*x, *y), Vec2::new(approx_w.max(20.0), approx_h))
+            let w = approx_w.max(20.0);
+            let h = approx_h;
+            let rot = *rotation;
+            if rot.abs() < 1e-3 {
+                Rect::from_min_size(Pos2::new(*x, *y), Vec2::new(w, h))
+            } else {
+                let cos_a = rot.cos();
+                let sin_a = rot.sin();
+                let p0 = Pos2::new(*x, *y);
+                let p1 = p0 + Vec2::new(w * cos_a, w * sin_a);
+                let p2 = p1 + Vec2::new(-h * sin_a, h * cos_a);
+                let p3 = p0 + Vec2::new(-h * sin_a, h * cos_a);
+                let min_x = p0.x.min(p1.x).min(p2.x).min(p3.x);
+                let max_x = p0.x.max(p1.x).max(p2.x).max(p3.x);
+                let min_y = p0.y.min(p1.y).min(p2.y).min(p3.y);
+                let max_y = p0.y.max(p1.y).max(p2.y).max(p3.y);
+                Rect::from_min_max(Pos2::new(min_x, min_y), Pos2::new(max_x, max_y))
+            }
         }
         DrawObject::StickyNote {
             x,

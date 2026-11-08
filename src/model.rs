@@ -105,6 +105,8 @@ pub enum DrawObject {
         text: String,
         font_size: f32,
         color: ColorData,
+        #[serde(default)]
+        rotation: f32,
     },
     StickyNote {
         id: String,
@@ -716,6 +718,7 @@ mod tests {
                 b: 30,
                 a: 255,
             },
+            rotation: 0.0,
         };
         let json_text = serde_json::to_string(&text_obj).expect("serialize");
         let decoded_text: DrawObject = serde_json::from_str(&json_text).expect("deserialize");
@@ -755,6 +758,7 @@ mod tests {
                 b: 0,
                 a: 255,
             },
+            rotation: 0.0,
         });
 
         let mut nb = Notebook::new(

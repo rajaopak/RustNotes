@@ -185,16 +185,18 @@ pub fn draw_non_stroke_object(
             text,
             font_size,
             color,
+            rotation,
             ..
         } => {
             let pos = page_to_screen(Pos2::new(*x, *y));
-            painter.text(
-                pos,
-                egui::Align2::LEFT_TOP,
-                text,
+            let galley = painter.layout_no_wrap(
+                text.clone(),
                 egui::FontId::proportional(font_size * zoom),
                 color.to_color32(),
             );
+            let mut text_shape = egui::epaint::TextShape::new(pos, galley, color.to_color32());
+            text_shape.angle = *rotation;
+            painter.add(text_shape);
         }
         DrawObject::StickyNote {
             x,

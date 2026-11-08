@@ -24,6 +24,7 @@ fn make_test_page() -> Page {
         text: "Hello".to_string(),
         font_size: 16.0,
         color: ColorData::from(Color32::BLACK),
+        rotation: 0.0,
     });
     page
 }
@@ -305,6 +306,7 @@ fn test_undo_redo_does_not_affect_existing_text_on_subsequent_actions() {
         text: "Catatan Penting".to_string(),
         font_size: 16.0,
         color: ColorData::from(Color32::BLACK),
+        rotation: 0.0,
     });
 
     assert_eq!(page.objects.len(), 1);
@@ -370,6 +372,7 @@ fn test_undo_redo_multi_page_isolation_and_order() {
         text: "Page 1 Text".to_string(),
         font_size: 14.0,
         color: ColorData::from(Color32::BLACK),
+        rotation: 0.0,
     });
 
     // Di Page 2: Tambahkan sebuah bentuk persegi
@@ -431,6 +434,7 @@ fn test_clean_redundant_top_undo_on_empty_text() {
         text: "   ".to_string(),
         font_size: 14.0,
         color: ColorData::from(Color32::BLACK),
+        rotation: 0.0,
     });
 
     // 3. User batal (klik di luar atau Escape): teks kosong di-remove
