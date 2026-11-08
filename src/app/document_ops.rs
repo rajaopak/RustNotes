@@ -448,7 +448,8 @@ impl RustNotesApp {
                 (x, y)
             };
 
-            self.push_doc_undo(nb_idx);
+            let page = &mut self.library.notebooks[nb_idx].pages[cur_page_idx];
+            self.canvas_state.push_undo(&page.id, &page.objects);
             let new_img_id = uuid::Uuid::new_v4().to_string();
             let img_obj = crate::model::DrawObject::Image {
                 id: new_img_id.clone(),
@@ -461,14 +462,10 @@ impl RustNotesApp {
                 lock_aspect: true,
             };
 
-            self.library.notebooks[nb_idx].pages[cur_page_idx]
-                .objects
-                .push(img_obj);
+            page.objects.push(img_obj);
             self.canvas_state.selected_ids = vec![new_img_id];
             self.canvas_state.current_tool = ActiveTool::Lasso;
-            self.canvas_state
-                .spatial_grid
-                .rebuild(&self.library.notebooks[nb_idx].pages[cur_page_idx].objects);
+            self.canvas_state.spatial_grid.rebuild(&page.objects);
             self.mark_dirty(&nb_id);
             return true;
         }

@@ -477,3 +477,120 @@ fn test_laser_tessellation_layer_ribbon() {
         assert!((idx as usize) < mesh.vertices.len());
     }
 }
+
+#[test]
+fn test_undo_redo_after_whole_erase_and_insert_image() {
+    let mut state = CanvasState::default();
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "p_test_erase_image".to_string();
+
+    // 1. Buat beberapa objek (2 strokes) pada kertas
+    let stroke1 = DrawObject::Stroke {
+        id: "stroke_1".to_string(),
+        points: vec![
+            StrokePoint {
+                x: 50.0,
+                y: 50.0,
+                pressure: 0.5,
+            },
+            StrokePoint {
+                x: 100.0,
+                y: 50.0,
+                pressure: 0.5,
+            },
+        ],
+        color: ColorData::from(Color32::BLACK),
+        width: 3.0,
+        is_highlighter: false,
+    };
+    let stroke2 = DrawObject::Stroke {
+        id: "stroke_2".to_string(),
+        points: vec![
+            StrokePoint {
+                x: 150.0,
+                y: 50.0,
+                pressure: 0.5,
+            },
+            StrokePoint {
+                x: 200.0,
+                y: 50.0,
+                pressure: 0.5,
+            },
+        ],
+        color: ColorData::from(Color32::BLUE),
+        width: 3.0,
+        is_highlighter: false,
+    };
+
+    state.push_undo(&page.id, &page.objects);
+    page.objects.push(stroke1);
+    state.push_undo(&page.id, &page.objects);
+    page.objects.push(stroke2);
+    state.spatial_grid.rebuild(&page.objects);
+    assert_eq!(page.objects.len(), 2);
+
+    // 2. Erase menggunakan WholeStroke sehingga kertas kosong
+    state.eraser_mode = EraserMode::WholeStroke;
+    state.eraser_undo_pushed = false;
+    let erased1 = state.erase_at(&mut page, Pos2::new(75.0, 50.0), 4.0);
+    assert!(erased1);
+    assert_eq!(page.objects.len(), 1);
+
+    state.eraser_undo_pushed = false;
+    state.last_whole_erase_pos = None;
+    let erased2 = state.erase_at(&mut page, Pos2::new(175.0, 50.0), 4.0);
+    assert!(erased2);
+    assert_eq!(
+        page.objects.len(),
+        0,
+        "Kondisi kertas harus kosong setelah di-erase"
+    );
+
+    // 3. Tambahkan image ke halaman yang kosong
+    state.push_undo(&page.id, &page.objects);
+    let image_obj = DrawObject::Image {
+        id: "img_test".to_string(),
+        asset_id: "asset_hash_123".to_string(),
+        x: 100.0,
+        y: 100.0,
+        width: 200.0,
+        height: 150.0,
+        rotation: 0.0,
+        lock_aspect: true,
+    };
+    page.objects.push(image_obj);
+    state.spatial_grid.rebuild(&page.objects);
+    assert_eq!(page.objects.len(), 1);
+    assert_eq!(page.objects[0].id(), "img_test");
+
+    // 4. Pengguna menekan Undo: HARUS kembali ke kertas kosong (bukan ke objek lama)!
+    state.undo(&mut page);
+    assert_eq!(
+        page.objects.len(),
+        0,
+        "Undo pertama setelah insert image HARUS mengembalikan kertas ke kondisi kosong!"
+    );
+
+    // 5. Pengguna menekan Undo lagi: kembali ke kondisi sebelum stroke 2 di-erase ([stroke_2])
+    state.undo(&mut page);
+    assert_eq!(page.objects.len(), 1);
+    assert_eq!(page.objects[0].id(), "stroke_2");
+
+    // 6. Pengguna menekan Undo lagi: kembali ke kondisi kedua stroke ada ([stroke_1, stroke_2])
+    state.undo(&mut page);
+    assert_eq!(page.objects.len(), 2);
+    assert_eq!(page.objects[0].id(), "stroke_1");
+    assert_eq!(page.objects[1].id(), "stroke_2");
+
+    // 7. Pengguna menekan Redo berurutan: maju ke [stroke_2], lalu kertas kosong [], lalu image
+    state.redo(&mut page);
+    assert_eq!(page.objects.len(), 1);
+    assert_eq!(page.objects[0].id(), "stroke_2");
+
+    state.redo(&mut page);
+    assert_eq!(page.objects.len(), 0, "Redo ke kondisi kertas kosong");
+
+    state.redo(&mut page);
+    assert_eq!(page.objects.len(), 1, "Redo ke kondisi ada image");
+    assert_eq!(page.objects[0].id(), "img_test");
+}

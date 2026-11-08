@@ -246,37 +246,14 @@ impl RustNotesApp {
             }
 
             // Ctrl+X: Cut selected objects
-            if is_cut {
-                let mut cut_any = false;
-                self.push_doc_undo(nb_idx);
-                let mut copied = Vec::new();
-                for page in &mut self.library.notebooks[nb_idx].pages {
-                    for obj in &page.objects {
-                        if self
-                            .canvas_state
-                            .selected_ids
-                            .contains(&obj.id().to_string())
-                        {
-                            copied.push(obj.clone());
-                        }
-                    }
-                    if !self.canvas_state.selected_ids.is_empty() {
-                        let prev_len = page.objects.len();
-                        page.objects.retain(|o| {
-                            !self.canvas_state.selected_ids.contains(&o.id().to_string())
-                        });
-                        if page.objects.len() != prev_len {
-                            cut_any = true;
-                        }
-                    }
-                }
-                if cut_any {
-                    self.canvas_state.object_clipboard = copied;
-                    self.canvas_state.app_clipboard_timestamp = Some(Instant::now());
-                    self.canvas_state.selected_ids.clear();
-                    self.mark_dirty(&notebook_id);
-                    self.toast_message = Some("✂ Objek dipotong.".to_string());
-                }
+            if is_cut && !self.canvas_state.selected_ids.is_empty() {
+                let p = &mut self.library.notebooks[nb_idx].pages[self.current_page_index];
+                self.canvas_state.cut_selected(p);
+                self.mark_dirty(&notebook_id);
+                self.toast_message = Some(format!(
+                    "✂ {} objek dipotong.",
+                    self.canvas_state.object_clipboard.len()
+                ));
             }
 
             // Ctrl+D: Duplicate selected objects
