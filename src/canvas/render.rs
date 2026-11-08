@@ -1,4 +1,4 @@
-use super::laser::smooth_laser_points;
+use super::laser::{smooth_laser_points, tessellate_laser_layer};
 use super::primitives::{
     draw_non_stroke_object, draw_paper_pattern, draw_rotated_background_image,
     draw_shape_primitive, transform_page_mesh_to_screen,
@@ -902,41 +902,21 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         for stroke in &all_strokes_to_draw {
             let smoothed = smooth_laser_points(stroke);
             if smoothed.len() > 1 {
-                // Layer 1: Outer Red Neon Aura / Ambient Glow
-                painter.add(egui::Shape::Path(egui::epaint::PathShape::line(
-                    smoothed.clone(),
-                    Stroke::new(18.0_f32, outer_col),
-                )));
+                // Layer 1: Outer Red Neon Aura / Ambient Glow (Pita kontinu bebas artifak kotak/tangga)
+                let glow_mesh = tessellate_laser_layer(&smoothed, 20.0, outer_col);
+                painter.add(glow_mesh);
 
                 // Layer 2: Mid Neon Halo
-                painter.add(egui::Shape::Path(egui::epaint::PathShape::line(
-                    smoothed.clone(),
-                    Stroke::new(10.0_f32, halo_col),
-                )));
+                let halo_mesh = tessellate_laser_layer(&smoothed, 11.0, halo_col);
+                painter.add(halo_mesh);
 
                 // Layer 3: Solid Vibrant Red Core
-                painter.add(egui::Shape::Path(egui::epaint::PathShape::line(
-                    smoothed.clone(),
-                    Stroke::new(5.0_f32, core_col),
-                )));
+                let core_mesh = tessellate_laser_layer(&smoothed, 5.0, core_col);
+                painter.add(core_mesh);
 
                 // Layer 4: Hotspot White Laser Beam Center
-                painter.add(egui::Shape::Path(egui::epaint::PathShape::line(
-                    smoothed.clone(),
-                    Stroke::new(2.2_f32, beam_col),
-                )));
-
-                // Semicircle / round caps di awal dan akhir garis untuk menghilangkan ujung flat
-                if let (Some(&start), Some(&end)) = (smoothed.first(), smoothed.last()) {
-                    painter.circle_filled(start, 9.0, outer_col);
-                    painter.circle_filled(end, 9.0, outer_col);
-                    painter.circle_filled(start, 5.0, halo_col);
-                    painter.circle_filled(end, 5.0, halo_col);
-                    painter.circle_filled(start, 2.5, core_col);
-                    painter.circle_filled(end, 2.5, core_col);
-                    painter.circle_filled(start, 1.1, beam_col);
-                    painter.circle_filled(end, 1.1, beam_col);
-                }
+                let beam_mesh = tessellate_laser_layer(&smoothed, 2.2, beam_col);
+                painter.add(beam_mesh);
             }
         }
 

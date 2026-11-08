@@ -980,6 +980,13 @@ impl RustNotesApp {
                     {
                         self.push_doc_undo(nb_idx);
                         self.library.notebooks[nb_idx].rotate_page(self.current_page_index, 90);
+                        self.canvas_state.mesh_cache.clear();
+                        if let Some(p) = self.library.notebooks[nb_idx]
+                            .pages
+                            .get(self.current_page_index)
+                        {
+                            self.canvas_state.spatial_grid.rebuild(&p.objects);
+                        }
                         self.mark_dirty(&notebook_id);
                         self.toast_message =
                             Some("↻ Halaman diputar 90° searah jarum jam.".to_string());
@@ -999,6 +1006,13 @@ impl RustNotesApp {
                     {
                         self.push_doc_undo(nb_idx);
                         self.library.notebooks[nb_idx].rotate_page(self.current_page_index, -90);
+                        self.canvas_state.mesh_cache.clear();
+                        if let Some(p) = self.library.notebooks[nb_idx]
+                            .pages
+                            .get(self.current_page_index)
+                        {
+                            self.canvas_state.spatial_grid.rebuild(&p.objects);
+                        }
                         self.mark_dirty(&notebook_id);
                         self.toast_message =
                             Some("↺ Halaman diputar 90° berlawanan arah jarum jam.".to_string());
@@ -1015,6 +1029,13 @@ impl RustNotesApp {
                     {
                         self.push_doc_undo(nb_idx);
                         self.library.notebooks[nb_idx].rotate_page(self.current_page_index, 180);
+                        self.canvas_state.mesh_cache.clear();
+                        if let Some(p) = self.library.notebooks[nb_idx]
+                            .pages
+                            .get(self.current_page_index)
+                        {
+                            self.canvas_state.spatial_grid.rebuild(&p.objects);
+                        }
                         self.mark_dirty(&notebook_id);
                         self.toast_message = Some("⟲ Halaman diputar 180°.".to_string());
                         self.show_more_menu_popup = false;

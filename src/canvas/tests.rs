@@ -443,3 +443,33 @@ fn test_clean_redundant_top_undo_on_empty_text() {
     assert_eq!(state.undo_stacks.get(&page.id).unwrap().len(), 0);
     assert!(!state.can_undo(&page.id));
 }
+
+#[test]
+fn test_laser_tessellation_layer_ribbon() {
+    use super::laser::{smooth_laser_points, tessellate_laser_layer};
+
+    let pts = vec![
+        Pos2::new(10.0, 10.0),
+        Pos2::new(30.0, 25.0),
+        Pos2::new(50.0, 60.0),
+        Pos2::new(90.0, 80.0),
+    ];
+    let smoothed = smooth_laser_points(&pts);
+    assert!(smoothed.len() > pts.len());
+
+    let color = Color32::from_rgba_unmultiplied(255, 30, 45, 120);
+    let mesh = tessellate_laser_layer(&smoothed, 16.0, color);
+
+    assert!(
+        !mesh.vertices.is_empty(),
+        "Laser mesh vertices must not be empty"
+    );
+    assert!(
+        !mesh.indices.is_empty(),
+        "Laser mesh triangle indices must not be empty"
+    );
+    // Verify all triangle indices point to valid vertices
+    for &idx in &mesh.indices {
+        assert!((idx as usize) < mesh.vertices.len());
+    }
+}

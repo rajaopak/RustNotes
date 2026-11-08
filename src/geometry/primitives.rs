@@ -64,8 +64,17 @@ pub fn object_bounds(obj: &DrawObject) -> Rect {
             y,
             width,
             height,
+            rotation,
             ..
-        } => Rect::from_min_size(Pos2::new(*x, *y), Vec2::new(*width, *height)),
+        } => {
+            let cx = *x + *width / 2.0;
+            let cy = *y + *height / 2.0;
+            let cos_a = rotation.cos().abs();
+            let sin_a = rotation.sin().abs();
+            let bb_w = *width * cos_a + *height * sin_a;
+            let bb_h = *width * sin_a + *height * cos_a;
+            Rect::from_center_size(Pos2::new(cx, cy), Vec2::new(bb_w, bb_h))
+        }
     }
 }
 

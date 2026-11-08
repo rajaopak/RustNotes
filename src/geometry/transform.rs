@@ -397,10 +397,9 @@ fn rotate_object_90_cw(obj: &mut DrawObject, old_h: f32) {
             let cy = *y + *height / 2.0;
             let ncx = old_h - cy;
             let ncy = cx;
-            std::mem::swap(width, height);
             *x = ncx - *width / 2.0;
             *y = ncy - *height / 2.0;
-            *rotation += std::f32::consts::FRAC_PI_2;
+            *rotation = (*rotation + std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::TAU);
         }
     }
 }
@@ -509,10 +508,9 @@ fn rotate_object_90_ccw(obj: &mut DrawObject, old_w: f32) {
             let cy = *y + *height / 2.0;
             let ncx = cy;
             let ncy = old_w - cx;
-            std::mem::swap(width, height);
             *x = ncx - *width / 2.0;
             *y = ncy - *height / 2.0;
-            *rotation -= std::f32::consts::FRAC_PI_2;
+            *rotation = (*rotation - std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::TAU);
         }
     }
 }
@@ -613,7 +611,7 @@ fn rotate_object_180(obj: &mut DrawObject, old_w: f32, old_h: f32) {
             let ncy = old_h - cy;
             *x = ncx - *width / 2.0;
             *y = ncy - *height / 2.0;
-            *rotation += std::f32::consts::PI;
+            *rotation = (*rotation + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU);
         }
     }
 }

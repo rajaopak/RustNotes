@@ -1010,10 +1010,17 @@ pub fn export_page_to_png(
                         270 => obj_img.rotate270(),
                         _ => obj_img,
                     };
-                    let ox = (*x * scale).round() as i64;
-                    let oy = (*y * scale).round() as i64;
-                    let ow = (*width * scale).round().max(1.0) as u32;
-                    let oh = (*height * scale).round().max(1.0) as u32;
+                    let cx = *x + *width / 2.0;
+                    let cy = *y + *height / 2.0;
+                    let (bb_w, bb_h) = if rot_deg == 90 || rot_deg == 270 {
+                        (*height, *width)
+                    } else {
+                        (*width, *height)
+                    };
+                    let ox = ((cx - bb_w / 2.0) * scale).round() as i64;
+                    let oy = ((cy - bb_h / 2.0) * scale).round() as i64;
+                    let ow = (bb_w * scale).round().max(1.0) as u32;
+                    let oh = (bb_h * scale).round().max(1.0) as u32;
                     let resized =
                         rotated.resize_exact(ow, oh, image::imageops::FilterType::Lanczos3);
                     image::imageops::overlay(&mut img, &resized, ox, oy);

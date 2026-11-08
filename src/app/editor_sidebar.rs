@@ -125,6 +125,10 @@ impl RustNotesApp {
                                         for &idx in &self.thumb_selected_pages {
                                             self.library.notebooks[nb_idx].rotate_page(idx, 90);
                                         }
+                                        self.canvas_state.mesh_cache.clear();
+                                        if let Some(p) = self.library.notebooks[nb_idx].pages.get(self.current_page_index) {
+                                            self.canvas_state.spatial_grid.rebuild(&p.objects);
+                                        }
                                         self.mark_dirty(&notebook_id);
                                         self.toast_message =
                                             Some("↻ Halaman terpilih berhasil diputar 90°.".to_string());
@@ -703,6 +707,10 @@ impl RustNotesApp {
                                     if let Some(idx) = action_rotate_cw {
                                         self.push_doc_undo(nb_idx);
                                         self.library.notebooks[nb_idx].rotate_page(idx, 90);
+                                        self.canvas_state.mesh_cache.clear();
+                                        if let Some(p) = self.library.notebooks[nb_idx].pages.get(self.current_page_index) {
+                                            self.canvas_state.spatial_grid.rebuild(&p.objects);
+                                        }
                                         self.mark_dirty(&notebook_id);
                                         self.toast_message =
                                             Some(format!("↻ Halaman {} diputar 90° CW.", idx + 1));
@@ -710,6 +718,10 @@ impl RustNotesApp {
                                     if let Some(idx) = action_rotate_ccw {
                                         self.push_doc_undo(nb_idx);
                                         self.library.notebooks[nb_idx].rotate_page(idx, -90);
+                                        self.canvas_state.mesh_cache.clear();
+                                        if let Some(p) = self.library.notebooks[nb_idx].pages.get(self.current_page_index) {
+                                            self.canvas_state.spatial_grid.rebuild(&p.objects);
+                                        }
                                         self.mark_dirty(&notebook_id);
                                         self.toast_message =
                                             Some(format!("↺ Halaman {} diputar 90° CCW.", idx + 1));
@@ -717,6 +729,10 @@ impl RustNotesApp {
                                     if let Some(idx) = action_rotate_180 {
                                         self.push_doc_undo(nb_idx);
                                         self.library.notebooks[nb_idx].rotate_page(idx, 180);
+                                        self.canvas_state.mesh_cache.clear();
+                                        if let Some(p) = self.library.notebooks[nb_idx].pages.get(self.current_page_index) {
+                                            self.canvas_state.spatial_grid.rebuild(&p.objects);
+                                        }
                                         self.mark_dirty(&notebook_id);
                                         self.toast_message =
                                             Some(format!("⟲ Halaman {} diputar 180°.", idx + 1));

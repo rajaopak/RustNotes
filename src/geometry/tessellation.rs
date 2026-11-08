@@ -95,24 +95,40 @@ pub fn tessellate_stroke_ex(
         return mesh;
     }
 
-    // Filter titik-titik yang terlalu rapat (< 1.5 pt) untuk mencegah pita melipat diri (ribbon folding overlap)
+    // Filter titik-titik yang terlalu rapat untuk mencegah pita melipat diri (ribbon folding overlap)
+    let min_dist_sq = if is_highlighter {
+        // Highlighters memiliki pita yang lebar (width ~20-50). Titik yang terlalu rapat
+        // (< 0.45 * radius) menyebabkan tepi dalam tikungan melipat ke belakang dan melipatgandakan alpha.
+        let r = (base_width / 2.0).max(1.0);
+        (r * 0.45).powi(2).max(12.0)
+    } else {
+        2.0
+    };
+
     let mut filtered: Vec<StrokePoint> = Vec::with_capacity(points.len());
     for pt in points {
         if let Some(last) = filtered.last() {
             let dx = pt.x - last.x;
             let dy = pt.y - last.y;
-            if (dx * dx + dy * dy) < 2.0 {
+            if (dx * dx + dy * dy) < min_dist_sq {
                 continue;
             }
         }
         filtered.push(pt.clone());
     }
-    if let Some(last) = points.last()
-        && filtered
-            .last()
-            .is_none_or(|p| p.x != last.x || p.y != last.y)
-    {
-        filtered.push(last.clone());
+    if let Some(last) = points.last() {
+        if let Some(prev) = filtered.last() {
+            let dx = last.x - prev.x;
+            let dy = last.y - prev.y;
+            if (dx * dx + dy * dy) >= min_dist_sq {
+                filtered.push(last.clone());
+            } else if filtered.len() > 1 {
+                // Update titik terakhir agar akurat tanpa menciptakan segmen mikro berjarak 0
+                *filtered.last_mut().unwrap() = last.clone();
+            }
+        } else {
+            filtered.push(last.clone());
+        }
     }
 
     let pts_to_use = if filtered.len() >= 2 {
@@ -153,18 +169,21 @@ pub fn tessellate_stroke_ex(
         normals.push(normal);
     }
 
-    // Start semicircle cap (menghadap ke arah luar belakang badan ribbon, tanpa tumpang tindih ke dalam)
-    let start_outward = if screen_pts.len() >= 2 {
-        let d = screen_pts[0] - screen_pts[1];
-        if d.length_sq() > 1e-6 {
-            d.normalized()
+    // Start semicircle cap (hanya untuk pen/pencil: menghadap ke arah luar belakang badan ribbon.
+    // Untuk highlighter, ujung rata (chisel cut) bebas overlap agar ketebalan warna 100% seragam tanpa bintik gelap).
+    if !is_highlighter {
+        let start_outward = if screen_pts.len() >= 2 {
+            let d = screen_pts[0] - screen_pts[1];
+            if d.length_sq() > 1e-6 {
+                d.normalized()
+            } else {
+                -normals[0]
+            }
         } else {
             -normals[0]
-        }
-    } else {
-        -normals[0]
-    };
-    add_semicircle_cap(&mut mesh, screen_pts[0], radii[0], start_outward, color, 8);
+        };
+        add_semicircle_cap(&mut mesh, screen_pts[0], radii[0], start_outward, color, 8);
+    }
 
     // Build ribbon vertices
     let base_idx = mesh.vertices.len() as u32;
@@ -191,26 +210,28 @@ pub fn tessellate_stroke_ex(
         mesh.add_triangle(r1, r2, l2);
     }
 
-    // End semicircle cap (menghadap ke arah luar depan badan ribbon, tanpa tumpang tindih ke dalam)
-    let last_idx = screen_pts.len() - 1;
-    let end_outward = if screen_pts.len() >= 2 {
-        let d = screen_pts[last_idx] - screen_pts[last_idx - 1];
-        if d.length_sq() > 1e-6 {
-            d.normalized()
+    // End semicircle cap (hanya untuk pen/pencil: menghadap ke arah luar depan badan ribbon)
+    if !is_highlighter {
+        let last_idx = screen_pts.len() - 1;
+        let end_outward = if screen_pts.len() >= 2 {
+            let d = screen_pts[last_idx] - screen_pts[last_idx - 1];
+            if d.length_sq() > 1e-6 {
+                d.normalized()
+            } else {
+                normals[last_idx]
+            }
         } else {
             normals[last_idx]
-        }
-    } else {
-        normals[last_idx]
-    };
-    add_semicircle_cap(
-        &mut mesh,
-        screen_pts[last_idx],
-        radii[last_idx],
-        end_outward,
-        color,
-        8,
-    );
+        };
+        add_semicircle_cap(
+            &mut mesh,
+            screen_pts[last_idx],
+            radii[last_idx],
+            end_outward,
+            color,
+            8,
+        );
+    }
 
     mesh
 }

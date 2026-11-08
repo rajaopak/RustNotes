@@ -1067,3 +1067,69 @@ fn test_highlighter_tessellation_no_overlap() {
         assert!((idx as usize) < mesh.vertices.len());
     }
 }
+
+#[test]
+fn test_image_object_rotation_bounds_and_transform() {
+    let mut page = crate::model::Page::with_size(crate::model::PageTemplate::Blank, 800.0, 1100.0);
+    page.objects.push(DrawObject::Image {
+        id: "img1".into(),
+        asset_id: "asset_test".into(),
+        x: 100.0,
+        y: 200.0,
+        width: 300.0,
+        height: 400.0,
+        rotation: 0.0,
+        lock_aspect: true,
+    });
+
+    let b0 = object_bounds(&page.objects[0]);
+    assert!((b0.width() - 300.0).abs() < 1e-4);
+    assert!((b0.height() - 400.0).abs() < 1e-4);
+
+    // Rotasi 90 CW: center (100+150=250, 200+200=400) -> (1100 - 400 = 700, 250)
+    // Page dimensions swap: width: 1100, height: 800
+    rotate_page_content(&mut page, 90);
+    assert_eq!(page.width, 1100.0);
+    assert_eq!(page.height, 800.0);
+    assert_eq!(page.rotation, 90);
+
+    if let DrawObject::Image {
+        x,
+        y,
+        width,
+        height,
+        rotation,
+        ..
+    } = &page.objects[0]
+    {
+        assert!(
+            (width - 300.0).abs() < 1e-4,
+            "Width asli harus tetap terjaga tanpa swap terbalik"
+        );
+        assert!(
+            (height - 400.0).abs() < 1e-4,
+            "Height asli harus tetap terjaga tanpa swap terbalik"
+        );
+        let cx = x + width / 2.0;
+        let cy = y + height / 2.0;
+        assert!((cx - 700.0).abs() < 1e-4, "Center x harus 700");
+        assert!((cy - 250.0).abs() < 1e-4, "Center y harus 250");
+        assert!(
+            (rotation - std::f32::consts::FRAC_PI_2).abs() < 1e-4,
+            "Rotasi harus 90 derajat (pi/2)"
+        );
+    } else {
+        panic!("Expected Image object");
+    }
+
+    // Bounding box visual setelah rotasi 90 derajat harus 400x300
+    let b1 = object_bounds(&page.objects[0]);
+    assert!(
+        (b1.width() - 400.0).abs() < 1e-2,
+        "Lebar bounding box visual setelah rotasi 90 CW harus sesuai height"
+    );
+    assert!(
+        (b1.height() - 300.0).abs() < 1e-2,
+        "Tinggi bounding box visual setelah rotasi 90 CW harus sesuai width"
+    );
+}
