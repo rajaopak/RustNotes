@@ -218,7 +218,11 @@ impl RustNotesApp {
                                             }
                                         }
                                         for asset_id in needed_assets {
-                                            self.canvas_state.get_or_load_texture(ui.ctx(), &asset_id);
+                                            self.canvas_state.get_or_load_texture_for_notebook(
+                                                ui.ctx(),
+                                                &self.library.notebooks[nb_idx].id,
+                                                &asset_id,
+                                            );
                                         }
 
                                         let p = &self.library.notebooks[nb_idx].pages[p_i];
@@ -293,8 +297,12 @@ impl RustNotesApp {
                                                     asset_id,
                                                     ..
                                                 } => {
-                                                    if let Some(tex) =
-                                                        self.canvas_state.texture_cache.get(&asset_id)
+                                                    if let Some(tex) = self
+                                                        .canvas_state
+                                                        .get_texture_for_notebook(
+                                                            &self.library.notebooks[nb_idx].id,
+                                                            &asset_id,
+                                                        )
                                                     {
                                                         crate::canvas::draw_rotated_background_image(
                                                             &painter,
@@ -487,8 +495,12 @@ impl RustNotesApp {
                                                         let half_w = (*width * scale) / 2.0;
                                                         let half_h = (*height * scale) / 2.0;
                                                         let r = Rect::from_center_size(center, Vec2::new(half_w * 2.0, half_h * 2.0));
-                                                        if let Some(tex) =
-                                                            self.canvas_state.texture_cache.get(asset_id)
+                                                        if let Some(tex) = self
+                                                            .canvas_state
+                                                            .get_texture_for_notebook(
+                                                                &self.library.notebooks[nb_idx].id,
+                                                                asset_id,
+                                                            )
                                                         {
                                                             let rot_deg = (rotation.to_degrees().round() as i32).rem_euclid(360);
                                                             crate::canvas::draw_rotated_background_image(

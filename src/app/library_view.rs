@@ -798,11 +798,40 @@ impl RustNotesApp {
                             self.persist_library();
                         }
                         if let Some(idx) = to_duplicate {
+                            let orig_id = self.library.notebooks[idx].id.clone();
+                            let storage_dir = app_storage_dir();
+
+                            // 1. Force-save notebook asli jika masih dirty agar data & aset terkini tersimpan ke disk
+                            if self.dirty_notebooks.contains(&orig_id)
+                                && let Some(nb) =
+                                    self.library.notebooks.iter().find(|n| n.id == orig_id)
+                            {
+                                let _ = save_notebook_to_dir(&storage_dir, nb);
+                                self.dirty_notebooks.remove(&orig_id);
+                            }
+
                             let mut clone = self.library.notebooks[idx].clone();
                             clone.id = uuid::Uuid::new_v4().to_string();
                             clone.title = format!("{} copy", clone.title);
-                            self.library.notebooks.push(clone);
-                            self.persist_library();
+
+                            // 2. Duplikasi data notebook dan berkas aset fisik di disk
+                            match crate::storage::duplicate_notebook_storage(
+                                &storage_dir,
+                                &orig_id,
+                                &clone,
+                            ) {
+                                Ok(()) => {
+                                    let title = clone.title.clone();
+                                    self.library.notebooks.push(clone);
+                                    self.sync_library_index();
+                                    self.toast_message =
+                                        Some(format!("Buku catatan diduplikasi: {title}"));
+                                }
+                                Err(e) => {
+                                    self.toast_message =
+                                        Some(format!("Gagal menduplikasi buku: {e}"));
+                                }
+                            }
                         }
                         if let Some(idx) = to_trash {
                             self.library.notebooks[idx].trashed = true;

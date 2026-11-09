@@ -151,7 +151,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         }
         crate::model::PageBackground::Image { asset_id }
         | crate::model::PageBackground::Pdf { asset_id, .. } => {
-            if let Some(tex) = state.texture_cache.get(&asset_id) {
+            if let Some(tex) = state.get_texture(&asset_id) {
                 draw_rotated_background_image(&painter, tex.id(), rect, page.rotation);
             }
         }
@@ -211,7 +211,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     &page.objects,
                     page_to_screen,
                     state.zoom,
-                    &state.texture_cache,
+                    |id| state.get_texture(id).map(|t| t.id()),
                 );
             }
         }

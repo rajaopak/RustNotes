@@ -490,6 +490,118 @@ pub fn load_asset_from_notebook(
     fs::read(&asset_path).map_err(|e| format!("Failed to read asset {asset_id}: {e}"))
 }
 
+/// Menyalin seluruh aset gambar/PDF dari direktori notebook sumber ke direktori notebook target.
+pub fn copy_notebook_assets(
+    dir: &Path,
+    source_notebook_id: &str,
+    target_notebook_id: &str,
+) -> Result<(), String> {
+    let src_assets = dir
+        .join("notebooks")
+        .join(source_notebook_id)
+        .join("assets");
+    let dst_assets = dir
+        .join("notebooks")
+        .join(target_notebook_id)
+        .join("assets");
+
+    if !src_assets.exists() {
+        // Jika folder aset sumber belum ada (buku tanpa aset), pastikan folder target ada
+        let _ = fs::create_dir_all(&dst_assets);
+        return Ok(());
+    }
+
+    fs::create_dir_all(&dst_assets)
+        .map_err(|e| format!("Gagal membuat direktori aset tujuan: {e}"))?;
+
+    let entries = fs::read_dir(&src_assets)
+        .map_err(|e| format!("Gagal membaca direktori aset sumber: {e}"))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Gagal membaca item aset: {e}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("Gagal membaca tipe berkas aset: {e}"))?;
+        if file_type.is_file() {
+            let file_name = entry.file_name();
+            let src_path = entry.path();
+            let dst_path = dst_assets.join(&file_name);
+            fs::copy(&src_path, &dst_path)
+                .map_err(|e| format!("Gagal menyalin aset {}: {e}", file_name.to_string_lossy()))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Menduplikasi buku catatan di tingkat disk:
+/// 1. Menyimpan data notebook klon ke `notebooks/<new_id>/notebook.json`.
+/// 2. Menyalin seluruh aset fisik dari buku sumber ke `notebooks/<new_id>/assets/`.
+/// 3. Rollback otomatis (menghapus folder klon) jika terjadi kegagalan.
+pub fn duplicate_notebook_storage(
+    dir: &Path,
+    source_notebook_id: &str,
+    target_notebook: &Notebook,
+) -> Result<(), String> {
+    let target_nb_dir = dir.join("notebooks").join(&target_notebook.id);
+
+    // 1. Simpan notebook.json target
+    if let Err(e) = save_notebook_to_dir(dir, target_notebook) {
+        if target_nb_dir.exists() {
+            let _ = fs::remove_dir_all(&target_nb_dir);
+        }
+        return Err(format!("Gagal menyimpan berkas buku catatan duplikat: {e}"));
+    }
+
+    // 2. Salin seluruh aset
+    if let Err(e) = copy_notebook_assets(dir, source_notebook_id, &target_notebook.id) {
+        if target_nb_dir.exists() {
+            let _ = fs::remove_dir_all(&target_nb_dir);
+        }
+        return Err(format!("Gagal menyalin aset buku catatan duplikat: {e}"));
+    }
+
+    Ok(())
+}
+
+/// Memvalidasi seluruh referensi aset di dalam notebook apakah berkas fisiknya ada di disk.
+/// Mengembalikan daftar `asset_id` yang hilang (jika ada).
+pub fn validate_notebook_assets(dir: &Path, notebook: &Notebook) -> Vec<String> {
+    let assets_dir = dir.join("notebooks").join(&notebook.id).join("assets");
+    let mut missing = Vec::new();
+    let mut checked = std::collections::HashSet::new();
+
+    for page in &notebook.pages {
+        // Cek background
+        match page.effective_background() {
+            crate::model::PageBackground::Image { asset_id }
+            | crate::model::PageBackground::Pdf { asset_id, .. }
+                if checked.insert(asset_id.clone()) =>
+            {
+                let asset_path = assets_dir.join(&asset_id);
+                if !asset_path.exists() {
+                    missing.push(asset_id);
+                }
+            }
+            _ => {}
+        }
+
+        // Cek objek
+        for obj in &page.objects {
+            if let crate::model::DrawObject::Image { asset_id, .. } = obj
+                && checked.insert(asset_id.clone())
+            {
+                let asset_path = assets_dir.join(asset_id);
+                if !asset_path.exists() {
+                    missing.push(asset_id.clone());
+                }
+            }
+        }
+    }
+
+    missing
+}
+
 pub fn get_pdfium() -> Result<Pdfium, String> {
     // 1. Cek di samping executable
     if let Ok(exe_path) = std::env::current_exe()
@@ -2352,5 +2464,137 @@ mod tests {
         assert!(svg_path.exists());
         let read_back = std::fs::read_to_string(&svg_path).expect("read svg");
         assert_eq!(read_back, svg);
+    }
+
+    #[test]
+    fn test_duplicate_notebook_storage_without_assets() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+
+        let orig_nb = Notebook::new("Original Note", PageTemplate::Blank, Color32::WHITE);
+        save_notebook_to_dir(dir, &orig_nb).expect("save original");
+
+        let mut clone_nb = orig_nb.clone();
+        clone_nb.id = uuid::Uuid::new_v4().to_string();
+        clone_nb.title = "Original Note copy".to_string();
+
+        duplicate_notebook_storage(dir, &orig_nb.id, &clone_nb).expect("duplicate");
+
+        // Verify clone can be loaded independently
+        let loaded_clone = load_notebook_from_dir(dir, &clone_nb.id).expect("load clone");
+        assert_eq!(loaded_clone.id, clone_nb.id);
+        assert_eq!(loaded_clone.title, "Original Note copy");
+    }
+
+    #[test]
+    fn test_duplicate_notebook_storage_with_image_assets() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+
+        let mut orig_nb =
+            Notebook::new("Notebook with Images", PageTemplate::Blank, Color32::WHITE);
+        save_notebook_to_dir(dir, &orig_nb).expect("save orig");
+
+        // Save mock image asset to original notebook
+        let fake_image_data = b"\x89PNG\r\n\x1a\nfake_image_content";
+        let asset_id =
+            save_asset_to_notebook(dir, &orig_nb.id, fake_image_data, "png").expect("save asset");
+
+        // Add DrawObject::Image to first page of original notebook
+        orig_nb.pages[0]
+            .objects
+            .push(crate::model::DrawObject::Image {
+                id: "img_obj_1".to_string(),
+                asset_id: asset_id.clone(),
+                x: 50.0,
+                y: 50.0,
+                width: 200.0,
+                height: 150.0,
+                rotation: 0.0,
+                lock_aspect: true,
+            });
+        save_notebook_to_dir(dir, &orig_nb).expect("save orig with image");
+
+        // Validate original has no missing assets
+        assert!(validate_notebook_assets(dir, &orig_nb).is_empty());
+
+        // Now duplicate
+        let mut clone_nb = orig_nb.clone();
+        clone_nb.id = uuid::Uuid::new_v4().to_string();
+        clone_nb.title = "Notebook with Images copy".to_string();
+
+        duplicate_notebook_storage(dir, &orig_nb.id, &clone_nb).expect("duplicate with assets");
+
+        // Verify clone has no missing assets
+        let missing = validate_notebook_assets(dir, &clone_nb);
+        assert!(
+            missing.is_empty(),
+            "Clone should not have missing assets, but found: {missing:?}"
+        );
+
+        // Verify asset bytes can be loaded from clone's own assets folder
+        let loaded_bytes =
+            load_asset_from_notebook(dir, &clone_nb.id, &asset_id).expect("load asset from clone");
+        assert_eq!(loaded_bytes, fake_image_data);
+    }
+
+    #[test]
+    fn test_duplicate_notebook_storage_isolation_and_delete_original() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+
+        let mut orig_nb = Notebook::new("Temporary Notebook", PageTemplate::Blank, Color32::WHITE);
+        save_notebook_to_dir(dir, &orig_nb).expect("save orig");
+
+        let fake_data = b"pdf_content_or_image_12345";
+        let asset_id =
+            save_asset_to_notebook(dir, &orig_nb.id, fake_data, "jpg").expect("save asset");
+
+        orig_nb.pages[0].background = Some(crate::model::PageBackground::Image {
+            asset_id: asset_id.clone(),
+        });
+        save_notebook_to_dir(dir, &orig_nb).expect("save orig");
+
+        // Duplicate
+        let mut clone_nb = orig_nb.clone();
+        clone_nb.id = uuid::Uuid::new_v4().to_string();
+        clone_nb.title = "Cloned Notebook".to_string();
+
+        duplicate_notebook_storage(dir, &orig_nb.id, &clone_nb).expect("duplicate");
+
+        // DELETE the original notebook directory completely!
+        let orig_dir = dir.join("notebooks").join(&orig_nb.id);
+        std::fs::remove_dir_all(&orig_dir).expect("delete orig");
+        assert!(!orig_dir.exists());
+
+        // Clone must still exist, load successfully, and asset must remain intact
+        let loaded_clone = load_notebook_from_dir(dir, &clone_nb.id).expect("load clone");
+        assert_eq!(loaded_clone.title, "Cloned Notebook");
+
+        let clone_asset_bytes = load_asset_from_notebook(dir, &clone_nb.id, &asset_id)
+            .expect("load asset from clone after orig deleted");
+        assert_eq!(clone_asset_bytes, fake_data);
+        assert!(validate_notebook_assets(dir, &clone_nb).is_empty());
+    }
+
+    #[test]
+    fn test_validate_notebook_assets_detects_missing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
+
+        let mut nb = Notebook::new("Missing Asset Note", PageTemplate::Blank, Color32::WHITE);
+        nb.pages[0].objects.push(crate::model::DrawObject::Image {
+            id: "missing_img".to_string(),
+            asset_id: "non_existent_hash.png".to_string(),
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+            rotation: 0.0,
+            lock_aspect: true,
+        });
+
+        let missing = validate_notebook_assets(dir, &nb);
+        assert_eq!(missing, vec!["non_existent_hash.png".to_string()]);
     }
 }

@@ -93,14 +93,9 @@ pub fn render_zoom_window_canvas(
                 painter.add(mesh);
             }
             other => {
-                draw_non_stroke_object(
-                    &painter,
-                    other,
-                    &page.objects,
-                    page_to_zw,
-                    scale,
-                    &state.texture_cache,
-                );
+                draw_non_stroke_object(&painter, other, &page.objects, page_to_zw, scale, |id| {
+                    state.get_texture(id).map(|t| t.id())
+                });
             }
         }
     }

@@ -615,12 +615,10 @@ fn test_render_shape_variants_and_connector_primitives() {
         ColorData, ConnectionSite, ConnectorEnd, ConnectorRoute, ConnectorStyle, DrawObject,
         MarkerKind, Point2D, ShapeKind, ShapeLabel, TextAlign, VerticalAlign,
     };
-    use std::collections::HashMap;
 
     let ctx = egui::Context::default();
     let _ = ctx.run(Default::default(), |ctx| {
         let painter = ctx.layer_painter(egui::LayerId::background());
-        let textures = HashMap::new();
 
         // 1. Test render Rounded Rectangle dengan rotasi
         let stroke = egui::Stroke::new(2.0_f32, Color32::BLACK);
@@ -728,10 +726,10 @@ fn test_render_shape_variants_and_connector_primitives() {
             &all_objects,
             |p| p,
             1.0,
-            &textures,
+            |_| None,
         );
 
-        draw_non_stroke_object(&painter, &connector, &all_objects, |p| p, 1.0, &textures);
+        draw_non_stroke_object(&painter, &connector, &all_objects, |p| p, 1.0, |_| None);
     });
 }
 
@@ -1133,4 +1131,63 @@ fn test_floating_toolbar_theme_dark_and_light_adaptation() {
             );
         });
     });
+}
+
+#[test]
+fn test_canvas_state_texture_cache_isolated_per_notebook() {
+    let mut state = CanvasState::default();
+    let ctx = egui::Context::default();
+
+    let dummy_img = egui::ColorImage::example();
+    let handle1 = ctx.load_texture("tex1", dummy_img.clone(), Default::default());
+    let handle2 = ctx.load_texture("tex2", dummy_img, Default::default());
+
+    let nb1 = "notebook-alpha";
+    let nb2 = "notebook-beta";
+    let asset_id = "image_common.png";
+
+    // Insert handle1 for nb1 and handle2 for nb2
+    state
+        .texture_cache
+        .insert((nb1.to_string(), asset_id.to_string()), handle1);
+    state
+        .texture_cache
+        .insert((nb2.to_string(), asset_id.to_string()), handle2);
+
+    // Saat active notebook adalah nb1
+    state.active_notebook_id = Some(nb1.to_string());
+    assert_eq!(state.get_texture(asset_id).unwrap().name(), "tex1");
+
+    // Saat active notebook beralih ke nb2
+    state.active_notebook_id = Some(nb2.to_string());
+    assert_eq!(state.get_texture(asset_id).unwrap().name(), "tex2");
+
+    // Saat active notebook adalah notebook asing yang belum punya cache
+    state.active_notebook_id = Some("notebook-gamma".to_string());
+    assert!(state.get_texture(asset_id).is_none());
+
+    // Saat active notebook None
+    state.active_notebook_id = None;
+    assert!(state.get_texture(asset_id).is_none());
+
+    // Lookup eksplisit per notebook_id
+    assert_eq!(
+        state
+            .get_texture_for_notebook(nb1, asset_id)
+            .unwrap()
+            .name(),
+        "tex1"
+    );
+    assert_eq!(
+        state
+            .get_texture_for_notebook(nb2, asset_id)
+            .unwrap()
+            .name(),
+        "tex2"
+    );
+    assert!(
+        state
+            .get_texture_for_notebook("notebook-gamma", asset_id)
+            .is_none()
+    );
 }

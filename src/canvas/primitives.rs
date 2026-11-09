@@ -1,6 +1,5 @@
 use crate::model::{DrawObject, PageTemplate, ShapeKind};
 use eframe::egui::{self, Color32, Mesh, Painter, Pos2, Rect, Stroke, Vec2};
-use std::collections::HashMap;
 
 /// Transformasikan `Mesh` goresan yang di-cache dalam koordinat lokal halaman (`0..width`, `0..height`)
 /// ke koordinat layar terkini berdasarkan `origin` kertas (`rect.min`) dan faktor `zoom`.
@@ -288,7 +287,7 @@ pub fn draw_non_stroke_object(
     all_objects: &[DrawObject],
     page_to_screen: impl Fn(Pos2) -> Pos2,
     zoom: f32,
-    textures: &HashMap<String, egui::TextureHandle>,
+    get_texture: impl Fn(&str) -> Option<egui::TextureId>,
 ) {
     match obj {
         DrawObject::Stroke { .. } => {}
@@ -440,8 +439,8 @@ pub fn draw_non_stroke_object(
             let half_w = (*width * zoom) / 2.0;
             let half_h = (*height * zoom) / 2.0;
             let r = Rect::from_center_size(center, Vec2::new(half_w * 2.0, half_h * 2.0));
-            if let Some(tex) = textures.get(asset_id) {
-                draw_rotated_image_object(painter, tex.id(), center, half_w, half_h, *rotation);
+            if let Some(tex_id) = get_texture(asset_id) {
+                draw_rotated_image_object(painter, tex_id, center, half_w, half_h, *rotation);
             } else {
                 painter.rect_filled(r, 4.0, Color32::from_rgb(50, 50, 54));
                 painter.rect_stroke(

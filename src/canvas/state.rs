@@ -54,7 +54,7 @@ pub struct CanvasState {
     pub spatial_grid_page_id: Option<String>,
 
     // Fase 3: Texture cache & Active notebook ID for asset lookup
-    pub texture_cache: HashMap<String, TextureHandle>,
+    pub texture_cache: HashMap<(String, String), TextureHandle>,
     pub active_notebook_id: Option<String>,
 
     // Fase 4: Object clipboard
@@ -171,11 +171,21 @@ impl CanvasState {
         ctx: &egui::Context,
         asset_id: &str,
     ) -> Option<&TextureHandle> {
-        if !self.texture_cache.contains_key(asset_id)
-            && let Some(nb_id) = &self.active_notebook_id
+        let nb_id = self.active_notebook_id.clone()?;
+        self.get_or_load_texture_for_notebook(ctx, &nb_id, asset_id)
+    }
+
+    pub fn get_or_load_texture_for_notebook(
+        &mut self,
+        ctx: &egui::Context,
+        notebook_id: &str,
+        asset_id: &str,
+    ) -> Option<&TextureHandle> {
+        let key = (notebook_id.to_string(), asset_id.to_string());
+        if !self.texture_cache.contains_key(&key)
             && let Ok(bytes) = crate::storage::load_asset_from_notebook(
                 &crate::storage::app_storage_dir(),
-                nb_id,
+                notebook_id,
                 asset_id,
             )
             && let Ok(dyn_img) = image::load_from_memory(&bytes)
@@ -183,10 +193,28 @@ impl CanvasState {
             let rgba = dyn_img.to_rgba8();
             let size = [rgba.width() as usize, rgba.height() as usize];
             let color_image = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
-            let handle = ctx.load_texture(asset_id, color_image, Default::default());
-            self.texture_cache.insert(asset_id.to_string(), handle);
+            let handle = ctx.load_texture(
+                format!("{notebook_id}:{asset_id}"),
+                color_image,
+                Default::default(),
+            );
+            self.texture_cache.insert(key.clone(), handle);
         }
-        self.texture_cache.get(asset_id)
+        self.texture_cache.get(&key)
+    }
+
+    pub fn get_texture(&self, asset_id: &str) -> Option<&TextureHandle> {
+        let nb_id = self.active_notebook_id.as_deref()?;
+        self.get_texture_for_notebook(nb_id, asset_id)
+    }
+
+    pub fn get_texture_for_notebook(
+        &self,
+        notebook_id: &str,
+        asset_id: &str,
+    ) -> Option<&TextureHandle> {
+        let key = (notebook_id.to_string(), asset_id.to_string());
+        self.texture_cache.get(&key)
     }
 
     // Fase 4: Clipboard & Selection helpers
