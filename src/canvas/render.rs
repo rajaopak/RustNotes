@@ -1053,19 +1053,10 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                     ui.ctx().request_repaint();
                                 }
                                 _ => {
-                                    // Rectangle, Ellipse, Diamond, Triangle: kursor menyesuaikan ukuran
-                                    let mut w = page_p.x - recognized.x;
-                                    let mut h = page_p.y - recognized.y;
-                                    if shift_held {
-                                        let s = w.abs().max(h.abs());
-                                        w = s * if w >= 0.0 { 1.0 } else { -1.0 };
-                                        h = s * if h >= 0.0 { 1.0 } else { -1.0 };
-                                    }
-                                    if w.abs() > 4.0 && h.abs() > 4.0 {
-                                        recognized.width = w;
-                                        recognized.height = h;
-                                    }
-                                    ui.ctx().request_repaint();
+                                    // Bentuk 2D (Ellipse, Rectangle, Parallelogram, Triangle, ScaleneTriangle):
+                                    // Pertahankan posisi dan dimensi hasil pengenalan geometri asli yang presisi.
+                                    // Jangan menimpa dimensi dengan selisih kursor (page_p - min_x) yang menyebabkan
+                                    // lingkaran atau bentuk besar menciut menjadi sangat kecil.
                                 }
                             }
                         } else if let Some(pts) = &mut state.draft_stroke {

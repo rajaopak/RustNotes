@@ -55,19 +55,99 @@ pub fn ramer_douglas_peucker(points: &[Pos2], epsilon: f32) -> Vec<Pos2> {
     }
 }
 
-fn extract_polygon_corners(poly_points: &[Pos2], diagonal: f32) -> Vec<Pos2> {
-    let epsilon = diagonal * 0.065;
+/// Algoritma pencocokan lingkaran kuadrat terkecil (Least-Squares Circle Fitting - Kåsa method).
+/// Mengembalikan (center, radius, avg_radial_error, p90_radial_error).
+pub fn fit_circle_kasa(points: &[Pos2]) -> Option<(Pos2, f32, f32, f32)> {
+    let n = points.len();
+    if n < 6 {
+        return None;
+    }
+    let n_f = n as f32;
+    let mut mean_x = 0.0f32;
+    let mut mean_y = 0.0f32;
+    for p in points {
+        mean_x += p.x;
+        mean_y += p.y;
+    }
+    mean_x /= n_f;
+    mean_y /= n_f;
+
+    let mut s_uu = 0.0f32;
+    let mut s_vv = 0.0f32;
+    let mut s_uv = 0.0f32;
+    let mut s_uuu = 0.0f32;
+    let mut s_vvv = 0.0f32;
+
+    for p in points {
+        let u = p.x - mean_x;
+        let v = p.y - mean_y;
+        let u2 = u * u;
+        let v2 = v * v;
+        let uv = u * v;
+        let z = u2 + v2;
+        s_uu += u2;
+        s_vv += v2;
+        s_uv += uv;
+        s_uuu += u * z;
+        s_vvv += v * z;
+    }
+
+    let det = s_uu * s_vv - s_uv * s_uv;
+    if det.abs() < 1e-4 {
+        return None;
+    }
+
+    let uc = (s_vv * s_uuu - s_uv * s_vvv) / (2.0 * det);
+    let vc = (s_uu * s_vvv - s_uv * s_uuu) / (2.0 * det);
+
+    let center = Pos2::new(mean_x + uc, mean_y + vc);
+    let r_sq = uc * uc + vc * vc + (s_uu + s_vv) / n_f;
+    if r_sq <= 0.0 {
+        return None;
+    }
+    let radius = r_sq.sqrt();
+    if radius < 4.0 || radius.is_nan() || radius.is_infinite() {
+        return None;
+    }
+
+    let mut errors: Vec<f32> = points
+        .iter()
+        .map(|p| {
+            let d = (p.x - center.x).hypot(p.y - center.y);
+            ((d - radius) / radius).abs()
+        })
+        .collect();
+
+    let avg_err = errors.iter().sum::<f32>() / n_f;
+    errors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p90_idx = ((n as f32 * 0.90) as usize).min(n - 1);
+    let p90_err = errors[p90_idx];
+
+    Some((center, radius, avg_err, p90_err))
+}
+
+fn extract_polygon_corners(
+    poly_points: &[Pos2],
+    width: f32,
+    height: f32,
+    diagonal: f32,
+) -> Vec<Pos2> {
+    let min_dim = width.min(height).max(1.0);
+    // Epsilon adaptif yang mempertimbangkan dimensi terkecil dan diagonal tanpa menghapus sudut di sisi sempit
+    let epsilon = (min_dim * 0.15).min(diagonal * 0.045).clamp(2.5, 14.0);
     let mut verts = ramer_douglas_peucker(poly_points, epsilon);
-    if verts.len() > 1
-        && (*verts.first().unwrap() - *verts.last().unwrap()).length() < diagonal * 0.18
+
+    let close_thresh = (min_dim * 0.20).min(diagonal * 0.12).clamp(4.0, 25.0);
+    if verts.len() > 1 && (*verts.first().unwrap() - *verts.last().unwrap()).length() < close_thresh
     {
         verts.pop();
     }
 
+    let merge_dist = (min_dim * 0.12).min(diagonal * 0.05).clamp(3.0, 15.0);
     let mut merged: Vec<Pos2> = Vec::with_capacity(verts.len());
     for v in verts {
         if let Some(last) = merged.last_mut()
-            && (*last - v).length() < diagonal * 0.12
+            && (*last - v).length() < merge_dist
         {
             *last = Pos2::new((last.x + v.x) * 0.5, (last.y + v.y) * 0.5);
             continue;
@@ -75,11 +155,12 @@ fn extract_polygon_corners(poly_points: &[Pos2], diagonal: f32) -> Vec<Pos2> {
         merged.push(v);
     }
     if merged.len() > 2
-        && (*merged.first().unwrap() - *merged.last().unwrap()).length() < diagonal * 0.12
+        && (*merged.first().unwrap() - *merged.last().unwrap()).length() < merge_dist
     {
         merged.pop();
     }
 
+    // Pangkas titik-titik yang hampir kolinear (sudut belok < 25 derajat, cos > 0.90)
     loop {
         if merged.len() <= 3 {
             break;
@@ -330,7 +411,7 @@ pub fn recognize_shape(points: &[StrokePoint]) -> Option<RecognizedShape> {
     }
 
     // 3. Deteksi Bentuk Tertutup
-    if close_dist / diagonal <= 0.35 {
+    if close_dist / diagonal <= 0.38 {
         let center = Pos2::new((min_x + max_x) * 0.5, (min_y + max_y) * 0.5);
 
         let mut total_angle = 0.0f32;
@@ -356,39 +437,75 @@ pub fn recognize_shape(points: &[StrokePoint]) -> Option<RecognizedShape> {
             return None;
         }
 
-        // a. Uji Lingkaran / Elips
+        // a. Uji Lingkaran (Circle) via Kåsa Least-Squares Fit
+        let poly_points: Vec<Pos2> = points.iter().map(|p| p.to_pos2()).collect();
+        let aspect = width / height;
+
+        if let Some((circ_center, circ_radius, avg_circ_err, p90_circ_err)) =
+            fit_circle_kasa(&poly_points)
+        {
+            // Jika aspect ratio mendekati 1.0 dan kesalahan radial rendah -> Lingkaran
+            if (0.80..=1.25).contains(&aspect) && avg_circ_err < 0.12 && p90_circ_err < 0.20 {
+                return Some(RecognizedShape {
+                    kind: ShapeKind::Ellipse,
+                    x: circ_center.x - circ_radius,
+                    y: circ_center.y - circ_radius,
+                    width: circ_radius * 2.0,
+                    height: circ_radius * 2.0,
+                });
+            }
+        }
+
+        // b. Uji Elips (Ellipse)
         let rx = width * 0.5;
         let ry = height * 0.5;
         let mut ellipse_radial_errors = Vec::with_capacity(points.len());
-        let mut max_ellipse_err = 0.0f32;
+        let mut quad_counts = [0usize; 4];
 
         for pt in points {
             let p = pt.to_pos2();
-            let norm_x = (p.x - center.x) / rx.max(0.1);
-            let norm_y = (p.y - center.y) / ry.max(0.1);
+            let dx = p.x - center.x;
+            let dy = p.y - center.y;
+            let q_idx = match (dx >= 0.0, dy >= 0.0) {
+                (true, true) => 0,
+                (false, true) => 1,
+                (false, false) => 2,
+                (true, false) => 3,
+            };
+            quad_counts[q_idx] += 1;
+
+            let norm_x = dx / rx.max(0.1);
+            let norm_y = dy / ry.max(0.1);
             let dist_from_center_norm = (norm_x.powi(2) + norm_y.powi(2)).sqrt();
             let err = (dist_from_center_norm - 1.0).abs();
-            if err > max_ellipse_err {
-                max_ellipse_err = err;
-            }
             ellipse_radial_errors.push(err);
         }
 
-        let avg_ellipse_err: f32 =
-            ellipse_radial_errors.iter().sum::<f32>() / ellipse_radial_errors.len() as f32;
-        if avg_ellipse_err < 0.14 && max_ellipse_err < 0.28 {
-            return Some(RecognizedShape {
-                kind: ShapeKind::Ellipse,
-                x: min_x,
-                y: min_y,
-                width,
-                height,
-            });
+        let min_quad_pts = (points.len() as f32 * 0.08).max(2.0) as usize;
+        let all_quads_populated = quad_counts.iter().all(|&c| c >= min_quad_pts);
+
+        if all_quads_populated {
+            let avg_ellipse_err: f32 =
+                ellipse_radial_errors.iter().sum::<f32>() / ellipse_radial_errors.len() as f32;
+            ellipse_radial_errors
+                .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let p90_idx = ((ellipse_radial_errors.len() as f32 * 0.90) as usize)
+                .min(ellipse_radial_errors.len() - 1);
+            let p90_ellipse_err = ellipse_radial_errors[p90_idx];
+
+            if avg_ellipse_err < 0.12 && p90_ellipse_err < 0.22 {
+                return Some(RecognizedShape {
+                    kind: ShapeKind::Ellipse,
+                    x: min_x,
+                    y: min_y,
+                    width,
+                    height,
+                });
+            }
         }
 
-        // b. Uji Poligon
-        let poly_points: Vec<Pos2> = points.iter().map(|p| p.to_pos2()).collect();
-        let corners = extract_polygon_corners(&poly_points, diagonal);
+        // c. Uji Poligon (Triangle, Parallelogram, Rectangle)
+        let corners = extract_polygon_corners(&poly_points, width, height, diagonal);
         let poly_area = polygon_area(&poly_points).abs();
         let bbox_area = width * height;
         let fill_ratio = poly_area / bbox_area.max(1.0);
@@ -399,8 +516,8 @@ pub fn recognize_shape(points: &[StrokePoint]) -> Option<RecognizedShape> {
             ));
         }
 
-        if corners.len() == 4 || corners.len() == 5 {
-            if fill_ratio < 0.56 {
+        if corners.len() >= 4 && corners.len() <= 6 {
+            if fill_ratio < 0.54 {
                 let tri_corners = reduce_corners_to_k(corners.clone(), 3);
                 if tri_corners.len() == 3 {
                     return Some(classify_triangle_corners(
@@ -420,25 +537,58 @@ pub fn recognize_shape(points: &[StrokePoint]) -> Option<RecognizedShape> {
                 let e2 = quad[3] - quad[2];
                 let e3 = quad[0] - quad[3];
 
-                if e0.length() > 1e-3
-                    && e1.length() > 1e-3
-                    && e2.length() > 1e-3
-                    && e3.length() > 1e-3
-                {
-                    let u0 = e0 / e0.length();
-                    let u1 = e1 / e1.length();
-                    let u2 = e2 / e2.length();
-                    let u3 = e3 / e3.length();
+                let l0 = e0.length();
+                let l1 = e1.length();
+                let l2 = e2.length();
+                let l3 = e3.length();
+
+                let min_edge = l0.min(l1).min(l2).min(l3);
+                let max_edge = l0.max(l1).max(l2).max(l3);
+
+                if min_edge > 4.0 && max_edge > 10.0 {
+                    let u0 = e0 / l0;
+                    let u1 = e1 / l1;
+                    let u2 = e2 / l2;
+                    let u3 = e3 / l3;
 
                     let parallel_02 = u0.dot(u2).abs();
                     let parallel_13 = u1.dot(u3).abs();
-                    let avg_adj_cos =
-                        (u0.dot(u1).abs() + u1.dot(u2).abs() + u2.dot(u3).abs() + u3.dot(u0).abs())
-                            * 0.25;
 
-                    if parallel_02 >= 0.82
-                        && parallel_13 >= 0.82
-                        && (0.18..=0.90).contains(&avg_adj_cos)
+                    let len_ratio_02 = l0.min(l2) / l0.max(l2).max(1e-3);
+                    let len_ratio_13 = l1.min(l3) / l1.max(l3).max(1e-3);
+
+                    let c01 = u0.dot(u1).abs();
+                    let c12 = u1.dot(u2).abs();
+                    let c23 = u2.dot(u3).abs();
+                    let c30 = u3.dot(u0).abs();
+
+                    let avg_adj_cos = (c01 + c12 + c23 + c30) * 0.25;
+                    let max_adj_cos = c01.max(c12).max(c23).max(c30);
+
+                    let opposite_parallel = parallel_02 >= 0.74 && parallel_13 >= 0.74;
+                    let opposite_len_consistent = len_ratio_02 >= 0.45 && len_ratio_13 >= 0.45;
+
+                    // 1. Cek Persegi Panjang (Rectangle): Sudut siku-siku (~90 derajat, cos <= 0.20)
+                    if opposite_parallel
+                        && opposite_len_consistent
+                        && avg_adj_cos <= 0.20
+                        && max_adj_cos <= 0.35
+                        && fill_ratio >= 0.58
+                    {
+                        return Some(RecognizedShape {
+                            kind: ShapeKind::Rectangle,
+                            x: min_x,
+                            y: min_y,
+                            width,
+                            height,
+                        });
+                    }
+
+                    // 2. Cek Jajar Genjang (Parallelogram): Sisi berlawanan sejajar dan condong nyata (> 8 derajat, avg_cos > 0.14)
+                    if opposite_parallel
+                        && opposite_len_consistent
+                        && (0.14..=0.94).contains(&avg_adj_cos)
+                        && fill_ratio >= 0.35
                     {
                         let mut by_y = quad.clone();
                         by_y.sort_by(|a, b| {
@@ -459,17 +609,18 @@ pub fn recognize_shape(points: &[StrokePoint]) -> Option<RecognizedShape> {
                             height,
                         });
                     }
-                }
-            }
 
-            if fill_ratio >= 0.56 {
-                return Some(RecognizedShape {
-                    kind: ShapeKind::Rectangle,
-                    x: min_x,
-                    y: min_y,
-                    width,
-                    height,
-                });
+                    // 3. Fallback Rectangle murni jika sudut mendekati siku-siku dan rasio luas tinggi
+                    if avg_adj_cos <= 0.22 && fill_ratio >= 0.65 {
+                        return Some(RecognizedShape {
+                            kind: ShapeKind::Rectangle,
+                            x: min_x,
+                            y: min_y,
+                            width,
+                            height,
+                        });
+                    }
+                }
             }
         }
     }

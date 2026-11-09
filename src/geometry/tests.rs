@@ -2535,3 +2535,301 @@ fn test_diagram_starter_templates_generation() {
         }
     }
 }
+
+#[test]
+fn test_circle_recognition_scale_invariance_radii() {
+    let radii = [10.0, 25.0, 50.0, 100.0, 250.0, 500.0];
+    for &r in &radii {
+        let center = Pos2::new(600.0, 600.0);
+        let mut points = Vec::new();
+        let n = 36;
+        for i in 0..=n {
+            let theta = (i as f32) * std::f32::consts::TAU / (n as f32);
+            // Tambahkan noise mikro terkontrol 1%
+            let noise_r = r * (1.0 + 0.01 * (i % 3) as f32);
+            points.push(StrokePoint::from(Pos2::new(
+                center.x + noise_r * theta.cos(),
+                center.y + noise_r * theta.sin(),
+            )));
+        }
+        let recognized = recognize_shape(&points)
+            .unwrap_or_else(|| panic!("Gagal mengenali lingkaran dengan radius {r}"));
+        assert_eq!(
+            recognized.kind,
+            ShapeKind::Ellipse,
+            "Radius {r} harus dikenali sebagai Ellipse"
+        );
+
+        // Diameter terprediksi harus konsisten dengan radius asli (~2*r)
+        let expected_diam = 2.0 * r;
+        assert!(
+            (recognized.width - expected_diam).abs() / expected_diam < 0.10,
+            "Lebar lingkaran radius {r} menciut atau menyimpang: {}",
+            recognized.width
+        );
+        assert!(
+            (recognized.height - expected_diam).abs() / expected_diam < 0.10,
+            "Tinggi lingkaran radius {r} menciut atau menyimpang: {}",
+            recognized.height
+        );
+
+        // Pusat lingkaran terprediksi harus berada dekat dengan pusat asli
+        let rec_center = Pos2::new(
+            recognized.x + recognized.width * 0.5,
+            recognized.y + recognized.height * 0.5,
+        );
+        assert!(
+            (rec_center.x - center.x).abs() / r < 0.10,
+            "Pusat X lingkaran radius {r} bergeser: {}",
+            rec_center.x
+        );
+        assert!(
+            (rec_center.y - center.y).abs() / r < 0.10,
+            "Pusat Y lingkaran radius {r} bergeser: {}",
+            rec_center.y
+        );
+    }
+}
+
+#[test]
+fn test_circle_noisy_uneven_and_direction() {
+    let center = Pos2::new(200.0, 200.0);
+    let r = 80.0;
+
+    // 1. Lingkaran Searah Jarum Jam (Clockwise)
+    let mut cw_points = Vec::new();
+    for i in 0..=30 {
+        let theta = -(i as f32) * std::f32::consts::TAU / 30.0;
+        cw_points.push(StrokePoint::from(Pos2::new(
+            center.x + r * theta.cos(),
+            center.y + r * theta.sin(),
+        )));
+    }
+    let rec_cw = recognize_shape(&cw_points).expect("Lingkaran CW harus dikenali");
+    assert_eq!(rec_cw.kind, ShapeKind::Ellipse);
+    assert!((rec_cw.width - 2.0 * r).abs() < 16.0);
+
+    // 2. Lingkaran dengan sampling tidak merata & closure gap kecil
+    let mut uneven_points = Vec::new();
+    for i in 0..20 {
+        let theta = (i as f32) * std::f32::consts::PI / 20.0;
+        uneven_points.push(StrokePoint::from(Pos2::new(
+            center.x + r * theta.cos(),
+            center.y + r * theta.sin(),
+        )));
+    }
+    for i in 0..10 {
+        let theta = std::f32::consts::PI + (i as f32) * std::f32::consts::PI / 10.0;
+        uneven_points.push(StrokePoint::from(Pos2::new(
+            center.x + r * theta.cos(),
+            center.y + r * theta.sin(),
+        )));
+    }
+    uneven_points.push(StrokePoint::from(Pos2::new(
+        center.x + r - 5.0,
+        center.y + 4.0,
+    )));
+
+    let rec_uneven = recognize_shape(&uneven_points).expect("Lingkaran uneven/gap harus dikenali");
+    assert_eq!(rec_uneven.kind, ShapeKind::Ellipse);
+    assert!((rec_uneven.width - 2.0 * r).abs() < 20.0);
+}
+
+#[test]
+fn test_ellipse_wide_and_tall_recognition() {
+    let center = Pos2::new(300.0, 300.0);
+
+    // 1. Wide Ellipse (rx = 120, ry = 40)
+    let mut wide_pts = Vec::new();
+    for i in 0..=32 {
+        let theta = (i as f32) * std::f32::consts::TAU / 32.0;
+        wide_pts.push(StrokePoint::from(Pos2::new(
+            center.x + 120.0 * theta.cos(),
+            center.y + 40.0 * theta.sin(),
+        )));
+    }
+    let rec_wide = recognize_shape(&wide_pts).expect("Wide ellipse harus dikenali");
+    assert_eq!(rec_wide.kind, ShapeKind::Ellipse);
+    assert!((rec_wide.width - 240.0).abs() < 24.0);
+    assert!((rec_wide.height - 80.0).abs() < 16.0);
+
+    // 2. Tall Ellipse (rx = 45, ry = 140)
+    let mut tall_pts = Vec::new();
+    for i in 0..=32 {
+        let theta = (i as f32) * std::f32::consts::TAU / 32.0;
+        tall_pts.push(StrokePoint::from(Pos2::new(
+            center.x + 45.0 * theta.cos(),
+            center.y + 140.0 * theta.sin(),
+        )));
+    }
+    let rec_tall = recognize_shape(&tall_pts).expect("Tall ellipse harus dikenali");
+    assert_eq!(rec_tall.kind, ShapeKind::Ellipse);
+    assert!((rec_tall.width - 90.0).abs() < 18.0);
+    assert!((rec_tall.height - 280.0).abs() < 28.0);
+}
+
+#[test]
+fn test_parallelogram_variants_skew_angles_and_aspect_ratios() {
+    // 1. Jajar Genjang dengan sudut kemiringan kecil (~10 derajat skew)
+    let small_skew = [
+        Pos2::new(60.0, 40.0),
+        Pos2::new(180.0, 40.0),
+        Pos2::new(160.0, 120.0),
+        Pos2::new(40.0, 120.0),
+    ];
+    let mut small_pts = Vec::new();
+    for (a, b) in [
+        (small_skew[0], small_skew[1]),
+        (small_skew[1], small_skew[2]),
+        (small_skew[2], small_skew[3]),
+        (small_skew[3], small_skew[0]),
+    ] {
+        for t in 0..7 {
+            let f = t as f32 / 7.0;
+            small_pts.push(StrokePoint::from(Pos2::new(
+                a.x + (b.x - a.x) * f,
+                a.y + (b.y - a.y) * f,
+            )));
+        }
+    }
+    small_pts.push(StrokePoint::from(small_skew[0]));
+    let rec_small = recognize_shape(&small_pts).expect("Small skew parallelogram harus dikenali");
+    assert_eq!(
+        rec_small.kind,
+        ShapeKind::Parallelogram,
+        "Small skew tidak boleh keliru jadi Rectangle"
+    );
+
+    // 2. Jajar Genjang Lebar (Wide: width 280, height 50)
+    let wide_corners = [
+        Pos2::new(50.0, 30.0),
+        Pos2::new(310.0, 30.0),
+        Pos2::new(280.0, 80.0),
+        Pos2::new(20.0, 80.0),
+    ];
+    let mut wide_pts = Vec::new();
+    for (a, b) in [
+        (wide_corners[0], wide_corners[1]),
+        (wide_corners[1], wide_corners[2]),
+        (wide_corners[2], wide_corners[3]),
+        (wide_corners[3], wide_corners[0]),
+    ] {
+        for t in 0..7 {
+            let f = t as f32 / 7.0;
+            wide_pts.push(StrokePoint::from(Pos2::new(
+                a.x + (b.x - a.x) * f,
+                a.y + (b.y - a.y) * f,
+            )));
+        }
+    }
+    wide_pts.push(StrokePoint::from(wide_corners[0]));
+    let rec_wide = recognize_shape(&wide_pts).expect("Wide parallelogram harus dikenali");
+    assert_eq!(rec_wide.kind, ShapeKind::Parallelogram);
+
+    // 3. Jajar Genjang Condong Kiri (Negative slant)
+    let left_slant = [
+        Pos2::new(20.0, 40.0),
+        Pos2::new(140.0, 40.0),
+        Pos2::new(170.0, 130.0),
+        Pos2::new(50.0, 130.0),
+    ];
+    let mut left_pts = Vec::new();
+    for (a, b) in [
+        (left_slant[0], left_slant[1]),
+        (left_slant[1], left_slant[2]),
+        (left_slant[2], left_slant[3]),
+        (left_slant[3], left_slant[0]),
+    ] {
+        for t in 0..7 {
+            let f = t as f32 / 7.0;
+            left_pts.push(StrokePoint::from(Pos2::new(
+                a.x + (b.x - a.x) * f,
+                a.y + (b.y - a.y) * f,
+            )));
+        }
+    }
+    left_pts.push(StrokePoint::from(left_slant[0]));
+    let rec_left = recognize_shape(&left_pts).expect("Left-slant parallelogram harus dikenali");
+    assert_eq!(rec_left.kind, ShapeKind::Parallelogram);
+    assert!(
+        rec_left.width < 0.0,
+        "Parallelogram condong kiri harus menghasilkan width negatif"
+    );
+}
+
+#[test]
+fn test_rectangle_versus_parallelogram_distinction() {
+    // Persegi Panjang murni tidak boleh diklasifikasikan sebagai Jajar Genjang
+    let rect_corners = [
+        Pos2::new(40.0, 40.0),
+        Pos2::new(220.0, 40.0),
+        Pos2::new(220.0, 140.0),
+        Pos2::new(40.0, 140.0),
+    ];
+    let mut rect_pts = Vec::new();
+    for (a, b) in [
+        (rect_corners[0], rect_corners[1]),
+        (rect_corners[1], rect_corners[2]),
+        (rect_corners[2], rect_corners[3]),
+        (rect_corners[3], rect_corners[0]),
+    ] {
+        for t in 0..6 {
+            let f = t as f32 / 6.0;
+            rect_pts.push(StrokePoint::from(Pos2::new(
+                a.x + (b.x - a.x) * f,
+                a.y + (b.y - a.y) * f,
+            )));
+        }
+    }
+    rect_pts.push(StrokePoint::from(rect_corners[0]));
+
+    let rec_rect = recognize_shape(&rect_pts).expect("Rectangle harus dikenali");
+    assert_eq!(rec_rect.kind, ShapeKind::Rectangle);
+    assert_ne!(rec_rect.kind, ShapeKind::Parallelogram);
+}
+
+#[test]
+fn test_negative_cases_unsupported_shapes_preserve_none() {
+    // 1. Trapesium sembarang (sisi samping tidak sejajar dan panjang sangat beda)
+    let trap = [
+        Pos2::new(80.0, 30.0),
+        Pos2::new(140.0, 30.0),
+        Pos2::new(220.0, 120.0),
+        Pos2::new(20.0, 120.0),
+    ];
+    let mut trap_pts = Vec::new();
+    for (a, b) in [
+        (trap[0], trap[1]),
+        (trap[1], trap[2]),
+        (trap[2], trap[3]),
+        (trap[3], trap[0]),
+    ] {
+        for t in 0..6 {
+            let f = t as f32 / 6.0;
+            trap_pts.push(StrokePoint::from(Pos2::new(
+                a.x + (b.x - a.x) * f,
+                a.y + (b.y - a.y) * f,
+            )));
+        }
+    }
+    trap_pts.push(StrokePoint::from(trap[0]));
+    let rec_trap = recognize_shape(&trap_pts);
+    assert!(
+        rec_trap.is_none() || rec_trap.unwrap().kind != ShapeKind::Rectangle,
+        "Trapesium non-sejajar tidak boleh salah jadi Rectangle"
+    );
+
+    // 2. Kurva terbuka (huruf C atau U)
+    let mut open_u = Vec::new();
+    for i in 0..20 {
+        let theta = (i as f32) * std::f32::consts::PI / 19.0;
+        open_u.push(StrokePoint::from(Pos2::new(
+            100.0 + 50.0 * theta.cos(),
+            100.0 + 50.0 * theta.sin(),
+        )));
+    }
+    assert!(
+        recognize_shape(&open_u).is_none(),
+        "Kurva terbuka U tidak boleh dikenali sebagai bentuk tertutup"
+    );
+}

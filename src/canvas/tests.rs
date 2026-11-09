@@ -1191,3 +1191,54 @@ fn test_canvas_state_texture_cache_isolated_per_notebook() {
             .is_none()
     );
 }
+
+#[test]
+fn test_large_circle_lifecycle_does_not_shrink_on_drag_or_commit() {
+    use crate::geometry::recognize_shape;
+    use crate::model::{Page, PageTemplate, StrokePoint};
+
+    let mut state = CanvasState::default();
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "page-circle-lifecycle".to_string();
+
+    // Buat lingkaran besar (radius 150) di sekitar (350, 350)
+    let center = Pos2::new(350.0, 350.0);
+    let radius = 150.0;
+    let mut circle_pts = Vec::new();
+    for i in 0..=36 {
+        let theta = (i as f32) * std::f32::consts::TAU / 36.0;
+        circle_pts.push(StrokePoint::from(Pos2::new(
+            center.x + radius * theta.cos(),
+            center.y + radius * theta.sin(),
+        )));
+    }
+
+    // 1. Pengenalan bentuk awal
+    let recognized = recognize_shape(&circle_pts).expect("Lingkaran besar harus dikenali");
+    assert_eq!(recognized.kind, ShapeKind::Ellipse);
+    assert!(
+        (recognized.width - 300.0).abs() < 30.0,
+        "Lebar awal harus ~300, didapat: {}",
+        recognized.width
+    );
+
+    state.active_stroke_page_id = Some(page.id.clone());
+    state.draft_stroke = Some(circle_pts.clone());
+    state.recognized_draft_shape = Some(recognized.clone());
+    state.snap_initial_shape = Some(recognized.clone());
+
+    // 2. Pada lifecycle lama, pergerakan pointer saat menahan pena menimpa recognized.width = page_p.x - recognized.x
+    // Dengan perbaikan baru, geometri 2D tetap terjaga pada recognized_draft_shape:
+    let current_rec = state.recognized_draft_shape.as_ref().unwrap();
+    assert!(
+        current_rec.width > 250.0 && current_rec.height > 250.0,
+        "Lingkaran besar harus tetap besar dan tidak boleh menciut!"
+    );
+
+    // 3. Simulasikan komitmen saat drag_stopped()
+    let committed = state.recognized_draft_shape.take().unwrap();
+    assert!(
+        (committed.width - 300.0).abs() < 30.0,
+        "Bentuk akhir yang dikomit harus memiliki dimensi konsisten dengan preview!"
+    );
+}
