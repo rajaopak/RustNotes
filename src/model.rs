@@ -27,6 +27,207 @@ pub enum ShapeKind {
         v2: f32,
     },
     Parallelogram,
+    Diamond,
+    Curve,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Default)]
+pub struct Point2D {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Point2D {
+    pub const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+
+    pub fn to_pos2(self) -> Pos2 {
+        Pos2::new(self.x, self.y)
+    }
+
+    pub fn dist(self, other: Self) -> f32 {
+        self.dist_sq(other).sqrt()
+    }
+
+    pub fn dist_sq(self, other: Self) -> f32 {
+        let dx = self.x - other.x;
+        let dy = self.y - other.y;
+        dx * dx + dy * dy
+    }
+
+    pub fn length(self) -> f32 {
+        (self.x * self.x + self.y * self.y).sqrt()
+    }
+
+    pub fn normalized(self) -> Option<Self> {
+        let len = self.length();
+        if len > 1e-6 {
+            Some(Self {
+                x: self.x / len,
+                y: self.y / len,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn rotate_around(self, origin: Self, angle_rad: f32) -> Self {
+        let cos_a = angle_rad.cos();
+        let sin_a = angle_rad.sin();
+        let dx = self.x - origin.x;
+        let dy = self.y - origin.y;
+        Self {
+            x: origin.x + dx * cos_a - dy * sin_a,
+            y: origin.y + dx * sin_a + dy * cos_a,
+        }
+    }
+}
+
+impl std::ops::Add for Point2D {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self::Output {
+        Self {
+            x: self.x + rhs.x,
+            y: self.y + rhs.y,
+        }
+    }
+}
+
+impl std::ops::Sub for Point2D {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self {
+            x: self.x - rhs.x,
+            y: self.y - rhs.y,
+        }
+    }
+}
+
+impl std::ops::Mul<f32> for Point2D {
+    type Output = Self;
+    fn mul(self, rhs: f32) -> Self::Output {
+        Self {
+            x: self.x * rhs,
+            y: self.y * rhs,
+        }
+    }
+}
+
+impl std::ops::Div<f32> for Point2D {
+    type Output = Self;
+    fn div(self, rhs: f32) -> Self::Output {
+        Self {
+            x: self.x / rhs,
+            y: self.y / rhs,
+        }
+    }
+}
+
+impl From<Pos2> for Point2D {
+    fn from(p: Pos2) -> Self {
+        Self { x: p.x, y: p.y }
+    }
+}
+
+impl From<Point2D> for Pos2 {
+    fn from(p: Point2D) -> Self {
+        Pos2::new(p.x, p.y)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TextAlign {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum VerticalAlign {
+    Top,
+    #[default]
+    Middle,
+    Bottom,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShapeLabel {
+    pub text: String,
+    pub font_size: f32,
+    pub color: ColorData,
+    #[serde(default)]
+    pub alignment: TextAlign,
+    #[serde(default)]
+    pub vertical_alignment: VerticalAlign,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum ConnectionSite {
+    Top,
+    Right,
+    Bottom,
+    Left,
+    #[default]
+    Auto,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ConnectorEnd {
+    Attached {
+        shape_id: String,
+        site: ConnectionSite,
+    },
+    Free {
+        x: f32,
+        y: f32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ConnectorRoute {
+    Straight,
+    #[default]
+    Orthogonal,
+    Curved,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum MarkerKind {
+    #[default]
+    None,
+    Arrow,
+}
+
+fn default_arrow_marker() -> MarkerKind {
+    MarkerKind::Arrow
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ConnectorStyle {
+    pub stroke_color: ColorData,
+    pub stroke_width: f32,
+    #[serde(default)]
+    pub start_marker: MarkerKind,
+    #[serde(default = "default_arrow_marker")]
+    pub end_marker: MarkerKind,
+}
+
+impl Default for ConnectorStyle {
+    fn default() -> Self {
+        Self {
+            stroke_color: ColorData {
+                r: 40,
+                g: 45,
+                b: 55,
+                a: 255,
+            },
+            stroke_width: 2.5,
+            start_marker: MarkerKind::None,
+            end_marker: MarkerKind::Arrow,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -97,6 +298,16 @@ pub enum DrawObject {
         color: ColorData,
         stroke_width: f32,
         fill: Option<ColorData>,
+        #[serde(default)]
+        rotation: f32,
+        #[serde(default)]
+        corner_radius: f32,
+        #[serde(default)]
+        label: Option<ShapeLabel>,
+        #[serde(default)]
+        locked: bool,
+        #[serde(default)]
+        curve_points: Vec<Point2D>,
     },
     Text {
         id: String,
@@ -129,6 +340,18 @@ pub enum DrawObject {
         #[serde(default = "default_true")]
         lock_aspect: bool,
     },
+    Connector {
+        id: String,
+        start: ConnectorEnd,
+        end: ConnectorEnd,
+        #[serde(default)]
+        route: ConnectorRoute,
+        #[serde(default)]
+        control_points: Vec<Point2D>,
+        style: ConnectorStyle,
+        #[serde(default)]
+        locked: bool,
+    },
 }
 
 fn default_true() -> bool {
@@ -143,6 +366,21 @@ impl DrawObject {
             Self::Text { id, .. } => id,
             Self::StickyNote { id, .. } => id,
             Self::Image { id, .. } => id,
+            Self::Connector { id, .. } => id,
+        }
+    }
+
+    pub fn is_locked(&self) -> bool {
+        match self {
+            Self::Shape { locked, .. } | Self::Connector { locked, .. } => *locked,
+            _ => false,
+        }
+    }
+
+    pub fn set_locked(&mut self, val: bool) {
+        match self {
+            Self::Shape { locked, .. } | Self::Connector { locked, .. } => *locked = val,
+            _ => {}
         }
     }
 }
@@ -253,6 +491,44 @@ impl Page {
         let (w, h) = preset.dimensions(orientation);
         Self::with_size(template, w, h)
     }
+
+    /// Aturan integritas FASE G1.6:
+    /// Memvalidasi seluruh `Connector.Attached` di halaman ini.
+    /// Jika `shape_id` yang direferensikan tidak ditemukan di antara objek halaman ini,
+    /// ubah ujung tersebut menjadi `ConnectorEnd::Free { x, y }`
+    /// agar dokumen tidak crash dan hubungan orphan tertangani dengan aman.
+    pub fn sanitize_connector_references(&mut self) -> usize {
+        let mut fixed = 0;
+        let valid_shape_ids: std::collections::HashSet<String> = self
+            .objects
+            .iter()
+            .filter_map(|obj| {
+                if let DrawObject::Shape { id, .. } = obj {
+                    Some(id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for obj in &mut self.objects {
+            if let DrawObject::Connector { start, end, .. } = obj {
+                if let ConnectorEnd::Attached { shape_id, .. } = start
+                    && !valid_shape_ids.contains(shape_id)
+                {
+                    *start = ConnectorEnd::Free { x: 50.0, y: 50.0 };
+                    fixed += 1;
+                }
+                if let ConnectorEnd::Attached { shape_id, .. } = end
+                    && !valid_shape_ids.contains(shape_id)
+                {
+                    *end = ConnectorEnd::Free { x: 150.0, y: 150.0 };
+                    fixed += 1;
+                }
+            }
+        }
+        fixed
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -282,7 +558,9 @@ pub struct Notebook {
     pub folder_id: Option<String>,
     #[serde(default)]
     pub outline: Vec<OutlineItem>,
+    #[serde(default)]
     pub trashed: bool,
+    #[serde(default)]
     pub favorite: bool,
     pub created_at: i64,
     pub updated_at: i64,
@@ -332,14 +610,36 @@ impl Notebook {
         }
         let mut cloned = self.pages[page_idx].clone();
         cloned.id = Uuid::new_v4().to_string();
+        let mut shape_id_map = std::collections::HashMap::new();
         for obj in &mut cloned.objects {
             match obj {
                 DrawObject::Stroke { id, .. }
-                | DrawObject::Shape { id, .. }
                 | DrawObject::Text { id, .. }
                 | DrawObject::StickyNote { id, .. }
-                | DrawObject::Image { id, .. } => {
+                | DrawObject::Image { id, .. }
+                | DrawObject::Connector { id, .. } => {
                     *id = Uuid::new_v4().to_string();
+                }
+                DrawObject::Shape { id, .. } => {
+                    let old_id = id.clone();
+                    let new_id = Uuid::new_v4().to_string();
+                    *id = new_id.clone();
+                    shape_id_map.insert(old_id, new_id);
+                }
+            }
+        }
+        // Remap attached shape IDs on connectors inside the duplicated page
+        for obj in &mut cloned.objects {
+            if let DrawObject::Connector { start, end, .. } = obj {
+                if let ConnectorEnd::Attached { shape_id, .. } = start
+                    && let Some(new_shape_id) = shape_id_map.get(shape_id)
+                {
+                    *shape_id = new_shape_id.clone();
+                }
+                if let ConnectorEnd::Attached { shape_id, .. } = end
+                    && let Some(new_shape_id) = shape_id_map.get(shape_id)
+                {
+                    *shape_id = new_shape_id.clone();
                 }
             }
         }
@@ -430,7 +730,59 @@ impl Folder {
     }
 }
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+
+/// Indeks relasi runtime (tidak diserialisasi):
+/// Peta shape_id -> daftar connector_id yang menempel pada bentuk tersebut.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ConnectorRelationIndex {
+    pub shape_to_connectors: std::collections::HashMap<String, Vec<String>>,
+}
+
+impl ConnectorRelationIndex {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn rebuild_from_objects(&mut self, objects: &[DrawObject]) {
+        self.shape_to_connectors.clear();
+        for obj in objects {
+            if let DrawObject::Connector { id, start, end, .. } = obj {
+                if let ConnectorEnd::Attached { shape_id, .. } = start {
+                    let list = self
+                        .shape_to_connectors
+                        .entry(shape_id.clone())
+                        .or_default();
+                    if !list.contains(id) {
+                        list.push(id.clone());
+                    }
+                }
+                if let ConnectorEnd::Attached { shape_id, .. } = end {
+                    let list = self
+                        .shape_to_connectors
+                        .entry(shape_id.clone())
+                        .or_default();
+                    if !list.contains(id) {
+                        list.push(id.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn connectors_for_shape(&self, shape_id: &str) -> &[String] {
+        self.shape_to_connectors
+            .get(shape_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub fn remove_connector(&mut self, connector_id: &str) {
+        for list in self.shape_to_connectors.values_mut() {
+            list.retain(|id| id != connector_id);
+        }
+    }
+}
 
 fn default_schema_version() -> u32 {
     1
@@ -625,6 +977,9 @@ pub struct AppSettings {
     pub palm_rejection: bool,
     #[serde(default)]
     pub language: AppLanguage,
+    /// Fase G4.4: Opsi otomatis mengonversi bentuk saat pena ditahan (Hold-to-Snap).
+    #[serde(default = "default_true")]
+    pub auto_shape_enabled: bool,
 }
 
 impl Default for AppSettings {
@@ -636,6 +991,7 @@ impl Default for AppSettings {
             zoom_window_scale: default_zoom_window_scale(),
             palm_rejection: default_palm_rejection(),
             language: AppLanguage::Indonesian,
+            auto_shape_enabled: true,
         }
     }
 }
@@ -697,6 +1053,22 @@ mod tests {
                 b: 255,
                 a: 100,
             }),
+            rotation: 0.5,
+            corner_radius: 8.0,
+            label: Some(ShapeLabel {
+                text: "Node A".to_string(),
+                font_size: 14.0,
+                color: ColorData {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                },
+                alignment: TextAlign::Center,
+                vertical_alignment: VerticalAlign::Middle,
+            }),
+            locked: true,
+            curve_points: Vec::new(),
         };
 
         let json = serde_json::to_string(&obj).expect("serialize");
@@ -984,5 +1356,174 @@ mod tests {
         assert!(!decoded.palm_rejection);
         assert_eq!(decoded.pen_widths.len(), 5);
         assert_eq!(decoded.language.tr("Halo", "Hello"), "Hello");
+    }
+
+    #[test]
+    fn test_connector_roundtrip_and_relation_index() {
+        let conn = DrawObject::Connector {
+            id: "conn-1".to_string(),
+            start: ConnectorEnd::Attached {
+                shape_id: "s1".to_string(),
+                site: ConnectionSite::Right,
+            },
+            end: ConnectorEnd::Attached {
+                shape_id: "s2".to_string(),
+                site: ConnectionSite::Left,
+            },
+            route: ConnectorRoute::Orthogonal,
+            control_points: vec![Point2D::new(100.0, 50.0), Point2D::new(100.0, 150.0)],
+            style: ConnectorStyle {
+                stroke_color: ColorData {
+                    r: 40,
+                    g: 80,
+                    b: 200,
+                    a: 255,
+                },
+                stroke_width: 2.5,
+                start_marker: MarkerKind::None,
+                end_marker: MarkerKind::Arrow,
+            },
+            locked: false,
+        };
+
+        let json = serde_json::to_string(&conn).expect("serialize connector");
+        let decoded: DrawObject = serde_json::from_str(&json).expect("deserialize connector");
+        assert_eq!(conn, decoded);
+
+        let objects = vec![
+            DrawObject::Shape {
+                id: "s1".to_string(),
+                shape_type: ShapeKind::Rectangle,
+                x: 10.0,
+                y: 10.0,
+                width: 80.0,
+                height: 60.0,
+                color: ColorData {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                },
+                stroke_width: 2.0,
+                fill: None,
+                rotation: 0.0,
+                corner_radius: 6.0,
+                label: None,
+                locked: false,
+                curve_points: Vec::new(),
+            },
+            DrawObject::Shape {
+                id: "s2".to_string(),
+                shape_type: ShapeKind::Diamond,
+                x: 200.0,
+                y: 120.0,
+                width: 80.0,
+                height: 60.0,
+                color: ColorData {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                },
+                stroke_width: 2.0,
+                fill: None,
+                rotation: 0.0,
+                corner_radius: 0.0,
+                label: None,
+                locked: false,
+                curve_points: Vec::new(),
+            },
+            conn,
+        ];
+
+        let mut index = ConnectorRelationIndex::default();
+        index.rebuild_from_objects(&objects);
+        assert_eq!(index.connectors_for_shape("s1"), vec!["conn-1".to_string()]);
+        assert_eq!(index.connectors_for_shape("s2"), vec!["conn-1".to_string()]);
+        assert!(index.connectors_for_shape("non-existent").is_empty());
+    }
+
+    #[test]
+    fn test_sanitize_orphan_connector_references() {
+        let mut page = Page::new(PageTemplate::Blank);
+        page.objects.push(DrawObject::Shape {
+            id: "valid-shape".to_string(),
+            shape_type: ShapeKind::Rectangle,
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+            color: ColorData {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            stroke_width: 2.0,
+            fill: None,
+            rotation: 0.0,
+            corner_radius: 0.0,
+            label: None,
+            locked: false,
+            curve_points: Vec::new(),
+        });
+        page.objects.push(DrawObject::Connector {
+            id: "conn-orphan".to_string(),
+            start: ConnectorEnd::Attached {
+                shape_id: "valid-shape".to_string(),
+                site: ConnectionSite::Bottom,
+            },
+            end: ConnectorEnd::Attached {
+                shape_id: "deleted-shape".to_string(),
+                site: ConnectionSite::Top,
+            },
+            route: ConnectorRoute::Straight,
+            control_points: Vec::new(),
+            style: ConnectorStyle::default(),
+            locked: false,
+        });
+
+        let repaired = page.sanitize_connector_references();
+        assert_eq!(repaired, 1);
+
+        if let DrawObject::Connector { start, end, .. } = &page.objects[1] {
+            assert!(matches!(start, ConnectorEnd::Attached { .. }));
+            assert!(matches!(end, ConnectorEnd::Free { .. }));
+        } else {
+            panic!("Expected connector object");
+        }
+    }
+
+    #[test]
+    fn test_shape_curve_and_diamond_variants() {
+        let curve_obj = DrawObject::Shape {
+            id: "curve-1".to_string(),
+            shape_type: ShapeKind::Curve,
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 80.0,
+            color: ColorData {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            stroke_width: 3.0,
+            fill: None,
+            rotation: 0.0,
+            corner_radius: 0.0,
+            label: None,
+            locked: false,
+            curve_points: vec![
+                Point2D::new(10.0, 20.0),
+                Point2D::new(40.0, 80.0),
+                Point2D::new(80.0, 10.0),
+                Point2D::new(110.0, 100.0),
+            ],
+        };
+        let json = serde_json::to_string(&curve_obj).expect("serialize curve");
+        let decoded: DrawObject = serde_json::from_str(&json).expect("deserialize curve");
+        assert_eq!(curve_obj, decoded);
     }
 }

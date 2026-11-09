@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{ColorData, DrawObject, ShapeKind, StrokePoint};
+use crate::model::{ColorData, ConnectionSite, DrawObject, Point2D, ShapeKind, StrokePoint};
 use eframe::egui::{Color32, Pos2, Rect};
 
 fn dummy_color() -> ColorData {
@@ -135,6 +135,11 @@ fn test_object_bounds() {
         color: dummy_color(),
         stroke_width: 2.0,
         fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
     };
     let sb = object_bounds(&shape);
     assert_eq!(sb.min, Pos2::new(19.0, 29.0));
@@ -155,6 +160,11 @@ fn test_combined_bounds() {
         color: dummy_color(),
         stroke_width: 2.0,
         fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
     };
     let obj2 = DrawObject::Shape {
         id: "2".into(),
@@ -166,6 +176,11 @@ fn test_combined_bounds() {
         color: dummy_color(),
         stroke_width: 2.0,
         fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
     };
 
     let cb = combined_bounds(&[&obj1, &obj2]).expect("Should have combined bounds");
@@ -209,6 +224,11 @@ fn test_hit_test_object() {
         color: dummy_color(),
         stroke_width: 2.0,
         fill: Some(dummy_color()),
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
     };
     // Inside filled shape
     assert!(hit_test_object(&rect_filled, Pos2::new(50.0, 50.0), 5.0));
@@ -228,6 +248,11 @@ fn test_translate_and_scale_object() {
         color: dummy_color(),
         stroke_width: 2.0,
         fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
     };
 
     translate_object(&mut obj, 15.0, -5.0);
@@ -501,6 +526,11 @@ fn test_spatial_grid_matches_brute_force() {
             color: dummy_color(),
             stroke_width: 2.0,
             fill: None,
+            rotation: 0.0,
+            corner_radius: 0.0,
+            label: None,
+            locked: false,
+            curve_points: Vec::new(),
         },
         DrawObject::Shape {
             id: "2".into(),
@@ -512,6 +542,11 @@ fn test_spatial_grid_matches_brute_force() {
             color: dummy_color(),
             stroke_width: 2.0,
             fill: None,
+            rotation: 0.0,
+            corner_radius: 0.0,
+            label: None,
+            locked: false,
+            curve_points: Vec::new(),
         },
         DrawObject::Shape {
             id: "3".into(),
@@ -523,6 +558,11 @@ fn test_spatial_grid_matches_brute_force() {
             color: dummy_color(),
             stroke_width: 2.0,
             fill: None,
+            rotation: 0.0,
+            corner_radius: 0.0,
+            label: None,
+            locked: false,
+            curve_points: Vec::new(),
         },
     ];
 
@@ -959,6 +999,11 @@ fn test_rotate_line_around_start_point() {
         color: dummy_color(),
         stroke_width: 2.0,
         fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
     };
 
     // Rotasi 90 derajat (PI / 2): titik awal (50, 60) tetap sebagai pusat,
@@ -1190,5 +1235,1303 @@ fn test_text_object_rotation_on_page_rotate() {
         );
     } else {
         panic!("Expected Text object");
+    }
+}
+
+#[test]
+fn test_shape_connection_point_rotated() {
+    use crate::geometry::connectors::{Direction, shape_connection_point};
+    use crate::model::{ConnectionSite, Point2D};
+
+    // 1. Rectangle di (100, 100), width: 100, height: 60, rotation: 0
+    // Center: (150, 130)
+    let shape_rect = DrawObject::Shape {
+        id: "rect-conn".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 100.0,
+        y: 100.0,
+        width: 100.0,
+        height: 60.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+
+    let (top_pt, top_dir) = shape_connection_point(&shape_rect, ConnectionSite::Top, None);
+    assert_eq!(top_pt, Point2D::new(150.0, 100.0));
+    assert_eq!(top_dir, Direction::Up);
+
+    let (right_pt, right_dir) = shape_connection_point(&shape_rect, ConnectionSite::Right, None);
+    assert_eq!(right_pt, Point2D::new(200.0, 130.0));
+    assert_eq!(right_dir, Direction::Right);
+
+    let (bottom_pt, bottom_dir) = shape_connection_point(&shape_rect, ConnectionSite::Bottom, None);
+    assert_eq!(bottom_pt, Point2D::new(150.0, 160.0));
+    assert_eq!(bottom_dir, Direction::Down);
+
+    let (left_pt, left_dir) = shape_connection_point(&shape_rect, ConnectionSite::Left, None);
+    assert_eq!(left_pt, Point2D::new(100.0, 130.0));
+    assert_eq!(left_dir, Direction::Left);
+
+    // 2. Mode Auto: jika target ada di kanan jauh (300, 130), Auto harus memilih Right
+    let (auto_pt, _) = shape_connection_point(
+        &shape_rect,
+        ConnectionSite::Auto,
+        Some(Point2D::new(300.0, 130.0)),
+    );
+    assert_eq!(auto_pt, right_pt);
+
+    // Jika target ada di atas (150, 10), Auto harus memilih Top
+    let (auto_pt_top, _) = shape_connection_point(
+        &shape_rect,
+        ConnectionSite::Auto,
+        Some(Point2D::new(150.0, 10.0)),
+    );
+    assert_eq!(auto_pt_top, top_pt);
+
+    // 3. Rotasi 90 derajat (pi/2) CW
+    // Center tetap (150, 130).
+    // Sisi 'Right' lokal (200, 130) berotasi 90 CW menjadi (150, 180) (menghadap Down)
+    let mut shape_rect_rot = shape_rect.clone();
+    if let DrawObject::Shape {
+        ref mut rotation, ..
+    } = shape_rect_rot
+    {
+        *rotation = std::f32::consts::FRAC_PI_2;
+    }
+    let (r_pt, r_dir) = shape_connection_point(&shape_rect_rot, ConnectionSite::Right, None);
+    assert!((r_pt.x - 150.0).abs() < 1e-4);
+    assert!((r_pt.y - 180.0).abs() < 1e-4);
+    assert_eq!(r_dir, Direction::Down);
+
+    // 4. Diamond connection points
+    let shape_diamond = DrawObject::Shape {
+        id: "diamond-conn".into(),
+        shape_type: ShapeKind::Diamond,
+        x: 200.0,
+        y: 200.0,
+        width: 80.0,
+        height: 80.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    let (d_top, d_dir) = shape_connection_point(&shape_diamond, ConnectionSite::Top, None);
+    assert_eq!(d_top, Point2D::new(240.0, 200.0));
+    assert_eq!(d_dir, Direction::Up);
+}
+
+#[test]
+fn test_route_orthogonal_no_diagonal_and_clean_collinear() {
+    use crate::geometry::connectors::{Direction, route_orthogonal};
+    use crate::model::Point2D;
+
+    let start = Point2D::new(100.0, 100.0);
+    let end = Point2D::new(300.0, 250.0);
+
+    let path = route_orthogonal(start, Direction::Right, end, Direction::Left, 20.0);
+
+    assert!(
+        path.len() >= 4,
+        "Jalur orthogonal minimal memiliki start, stub1, stub2, end"
+    );
+    assert_eq!(path.first().copied(), Some(start));
+    assert_eq!(path.last().copied(), Some(end));
+
+    // Verifikasi bahwa SETIAP segmen strictly ortogonal (horizontal atau vertikal, tidak ada diagonal)
+    for i in 0..path.len() - 1 {
+        let p1 = path[i];
+        let p2 = path[i + 1];
+        let is_h = (p1.y - p2.y).abs() < 1e-4;
+        let is_v = (p1.x - p2.x).abs() < 1e-4;
+        assert!(
+            is_h || is_v,
+            "Segmen {} -> {} tidak orthogonal (dx={}, dy={})",
+            i,
+            i + 1,
+            (p1.x - p2.x).abs(),
+            (p1.y - p2.y).abs()
+        );
+    }
+}
+
+#[test]
+fn test_arrowhead_geometry_symmetry_and_direction() {
+    use crate::geometry::connectors::arrowhead_geometry;
+    use crate::model::Point2D;
+
+    let tip = Point2D::new(200.0, 100.0);
+    let incoming = Point2D::new(1.0, 0.0); // Garis datang dari kiri ke kanan
+    let arrow_len = 12.0;
+    let arrow_width = 8.0;
+
+    let [t, left, right] = arrowhead_geometry(tip, incoming, arrow_len, arrow_width);
+
+    assert_eq!(t, tip);
+    // Base x harus tip.x - 12.0 = 188.0
+    assert_eq!(left.x, 188.0);
+    assert_eq!(right.x, 188.0);
+    // Simetri sumbu Y: tip.y = 100.0, sayap berjarak 4.0 ke atas dan ke bawah
+    assert_eq!(left.y, 104.0);
+    assert_eq!(right.y, 96.0);
+}
+
+#[test]
+fn test_hit_test_connector_details() {
+    use crate::geometry::connectors::{ConnectorHitTarget, hit_test_connector_details};
+    use crate::model::Point2D;
+
+    let points = vec![
+        Point2D::new(50.0, 50.0),
+        Point2D::new(150.0, 50.0),
+        Point2D::new(150.0, 150.0),
+    ];
+
+    // Dekat titik awal
+    assert_eq!(
+        hit_test_connector_details(Point2D::new(52.0, 51.0), &points, 5.0),
+        Some(ConnectorHitTarget::StartHandle)
+    );
+
+    // Dekat titik akhir
+    assert_eq!(
+        hit_test_connector_details(Point2D::new(149.0, 148.0), &points, 5.0),
+        Some(ConnectorHitTarget::EndHandle)
+    );
+
+    // Dekat tikungan tengah (control point 1)
+    assert_eq!(
+        hit_test_connector_details(Point2D::new(150.0, 51.0), &points, 5.0),
+        Some(ConnectorHitTarget::ControlPoint(1))
+    );
+
+    // Dekat badan segmen 0 (di (100, 50))
+    assert_eq!(
+        hit_test_connector_details(Point2D::new(100.0, 52.0), &points, 5.0),
+        Some(ConnectorHitTarget::LineSegment(0))
+    );
+
+    // Jauh di luar toleransi
+    assert_eq!(
+        hit_test_connector_details(Point2D::new(0.0, 0.0), &points, 5.0),
+        None
+    );
+}
+
+#[test]
+fn test_rounded_rect_vertices_clamping_and_rotation() {
+    use crate::geometry::curves::rounded_rect_vertices;
+    use crate::model::Point2D;
+
+    // Radius berlebihan: width 100, height 40 -> max radius adalah 40 / 2 = 20.
+    // Jika input corner_radius 50.0, fungsi harus clamp ke 20.0 tanpa error/panic.
+    let verts = rounded_rect_vertices(0.0, 0.0, 100.0, 40.0, 50.0, 0.0, 4);
+    assert!(!verts.is_empty());
+
+    // Corner radius 0 mengembalikan 4 titik persegi panjang
+    let flat_verts = rounded_rect_vertices(10.0, 20.0, 80.0, 50.0, 0.0, 0.0, 4);
+    assert_eq!(flat_verts.len(), 4);
+    assert_eq!(flat_verts[0], Point2D::new(10.0, 20.0));
+    assert_eq!(flat_verts[2], Point2D::new(90.0, 70.0));
+}
+
+#[test]
+fn test_cubic_bezier_sampling_and_rdp() {
+    use crate::geometry::curves::{sample_cubic_bezier, simplify_points_rdp};
+    use crate::model::Point2D;
+
+    let p0 = Point2D::new(0.0, 0.0);
+    let p1 = Point2D::new(20.0, 50.0);
+    let p2 = Point2D::new(80.0, 50.0);
+    let p3 = Point2D::new(100.0, 0.0);
+
+    let samples = sample_cubic_bezier(p0, p1, p2, p3, 20);
+    assert_eq!(samples.len(), 21);
+    assert_eq!(samples[0], p0);
+    assert_eq!(samples[20], p3);
+
+    // Uji RDP simplification pada garis lurus dengan sedikit noise kecil
+    let noisy_line = vec![
+        Point2D::new(0.0, 0.0),
+        Point2D::new(25.0, 0.2),
+        Point2D::new(50.0, -0.1),
+        Point2D::new(75.0, 0.1),
+        Point2D::new(100.0, 0.0),
+    ];
+    let simplified = simplify_points_rdp(&noisy_line, 1.0);
+    assert_eq!(
+        simplified.len(),
+        2,
+        "Garis lurus harus tereduksi menjadi 2 titik ujung"
+    );
+    assert_eq!(simplified[0], Point2D::new(0.0, 0.0));
+    assert_eq!(simplified[1], Point2D::new(100.0, 0.0));
+}
+
+#[test]
+fn test_hit_test_rotated_shape() {
+    use crate::geometry::connectors::hit_test_rotated_shape;
+    use crate::model::Point2D;
+
+    // Persegi panjang di (100, 100) ukuran 100x40.
+    // Center: (150, 120).
+    // Rotasi 90 derajat CW:
+    // Lebar visual menjadi 40, tinggi visual menjadi 100.
+    let shape_rot = DrawObject::Shape {
+        id: "rot-hit".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 100.0,
+        y: 100.0,
+        width: 100.0,
+        height: 40.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: Some(dummy_color()),
+        rotation: std::f32::consts::FRAC_PI_2,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+
+    // Titik (150, 160) berada di dalam perpanjangan vertikal setelah rotasi 90 derajat
+    assert!(hit_test_rotated_shape(
+        Point2D::new(150.0, 160.0),
+        &shape_rot,
+        2.0
+    ));
+
+    // Titik (190, 120) yang tadinya di dalam persegi horizontal, kini berada di luar setelah rotasi vertikal!
+    assert!(!hit_test_rotated_shape(
+        Point2D::new(190.0, 120.0),
+        &shape_rot,
+        2.0
+    ));
+}
+
+#[test]
+fn test_compute_and_hit_test_transform_handles() {
+    use super::shape_ops::{
+        TransformHandleKind, compute_transform_handles, hit_test_transform_handles,
+    };
+
+    // Bounding box tanpa rotasi: (100, 100), width 200, height 100 -> center (200, 150)
+    let handles = compute_transform_handles(100.0, 100.0, 200.0, 100.0, 0.0, 20.0);
+    assert_eq!(handles.len(), 9);
+
+    let get_handle = |kind: TransformHandleKind| -> Point2D {
+        handles.iter().find(|h| h.kind == kind).unwrap().pos
+    };
+
+    // 4 Sudut (Scale)
+    let nw = get_handle(TransformHandleKind::NorthWest);
+    let ne = get_handle(TransformHandleKind::NorthEast);
+    let se = get_handle(TransformHandleKind::SouthEast);
+    let sw = get_handle(TransformHandleKind::SouthWest);
+    assert!((nw.x - 100.0).abs() < 1e-4 && (nw.y - 100.0).abs() < 1e-4);
+    assert!((ne.x - 300.0).abs() < 1e-4 && (ne.y - 100.0).abs() < 1e-4);
+    assert!((se.x - 300.0).abs() < 1e-4 && (se.y - 200.0).abs() < 1e-4);
+    assert!((sw.x - 100.0).abs() < 1e-4 && (sw.y - 200.0).abs() < 1e-4);
+
+    // 4 Tepi Sisi (Resize satu sumbu)
+    let n = get_handle(TransformHandleKind::North);
+    let e = get_handle(TransformHandleKind::East);
+    let s = get_handle(TransformHandleKind::South);
+    let w = get_handle(TransformHandleKind::West);
+    assert!((n.x - 200.0).abs() < 1e-4 && (n.y - 100.0).abs() < 1e-4);
+    assert!((e.x - 300.0).abs() < 1e-4 && (e.y - 150.0).abs() < 1e-4);
+    assert!((s.x - 200.0).abs() < 1e-4 && (s.y - 200.0).abs() < 1e-4);
+    assert!((w.x - 100.0).abs() < 1e-4 && (w.y - 150.0).abs() < 1e-4);
+
+    // Tangkai Rotasi di atas
+    let rot = get_handle(TransformHandleKind::Rotation);
+    assert!((rot.x - 200.0).abs() < 1e-4 && (rot.y - 80.0).abs() < 1e-4);
+
+    // Hit testing: tepat di titik SouthEast
+    let hit_se = hit_test_transform_handles(&handles, Point2D::new(300.0, 200.0), 5.0);
+    assert_eq!(hit_se, Some(TransformHandleKind::SouthEast));
+
+    // Hit testing: sedikit meleset tapi masih dalam radius toleransi 10px
+    let hit_rot = hit_test_transform_handles(&handles, Point2D::new(202.0, 83.0), 10.0);
+    assert_eq!(hit_rot, Some(TransformHandleKind::Rotation));
+
+    // Hit testing: di luar seluruh handle
+    let miss = hit_test_transform_handles(&handles, Point2D::new(200.0, 150.0), 10.0);
+    assert_eq!(miss, None);
+}
+
+#[test]
+fn test_calculate_proportional_scale_and_min_dim() {
+    use super::shape_ops::{ShapeTransformBox, TransformHandleKind, calculate_proportional_scale};
+
+    // Objek awal: x=100, y=100, w=100, h=50. Dragging SouthEast corner.
+    // Anchor berlawanan adalah NorthWest (100, 100).
+    let orig = ShapeTransformBox::new(100.0, 100.0, 100.0, 50.0, 0.0);
+    let (nx, ny, nw, nh) = calculate_proportional_scale(
+        TransformHandleKind::SouthEast,
+        Point2D::new(300.0, 200.0), // perbesar ke arah tenggara
+        orig,
+        4.0,
+    );
+
+    // Sudut NorthWest tetap di (100, 100)
+    assert!((nx - 100.0).abs() < 1e-3);
+    assert!((ny - 100.0).abs() < 1e-3);
+    // Skala 2x: w=200, h=100
+    assert!((nw - 200.0).abs() < 1e-3);
+    assert!((nh - 100.0).abs() < 1e-3);
+    assert!((nw / nh - 2.0).abs() < 1e-3); // Rasio aspek 2:1 terjaga
+
+    // Menyeret melewati titik anchor (inversi / flip) tidak menyebabkan crash atau ukuran di bawah 4.0
+    let (_fx, _fy, fw, fh) = calculate_proportional_scale(
+        TransformHandleKind::SouthEast,
+        Point2D::new(50.0, 50.0), // kursor melompat ke seberang anchor
+        orig,
+        4.0,
+    );
+    assert!(fw >= 4.0);
+    assert!(fh >= 4.0);
+    assert!(!fw.is_nan() && !fh.is_nan());
+}
+
+#[test]
+fn test_calculate_single_axis_resize_and_local_projection() {
+    use super::shape_ops::{ShapeTransformBox, TransformHandleKind, calculate_single_axis_resize};
+
+    let orig = ShapeTransformBox::new(100.0, 100.0, 100.0, 50.0, 0.0);
+
+    // Resize sisi Timur (East): lebar berubah, tinggi tetap 50.0
+    let (nx, ny, nw, nh) = calculate_single_axis_resize(
+        TransformHandleKind::East,
+        Point2D::new(260.0, 125.0),
+        orig,
+        4.0,
+    );
+    assert!((nx - 100.0).abs() < 1e-3); // Sisi kiri tetap di 100
+    assert!((ny - 100.0).abs() < 1e-3); // Sisi atas tetap di 100
+    assert!((nw - 160.0).abs() < 1e-3); // Lebar bertambah jadi 160
+    assert!((nh - 50.0).abs() < 1e-3); // Tinggi tetap 50
+
+    // Resize sisi Selatan (South): tinggi berubah, lebar tetap 100.0
+    let (sx, sy, sw, sh) = calculate_single_axis_resize(
+        TransformHandleKind::South,
+        Point2D::new(150.0, 220.0),
+        orig,
+        4.0,
+    );
+    assert!((sx - 100.0).abs() < 1e-3);
+    assert!((sy - 100.0).abs() < 1e-3);
+    assert!((sw - 100.0).abs() < 1e-3);
+    assert!((sh - 120.0).abs() < 1e-3); // Tinggi bertambah jadi 120
+
+    // Batas minimum tidak pernah lebih kecil dari 4.0 pt
+    let (_, _, min_w, _) = calculate_single_axis_resize(
+        TransformHandleKind::East,
+        Point2D::new(50.0, 125.0), // kursor dipersempit drastis
+        orig,
+        4.0,
+    );
+    assert!(min_w >= 4.0);
+}
+
+#[test]
+fn test_calculate_rotation_angle_and_15_deg_snap() {
+    use super::shape_ops::calculate_rotation_angle;
+
+    let cx = 100.0_f32;
+    let cy = 100.0_f32;
+
+    // Tangkai rotasi di atas: titik (100, 60) -> sudut rotasi 0 rad
+    let angle_zero = calculate_rotation_angle(cx, cy, Point2D::new(100.0, 60.0), false);
+    assert!(angle_zero.abs() < 1e-4);
+
+    // Kursor digeser ke kanan: (140, 100) -> sudut rotasi 90 derajat (PI/2 rad)
+    let angle_90 = calculate_rotation_angle(cx, cy, Point2D::new(140.0, 100.0), false);
+    assert!((angle_90 - std::f32::consts::FRAC_PI_2).abs() < 1e-3);
+
+    // Dengan snap 15 derajat (TAU / 24 = 0.2618 rad):
+    // Sudut 16.5 derajat (0.288 rad) akan menempel tepat ke 15 derajat (0.2618 rad)
+    let angle_snapped = calculate_rotation_angle(
+        cx,
+        cy,
+        Point2D::new(
+            100.0 + 40.0 * 0.288_f32.sin(),
+            100.0 - 40.0 * 0.288_f32.cos(),
+        ),
+        true,
+    );
+    let expected_15_deg = std::f32::consts::TAU / 24.0;
+    assert!((angle_snapped - expected_15_deg).abs() < 1e-3);
+}
+
+#[test]
+fn test_change_shape_kind_preserves_data_and_connector_anchors() {
+    use super::shape_ops::change_shape_kind;
+    use crate::geometry::shape_connection_point;
+    use crate::model::{ColorData, ConnectionSite, DrawObject, ShapeKind};
+
+    let mut shape = DrawObject::Shape {
+        id: "test-shape-g5".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: 100.0,
+        y: 100.0,
+        width: 120.0,
+        height: 80.0,
+        color: ColorData {
+            r: 0,
+            g: 114,
+            b: 206,
+            a: 255,
+        },
+        stroke_width: 2.5,
+        fill: Some(ColorData {
+            r: 200,
+            g: 230,
+            b: 255,
+            a: 50,
+        }),
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+
+    // Ubah ke RoundedRectangle dengan default corner radius 9.6
+    change_shape_kind(&mut shape, ShapeKind::Rectangle, 9.6);
+    if let DrawObject::Shape { corner_radius, .. } = &shape {
+        assert_eq!(*corner_radius, 9.6);
+    }
+
+    // Ubah ke Diamond (Belah Ketupat)
+    change_shape_kind(&mut shape, ShapeKind::Diamond, 0.0);
+    if let DrawObject::Shape {
+        shape_type,
+        corner_radius,
+        width,
+        height,
+        ..
+    } = &shape
+    {
+        assert_eq!(*shape_type, ShapeKind::Diamond);
+        assert_eq!(*corner_radius, 0.0);
+        assert_eq!(*width, 120.0);
+        assert_eq!(*height, 80.0);
+    }
+
+    // Verifikasi titik sambung connector (Task 5.3): tetap valid di tepi Diamond
+    let (pt_top, _) = shape_connection_point(&shape, ConnectionSite::Top, None);
+    let (pt_right, _) = shape_connection_point(&shape, ConnectionSite::Right, None);
+    assert!((pt_top.x - 160.0).abs() < 1e-4 && (pt_top.y - 100.0).abs() < 1e-4);
+    assert!((pt_right.x - 220.0).abs() < 1e-4 && (pt_right.y - 140.0).abs() < 1e-4);
+}
+
+#[test]
+fn test_shape_text_bounds_and_auto_fit() {
+    // 1. Rectangle murni
+    let (w_rect, h_rect) =
+        calculate_shape_text_bounds(ShapeKind::Rectangle, 200.0, 100.0, 0.0, 2.0);
+    assert_eq!(w_rect, 200.0 - 10.0); // 190.0
+    assert_eq!(h_rect, 100.0 - 10.0); // 90.0
+
+    // 2. RoundedRectangle: safe bounds lebih mengecil karena radius sudut
+    let (w_rrect, h_rrect) =
+        calculate_shape_text_bounds(ShapeKind::Rectangle, 200.0, 100.0, 14.0, 2.0);
+    assert!(w_rrect < w_rect);
+    assert!(h_rrect < h_rect);
+
+    // 3. Ellipse: batas dalam elips ~0.7071
+    let (w_ell, h_ell) = calculate_shape_text_bounds(ShapeKind::Ellipse, 200.0, 100.0, 0.0, 2.0);
+    assert!((w_ell - (200.0 * 0.7071 - 10.0)).abs() < 0.1);
+    assert!((h_ell - (100.0 * 0.7071 - 10.0)).abs() < 0.1);
+
+    // 4. Diamond: batas dalam belah ketupat ~0.5
+    let (w_dia, h_dia) = calculate_shape_text_bounds(ShapeKind::Diamond, 200.0, 100.0, 0.0, 2.0);
+    assert!((w_dia - (200.0 * 0.5 - 10.0)).abs() < 0.1);
+    assert!((h_dia - (100.0 * 0.5 - 10.0)).abs() < 0.1);
+
+    // 5. Auto-fit font size
+    let base_size = 16.0;
+    // Teks kosong atau pendek tetap di base size
+    let fit_short = calculate_auto_fit_font_size(base_size, "Halo", 180.0, 80.0, 8.0);
+    assert_eq!(fit_short, base_size);
+
+    // Teks sangat panjang akan mengecil secara proporsional hingga minimal 8.0 pt
+    let long_text = "Ini adalah paragraf yang sangat panjang sekali di dalam kotak diagram rustnotes untuk menguji kalkulasi auto fit font size";
+    let fit_long = calculate_auto_fit_font_size(base_size, long_text, 100.0, 30.0, 8.0);
+    assert!(fit_long < base_size);
+    assert!(fit_long >= 8.0);
+}
+
+#[test]
+fn test_shape_label_proportional_scale() {
+    let mut shape = DrawObject::Shape {
+        id: "shape_with_label".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 100.0,
+        y: 100.0,
+        width: 100.0,
+        height: 100.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 10.0,
+        label: Some(crate::model::ShapeLabel {
+            text: "Flowchart Step".into(),
+            font_size: 16.0,
+            color: dummy_color(),
+            alignment: crate::model::TextAlign::Center,
+            vertical_alignment: crate::model::VerticalAlign::Middle,
+        }),
+        locked: false,
+        curve_points: Vec::new(),
+    };
+
+    // Skala 2.0x terhadap titik (100, 100)
+    scale_object(&mut shape, Pos2::new(100.0, 100.0), 2.0, 2.0);
+
+    if let DrawObject::Shape {
+        width,
+        height,
+        corner_radius,
+        label,
+        ..
+    } = &shape
+    {
+        assert_eq!(*width, 200.0);
+        assert_eq!(*height, 200.0);
+        assert_eq!(*corner_radius, 20.0);
+        let lbl = label.as_ref().expect("label should exist");
+        assert_eq!(lbl.font_size, 32.0);
+    } else {
+        panic!("Object should remain Shape");
+    }
+}
+
+#[test]
+fn test_connector_snap_site_detection() {
+    let shape_a = DrawObject::Shape {
+        id: "shape_a".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 100.0,
+        y: 100.0,
+        width: 100.0,
+        height: 100.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+
+    let objects = vec![shape_a];
+
+    // Titik kanan shape_a adalah (200.0, 150.0). Uji titik dekat (202.0, 149.0)
+    let p_near_right = Point2D::new(202.0, 149.0);
+    let snap = find_connector_snap_site(&objects, p_near_right, 16.0, None);
+    assert!(snap.is_some());
+    let (id, site, anchor) = snap.unwrap();
+    assert_eq!(id, "shape_a");
+    assert_eq!(site, ConnectionSite::Right);
+    assert_eq!(anchor, Point2D::new(200.0, 150.0));
+
+    // Uji titik yang jauh: tidak boleh ada snap
+    let p_far = Point2D::new(500.0, 500.0);
+    let snap_far = find_connector_snap_site(&objects, p_far, 16.0, None);
+    assert!(snap_far.is_none());
+
+    // Uji exclude_shape_id
+    let snap_excluded = find_connector_snap_site(&objects, p_near_right, 16.0, Some("shape_a"));
+    assert!(snap_excluded.is_none());
+}
+
+#[test]
+fn test_detach_connectors_when_shape_deleted() {
+    let shape_a = DrawObject::Shape {
+        id: "shape_a".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 100.0,
+        y: 100.0,
+        width: 100.0,
+        height: 100.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    let shape_b = DrawObject::Shape {
+        id: "shape_b".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 300.0,
+        y: 100.0,
+        width: 100.0,
+        height: 100.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    let conn = DrawObject::Connector {
+        id: "conn_1".into(),
+        start: crate::model::ConnectorEnd::Attached {
+            shape_id: "shape_a".into(),
+            site: ConnectionSite::Right,
+        },
+        end: crate::model::ConnectorEnd::Attached {
+            shape_id: "shape_b".into(),
+            site: ConnectionSite::Left,
+        },
+        route: crate::model::ConnectorRoute::Orthogonal,
+        control_points: Vec::new(),
+        style: crate::model::ConnectorStyle {
+            stroke_color: dummy_color(),
+            stroke_width: 2.0,
+            start_marker: crate::model::MarkerKind::None,
+            end_marker: crate::model::MarkerKind::Arrow,
+        },
+        locked: false,
+    };
+
+    let mut objects = vec![shape_a, shape_b, conn];
+
+    // Hapus shape_a
+    detach_connectors_from_shapes(&mut objects, &["shape_a".to_string()]);
+    objects.retain(|o| o.id() != "shape_a");
+
+    // Pastikan connector conn_1 tetap ada
+    let conn_after = objects
+        .iter()
+        .find(|o| o.id() == "conn_1")
+        .expect("Connector must not be deleted");
+    if let DrawObject::Connector { start, end, .. } = conn_after {
+        // Ujung start menjadi Free di koordinat terakhir (200.0, 150.0)
+        match start {
+            crate::model::ConnectorEnd::Free { x, y } => {
+                assert_eq!(*x, 200.0);
+                assert_eq!(*y, 150.0);
+            }
+            _ => panic!("Start must be detached to Free"),
+        }
+        // Ujung end tetap Attached ke shape_b
+        match end {
+            crate::model::ConnectorEnd::Attached { shape_id, site } => {
+                assert_eq!(shape_id, "shape_b");
+                assert_eq!(*site, ConnectionSite::Left);
+            }
+            _ => panic!("End must remain Attached"),
+        }
+    } else {
+        panic!("Object must be Connector");
+    }
+}
+
+#[test]
+fn test_remap_connector_endpoints_on_copy_and_paste() {
+    let shape_a = DrawObject::Shape {
+        id: "orig_a".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 50.0,
+        y: 50.0,
+        width: 100.0,
+        height: 100.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    let shape_b = DrawObject::Shape {
+        id: "orig_b".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 250.0,
+        y: 50.0,
+        width: 100.0,
+        height: 100.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    let conn = DrawObject::Connector {
+        id: "orig_conn".into(),
+        start: crate::model::ConnectorEnd::Attached {
+            shape_id: "orig_a".into(),
+            site: ConnectionSite::Right,
+        },
+        end: crate::model::ConnectorEnd::Attached {
+            shape_id: "orig_b".into(),
+            site: ConnectionSite::Left,
+        },
+        route: crate::model::ConnectorRoute::Orthogonal,
+        control_points: Vec::new(),
+        style: crate::model::ConnectorStyle {
+            stroke_color: dummy_color(),
+            stroke_width: 2.0,
+            start_marker: crate::model::MarkerKind::None,
+            end_marker: crate::model::MarkerKind::Arrow,
+        },
+        locked: false,
+    };
+
+    let original_objects = vec![shape_a.clone(), shape_b.clone(), conn.clone()];
+
+    // Skenario 1: Copy keduanya bersamaan
+    let mut cloned_together = vec![shape_a.clone(), shape_b.clone(), conn.clone()];
+    let mut id_map_together = std::collections::HashMap::new();
+    id_map_together.insert("orig_a".into(), "new_a".into());
+    id_map_together.insert("orig_b".into(), "new_b".into());
+    id_map_together.insert("orig_conn".into(), "new_conn".into());
+
+    remap_connector_endpoints_on_copy(&mut cloned_together, &id_map_together, &original_objects);
+
+    if let DrawObject::Connector { start, end, .. } = &cloned_together[2] {
+        match start {
+            crate::model::ConnectorEnd::Attached { shape_id, .. } => assert_eq!(shape_id, "new_a"),
+            _ => panic!("Start should remap to new_a"),
+        }
+        match end {
+            crate::model::ConnectorEnd::Attached { shape_id, .. } => assert_eq!(shape_id, "new_b"),
+            _ => panic!("End should remap to new_b"),
+        }
+    }
+
+    // Skenario 2: Hanya copy Connector tanpa bentuknya
+    let mut cloned_conn_only = vec![conn.clone()];
+    let mut id_map_conn_only = std::collections::HashMap::new();
+    id_map_conn_only.insert("orig_conn".into(), "new_conn_only".into());
+
+    remap_connector_endpoints_on_copy(&mut cloned_conn_only, &id_map_conn_only, &original_objects);
+
+    if let DrawObject::Connector { start, end, .. } = &cloned_conn_only[0] {
+        match start {
+            crate::model::ConnectorEnd::Free { x, y } => {
+                assert_eq!(*x, 150.0);
+                assert_eq!(*y, 100.0);
+            }
+            _ => panic!("Start should detach to Free coordinate"),
+        }
+        match end {
+            crate::model::ConnectorEnd::Free { x, y } => {
+                assert_eq!(*x, 250.0);
+                assert_eq!(*y, 100.0);
+            }
+            _ => panic!("End should detach to Free coordinate"),
+        }
+    }
+}
+
+#[test]
+fn test_catmull_rom_spline_generation() {
+    use crate::geometry::connectors::catmull_rom_spline;
+    use crate::model::Point2D;
+
+    let waypoints = vec![
+        Point2D::new(0.0, 0.0),
+        Point2D::new(50.0, 100.0),
+        Point2D::new(100.0, 50.0),
+        Point2D::new(150.0, 150.0),
+    ];
+
+    let spline = catmull_rom_spline(&waypoints, 12);
+    assert!(!spline.is_empty());
+    assert!((spline[0].x - 0.0).abs() < 1e-4);
+    assert!((spline[0].y - 0.0).abs() < 1e-4);
+    let last = spline[spline.len() - 1];
+    assert!((last.x - 150.0).abs() < 1e-4);
+    assert!((last.y - 150.0).abs() < 1e-4);
+
+    // Pastikan tidak ada koordinat NaN
+    for p in &spline {
+        assert!(!p.x.is_nan());
+        assert!(!p.y.is_nan());
+    }
+}
+
+#[test]
+fn test_route_orthogonal_through_points_strictly_orthogonal() {
+    use crate::geometry::connectors::{Direction, route_orthogonal_through_points};
+    use crate::model::Point2D;
+
+    let start = Point2D::new(50.0, 50.0);
+    let end = Point2D::new(300.0, 200.0);
+    let control_points = vec![Point2D::new(150.0, 80.0), Point2D::new(200.0, 150.0)];
+
+    let path = route_orthogonal_through_points(
+        start,
+        Direction::Right,
+        end,
+        Direction::Left,
+        &control_points,
+    );
+    assert!(path.len() >= 3);
+
+    // Setiap segmen harus tepat horizontal atau vertikal (tanpa garis miring)
+    for i in 0..path.len() - 1 {
+        let a = path[i];
+        let b = path[i + 1];
+        let dx = (a.x - b.x).abs();
+        let dy = (a.y - b.y).abs();
+        assert!(
+            dx < 1e-3 || dy < 1e-3,
+            "Segmen {} -> {} tidak orthogonal! dx={}, dy={}",
+            i,
+            i + 1,
+            dx,
+            dy
+        );
+    }
+}
+
+#[test]
+fn test_insert_and_prune_collinear_control_points() {
+    use crate::geometry::connectors::{insert_control_point_at, prune_collinear_control_points};
+    use crate::model::Point2D;
+
+    let start = Point2D::new(0.0, 0.0);
+    let end = Point2D::new(200.0, 0.0);
+    let mut control_points = Vec::new();
+
+    // 1. Sisipkan titik di tengah segmen (100, 50)
+    let idx = insert_control_point_at(&mut control_points, start, end, Point2D::new(100.0, 50.0));
+    assert_eq!(idx, 0);
+    assert_eq!(control_points.len(), 1);
+    assert_eq!(control_points[0], Point2D::new(100.0, 50.0));
+
+    // Sisipkan titik kedua di (50, 25)
+    let idx2 = insert_control_point_at(&mut control_points, start, end, Point2D::new(50.0, 25.0));
+    assert_eq!(idx2, 0);
+    assert_eq!(control_points.len(), 2);
+    assert_eq!(control_points[0], Point2D::new(50.0, 25.0));
+
+    // 2. Prune titik yang segaris: buat titik (100, 1.0) yang hampir persis di garis lurus Y=0
+    let mut test_cps = vec![Point2D::new(100.0, 1.5)];
+    let pruned = prune_collinear_control_points(&mut test_cps, start, end, 5.0);
+    assert!(pruned);
+    assert!(test_cps.is_empty(), "Titik hampir segaris harus ter-prune");
+}
+
+#[test]
+fn test_prune_invalid_connector_control_points_inside_shape() {
+    use crate::geometry::connectors::prune_invalid_connector_control_points;
+    use crate::model::{
+        ColorData, ConnectionSite, ConnectorEnd, ConnectorRoute, ConnectorStyle, DrawObject,
+        Point2D, ShapeKind,
+    };
+
+    let shape_a = DrawObject::Shape {
+        id: "shape_a".into(),
+        x: 100.0,
+        y: 100.0,
+        width: 100.0,
+        height: 80.0,
+        color: ColorData {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+        stroke_width: 2.0,
+        fill: None,
+        shape_type: ShapeKind::Rectangle,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        curve_points: Vec::new(),
+        label: None,
+        locked: false,
+    };
+
+    let mut conn = DrawObject::Connector {
+        id: "conn_1".into(),
+        start: ConnectorEnd::Attached {
+            shape_id: "shape_a".into(),
+            site: ConnectionSite::Right,
+        },
+        end: ConnectorEnd::Free { x: 400.0, y: 140.0 },
+        route: ConnectorRoute::Straight,
+        control_points: vec![
+            Point2D::new(150.0, 140.0), // Berada di DALAM shape_a (X: 100-200, Y: 100-180)!
+            Point2D::new(300.0, 140.0), // Di luar shape_a
+        ],
+        style: ConnectorStyle::default(),
+        locked: false,
+    };
+
+    let all_objects = vec![shape_a];
+    let changed = prune_invalid_connector_control_points(&mut conn, &all_objects);
+    assert!(changed);
+
+    if let DrawObject::Connector { control_points, .. } = conn {
+        assert_eq!(control_points.len(), 1);
+        assert_eq!(control_points[0], Point2D::new(300.0, 140.0));
+    }
+}
+
+#[test]
+fn test_next_shape_rect_directions_and_opposite_sites() {
+    use crate::geometry::shape_ops::next_shape_rect;
+    use crate::model::ConnectionSite;
+
+    let sx = 200.0;
+    let sy = 200.0;
+    let sw = 100.0;
+    let sh = 60.0;
+    let gap = 50.0;
+    let all_objects = vec![];
+    let page_w = 1000.0;
+    let page_h = 1000.0;
+
+    // 1. Right -> Left
+    let (rx, ry, rw, rh, ropp) = next_shape_rect(
+        (sx, sy, sw, sh),
+        ConnectionSite::Right,
+        gap,
+        &all_objects,
+        (page_w, page_h),
+    );
+    assert_eq!(ropp, ConnectionSite::Left);
+    assert_eq!(rx, sx + sw + gap);
+    assert_eq!(ry, sy);
+    assert_eq!(rw, sw);
+    assert_eq!(rh, sh);
+
+    // 2. Bottom -> Top
+    let (bx, by, bw, bh, bopp) = next_shape_rect(
+        (sx, sy, sw, sh),
+        ConnectionSite::Bottom,
+        gap,
+        &all_objects,
+        (page_w, page_h),
+    );
+    assert_eq!(bopp, ConnectionSite::Top);
+    assert_eq!(bx, sx);
+    assert_eq!(by, sy + sh + gap);
+    assert_eq!(bw, sw);
+    assert_eq!(bh, sh);
+
+    // 3. Left -> Right
+    let (lx, ly, _lw, _lh, lopp) = next_shape_rect(
+        (sx, sy, sw, sh),
+        ConnectionSite::Left,
+        gap,
+        &all_objects,
+        (page_w, page_h),
+    );
+    assert_eq!(lopp, ConnectionSite::Right);
+    assert_eq!(lx, sx - gap - sw);
+    assert_eq!(ly, sy);
+
+    // 4. Top -> Bottom
+    let (tx, ty, _tw, _th, topp) = next_shape_rect(
+        (sx, sy, sw, sh),
+        ConnectionSite::Top,
+        gap,
+        &all_objects,
+        (page_w, page_h),
+    );
+    assert_eq!(topp, ConnectionSite::Bottom);
+    assert_eq!(tx, sx);
+    assert_eq!(ty, sy - gap - sh);
+}
+
+#[test]
+fn test_next_shape_rect_overlap_avoidance() {
+    use crate::geometry::shape_ops::next_shape_rect;
+    use crate::model::{ColorData, ConnectionSite, DrawObject, ShapeKind};
+
+    let sx = 100.0;
+    let sy = 100.0;
+    let sw = 100.0;
+    let sh = 60.0;
+    let gap = 40.0;
+
+    // Bentuk rintangan yang tepat berada di posisi target awal sebelah kanan: X: 240, Y: 100
+    let obstacle = DrawObject::Shape {
+        id: "obstacle".into(),
+        x: 240.0,
+        y: 100.0,
+        width: 100.0,
+        height: 60.0,
+        color: ColorData {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+        stroke_width: 2.0,
+        fill: None,
+        shape_type: ShapeKind::Rectangle,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        curve_points: Vec::new(),
+        label: None,
+        locked: false,
+    };
+
+    let all_objects = vec![obstacle];
+    let (rx, ry, _rw, _rh, ropp) = next_shape_rect(
+        (sx, sy, sw, sh),
+        ConnectionSite::Right,
+        gap,
+        &all_objects,
+        (1000.0, 1000.0),
+    );
+
+    assert_eq!(ropp, ConnectionSite::Left);
+    // Posisi target awal 240 terhalang, jadi harus digeser lebih jauh ke kanan (> 240 + 100 = 340)
+    assert!(rx >= 310.0, "rx {} harus melewati rintangan di 240-340", rx);
+    assert_eq!(ry, sy);
+}
+
+#[test]
+fn test_next_shape_rect_clamping_to_page_bounds() {
+    use crate::geometry::shape_ops::next_shape_rect;
+    use crate::model::ConnectionSite;
+
+    let page_w = 400.0;
+    let page_h = 400.0;
+
+    // Bentuk yang berada dekat dengan tepi kanan halaman
+    let sx = 300.0;
+    let sy = 100.0;
+    let sw = 80.0;
+    let sh = 50.0;
+    let gap = 50.0;
+
+    let (rx, ry, rw, rh, _) = next_shape_rect(
+        (sx, sy, sw, sh),
+        ConnectionSite::Right,
+        gap,
+        &[],
+        (page_w, page_h),
+    );
+
+    // Harus ter-klem di dalam batas halaman (rx + rw <= page_w)
+    assert!(
+        rx + rw <= page_w,
+        "rx + rw ({}) tidak boleh keluar dari page_w ({})",
+        rx + rw,
+        page_w
+    );
+    assert!(rx >= 16.0);
+    assert!(ry + rh <= page_h);
+}
+
+#[test]
+fn test_snap_value_and_point_to_grid() {
+    use crate::geometry::snapping::{snap_point_to_grid, snap_value_to_grid};
+    use crate::model::Point2D;
+
+    let grid_size = 30.0;
+    let threshold = 5.0;
+
+    // Nilai 29.0 dekat dengan kelipatan 30.0
+    let (v1, s1) = snap_value_to_grid(29.0, grid_size, threshold);
+    assert!(s1);
+    assert_eq!(v1, 30.0);
+
+    // Nilai 33.0 dekat dengan kelipatan 30.0
+    let (v2, s2) = snap_value_to_grid(33.0, grid_size, threshold);
+    assert!(s2);
+    assert_eq!(v2, 30.0);
+
+    // Nilai 15.0 jauh dari kelipatan grid mana pun (jarak 15.0 > threshold 5.0)
+    let (v3, s3) = snap_value_to_grid(15.0, grid_size, threshold);
+    assert!(!s3);
+    assert_eq!(v3, 15.0);
+
+    // Point2D snap
+    let pt = Point2D::new(59.0, 92.0);
+    let (p_snapped, p_s) = snap_point_to_grid(pt, grid_size, threshold);
+    assert!(p_s);
+    assert_eq!(p_snapped.x, 60.0);
+    assert_eq!(p_snapped.y, 90.0);
+}
+
+#[test]
+fn test_find_alignment_guides_left_and_top_alignment() {
+    use crate::geometry::snapping::{GuideOrientation, find_alignment_guides};
+    use eframe::egui::Rect;
+
+    let target_rect = Rect::from_min_size(
+        eframe::egui::Pos2::new(100.0, 100.0),
+        eframe::egui::Vec2::new(80.0, 60.0),
+    );
+    // Moving rect dengan sisi kiri di 103.0 (selisih 3.0 dari tepi kiri target)
+    let moving_rect = Rect::from_min_size(
+        eframe::egui::Pos2::new(103.0, 250.0),
+        eframe::egui::Vec2::new(80.0, 60.0),
+    );
+
+    let (snap_adjust, guides) = find_alignment_guides(moving_rect, &[target_rect], 6.0);
+
+    // Harus menyesuaikan dx sebesar -3.0 agar tepat sejajar di x = 100.0
+    assert_eq!(snap_adjust.x, -3.0);
+    assert_eq!(guides.len(), 1);
+    assert_eq!(guides[0].orientation, GuideOrientation::Vertical);
+    assert_eq!(guides[0].position, 100.0);
+}
+
+#[test]
+fn test_find_alignment_guides_center_alignment() {
+    use crate::geometry::snapping::{GuideOrientation, find_alignment_guides};
+    use eframe::egui::Rect;
+
+    // Target rect berpusat di (200.0, 150.0)
+    let target_rect = Rect::from_center_size(
+        eframe::egui::Pos2::new(200.0, 150.0),
+        eframe::egui::Vec2::new(100.0, 80.0),
+    );
+    // Moving rect berpusat di (202.0, 148.5) (selisih dx = -2.0, dy = +1.5)
+    let moving_rect = Rect::from_center_size(
+        eframe::egui::Pos2::new(202.0, 148.5),
+        eframe::egui::Vec2::new(60.0, 60.0),
+    );
+
+    let (snap_adjust, guides) = find_alignment_guides(moving_rect, &[target_rect], 6.0);
+
+    assert_eq!(snap_adjust.x, -2.0);
+    assert_eq!(snap_adjust.y, 1.5);
+    assert_eq!(guides.len(), 2);
+    assert!(
+        guides
+            .iter()
+            .any(|g| g.orientation == GuideOrientation::Vertical && g.position == 200.0)
+    );
+    assert!(
+        guides
+            .iter()
+            .any(|g| g.orientation == GuideOrientation::Horizontal && g.position == 150.0)
+    );
+}
+
+#[test]
+fn test_find_alignment_guides_far_no_snap() {
+    use crate::geometry::snapping::find_alignment_guides;
+    use eframe::egui::{Rect, Vec2};
+
+    let target_rect = Rect::from_min_size(
+        eframe::egui::Pos2::new(100.0, 100.0),
+        eframe::egui::Vec2::new(50.0, 50.0),
+    );
+    let moving_rect = Rect::from_min_size(
+        eframe::egui::Pos2::new(500.0, 500.0),
+        eframe::egui::Vec2::new(50.0, 50.0),
+    );
+
+    let (snap_adjust, guides) = find_alignment_guides(moving_rect, &[target_rect], 8.0);
+
+    assert_eq!(snap_adjust, Vec2::ZERO);
+    assert!(guides.is_empty());
+}
+
+#[test]
+fn test_diagram_starter_templates_generation() {
+    use crate::geometry::shape_ops::{DiagramStarterKind, generate_diagram_starter};
+    use crate::model::DrawObject;
+
+    for kind in DiagramStarterKind::ALL {
+        let objs = generate_diagram_starter(kind, 800.0, 1000.0);
+        assert!(
+            !objs.is_empty(),
+            "Diagram starter {:?} harus menghasilkan objek",
+            kind
+        );
+
+        let shape_count = objs
+            .iter()
+            .filter(|o| matches!(o, DrawObject::Shape { .. }))
+            .count();
+        let connector_count = objs
+            .iter()
+            .filter(|o| matches!(o, DrawObject::Connector { .. }))
+            .count();
+
+        match kind {
+            DiagramStarterKind::Flowchart => {
+                assert_eq!(
+                    shape_count, 4,
+                    "Flowchart starter harus punya 4 shapes (Start, Process, Decision, End)"
+                );
+                assert_eq!(
+                    connector_count, 3,
+                    "Flowchart starter harus punya 3 connectors penghubung"
+                );
+            }
+            DiagramStarterKind::MindMap => {
+                assert_eq!(
+                    shape_count, 5,
+                    "MindMap starter harus punya 1 root + 4 node cabang"
+                );
+                assert_eq!(
+                    connector_count, 4,
+                    "MindMap starter harus punya 4 connectors dari root ke node cabang"
+                );
+            }
+            DiagramStarterKind::Architecture3Tier => {
+                assert_eq!(
+                    shape_count, 3,
+                    "Architecture3Tier harus punya 3 layer shapes"
+                );
+                assert_eq!(
+                    connector_count, 2,
+                    "Architecture3Tier harus punya 2 connectors dua arah"
+                );
+            }
+        }
+
+        // Verifikasi semua connector merujuk ke shape_id yang valid
+        let shape_ids: std::collections::HashSet<String> = objs
+            .iter()
+            .filter_map(|o| match o {
+                DrawObject::Shape { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+
+        for o in &objs {
+            if let DrawObject::Connector { start, end, .. } = o {
+                if let crate::model::ConnectorEnd::Attached { shape_id, .. } = start {
+                    assert!(
+                        shape_ids.contains(shape_id),
+                        "Start connector harus menempel pada shape yang ada di starter"
+                    );
+                }
+                if let crate::model::ConnectorEnd::Attached { shape_id, .. } = end {
+                    assert!(
+                        shape_ids.contains(shape_id),
+                        "End connector harus menempel pada shape yang ada di starter"
+                    );
+                }
+            }
+        }
     }
 }

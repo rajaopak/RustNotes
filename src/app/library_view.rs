@@ -588,6 +588,14 @@ impl RustNotesApp {
                                     found_snippet = Some(format!("Hal. {}: \"{snip}\"", p_idx + 1));
                                     break;
                                 }
+                                crate::model::DrawObject::Shape {
+                                    label: Some(lbl), ..
+                                } if lbl.text.to_lowercase().contains(&query) => {
+                                    let snip: String = lbl.text.chars().take(28).collect();
+                                    found_snippet =
+                                        Some(format!("📐 Bentuk Hal. {}: \"{snip}\"", p_idx + 1));
+                                    break;
+                                }
                                 _ => {}
                             }
                         }

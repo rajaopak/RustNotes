@@ -548,6 +548,7 @@ impl RustNotesApp {
                                                         text_shape.angle = *rotation;
                                                         painter.add(text_shape);
                                                     }
+                                                    crate::model::DrawObject::Connector { .. } => {}
                                                 }
                                             }
 
@@ -857,6 +858,8 @@ impl RustNotesApp {
                                                     Some(text.as_str())
                                                 } else if let crate::model::DrawObject::StickyNote { text, .. } = o {
                                                     Some(text.as_str())
+                                                } else if let crate::model::DrawObject::Shape { label: Some(lbl), .. } = o {
+                                                    Some(lbl.text.as_str())
                                                 } else {
                                                     None
                                                 }

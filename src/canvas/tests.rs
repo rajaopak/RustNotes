@@ -1,6 +1,9 @@
 use super::*;
 use crate::geometry::{smooth_stroke_points, tessellate_stroke};
-use crate::model::{ColorData, DrawObject, Page, PageTemplate, ShapeKind, StrokePoint};
+use crate::model::{
+    ColorData, ConnectionSite, ConnectorEnd, ConnectorRoute, ConnectorStyle, DrawObject, Page,
+    PageTemplate, Point2D, ShapeKind, StrokePoint,
+};
 use eframe::egui::{Color32, Pos2, Vec2};
 
 fn make_test_page() -> Page {
@@ -16,6 +19,11 @@ fn make_test_page() -> Page {
         color: ColorData::from(Color32::RED),
         stroke_width: 2.0,
         fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
     });
     page.objects.push(DrawObject::Text {
         id: "t1".to_string(),
@@ -387,6 +395,11 @@ fn test_undo_redo_multi_page_isolation_and_order() {
         color: ColorData::from(Color32::BLUE),
         stroke_width: 2.0,
         fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
     });
 
     // Aksi mutasi terakhir adalah di Page 2
@@ -593,4 +606,394 @@ fn test_undo_redo_after_whole_erase_and_insert_image() {
     state.redo(&mut page);
     assert_eq!(page.objects.len(), 1, "Redo ke kondisi ada image");
     assert_eq!(page.objects[0].id(), "img_test");
+}
+
+#[test]
+fn test_render_shape_variants_and_connector_primitives() {
+    use super::primitives::{draw_non_stroke_object, draw_shape_primitive};
+    use crate::model::{
+        ColorData, ConnectionSite, ConnectorEnd, ConnectorRoute, ConnectorStyle, DrawObject,
+        MarkerKind, Point2D, ShapeKind, ShapeLabel, TextAlign, VerticalAlign,
+    };
+    use std::collections::HashMap;
+
+    let ctx = egui::Context::default();
+    let _ = ctx.run(Default::default(), |ctx| {
+        let painter = ctx.layer_painter(egui::LayerId::background());
+        let textures = HashMap::new();
+
+        // 1. Test render Rounded Rectangle dengan rotasi
+        let stroke = egui::Stroke::new(2.0_f32, Color32::BLACK);
+        draw_shape_primitive(
+            &painter,
+            ShapeKind::Rectangle,
+            50.0,
+            50.0,
+            120.0,
+            80.0,
+            0.5,
+            10.0,
+            &[],
+            Color32::from_rgb(200, 220, 255),
+            stroke,
+            |p| p,
+        );
+
+        // 2. Test render Diamond
+        draw_shape_primitive(
+            &painter,
+            ShapeKind::Diamond,
+            100.0,
+            100.0,
+            80.0,
+            80.0,
+            0.0,
+            0.0,
+            &[],
+            Color32::YELLOW,
+            stroke,
+            |p| p,
+        );
+
+        // 3. Test render Curve
+        let curve_pts = vec![
+            Point2D::new(10.0, 10.0),
+            Point2D::new(50.0, 80.0),
+            Point2D::new(90.0, 20.0),
+            Point2D::new(130.0, 100.0),
+        ];
+        draw_shape_primitive(
+            &painter,
+            ShapeKind::Curve,
+            10.0,
+            10.0,
+            120.0,
+            90.0,
+            0.0,
+            0.0,
+            &curve_pts,
+            Color32::TRANSPARENT,
+            stroke,
+            |p| p,
+        );
+
+        // 4. Test render Shape dengan Label Teks
+        let shape_with_label = DrawObject::Shape {
+            id: "s_lbl".to_string(),
+            shape_type: ShapeKind::Rectangle,
+            x: 200.0,
+            y: 200.0,
+            width: 140.0,
+            height: 90.0,
+            color: ColorData::from(Color32::BLUE),
+            stroke_width: 2.0,
+            fill: Some(ColorData::from(Color32::LIGHT_BLUE)),
+            rotation: 0.1,
+            corner_radius: 8.0,
+            label: Some(ShapeLabel {
+                text: "Process Step 1".to_string(),
+                font_size: 14.0,
+                color: ColorData::from(Color32::BLACK),
+                alignment: TextAlign::Center,
+                vertical_alignment: VerticalAlign::Middle,
+            }),
+            locked: false,
+            curve_points: Vec::new(),
+        };
+
+        // 5. Test render Connector (Attached ke shape_with_label)
+        let connector = DrawObject::Connector {
+            id: "conn_test".to_string(),
+            start: ConnectorEnd::Attached {
+                shape_id: "s_lbl".to_string(),
+                site: ConnectionSite::Right,
+            },
+            end: ConnectorEnd::Free { x: 450.0, y: 250.0 },
+            route: ConnectorRoute::Orthogonal,
+            control_points: Vec::new(),
+            style: ConnectorStyle {
+                stroke_color: ColorData::from(Color32::BLACK),
+                stroke_width: 2.0,
+                start_marker: MarkerKind::None,
+                end_marker: MarkerKind::Arrow,
+            },
+            locked: false,
+        };
+
+        let all_objects = vec![shape_with_label.clone(), connector.clone()];
+
+        draw_non_stroke_object(
+            &painter,
+            &shape_with_label,
+            &all_objects,
+            |p| p,
+            1.0,
+            &textures,
+        );
+
+        draw_non_stroke_object(&painter, &connector, &all_objects, |p| p, 1.0, &textures);
+    });
+}
+
+#[test]
+fn test_hold_to_snap_undo_determinism() {
+    let mut state = CanvasState::default();
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "snap_test_page".to_string();
+
+    let orig_points = vec![
+        StrokePoint::from(Pos2::new(10.0, 10.0)),
+        StrokePoint::from(Pos2::new(100.0, 10.0)),
+        StrokePoint::from(Pos2::new(100.0, 100.0)),
+        StrokePoint::from(Pos2::new(10.0, 100.0)),
+        StrokePoint::from(Pos2::new(10.0, 10.0)),
+    ];
+
+    // Simulasikan alur Fase G4.3 saat hold-to-snap di-commit:
+    // 1. Snapshot pertama menyimpan stroke asli:
+    state.push_undo(&page.id, &page.objects);
+    let orig_stroke = DrawObject::Stroke {
+        id: "orig_stroke_1".to_string(),
+        points: orig_points,
+        color: ColorData::from(Color32::BLACK),
+        width: 2.0,
+        is_highlighter: false,
+    };
+    page.objects.push(orig_stroke);
+
+    // 2. Snapshot kedua mengganti stroke asli dengan shape terkoreksi:
+    state.push_undo(&page.id, &page.objects);
+    page.objects.pop();
+    page.objects.push(DrawObject::Shape {
+        id: "recognized_rect_1".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: 10.0,
+        y: 10.0,
+        width: 90.0,
+        height: 90.0,
+        color: ColorData::from(Color32::BLACK),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 8.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    });
+
+    // Kondisi saat ini: di halaman ada 1 objek berupa Shape
+    assert_eq!(page.objects.len(), 1);
+    assert!(matches!(page.objects[0], DrawObject::Shape { .. }));
+    assert_eq!(page.objects[0].id(), "recognized_rect_1");
+
+    // Undo #1: Harus mengembalikan coretan bebas asli pengguna (DrawObject::Stroke)!
+    state.undo(&mut page);
+    assert_eq!(page.objects.len(), 1);
+    assert!(
+        matches!(page.objects[0], DrawObject::Stroke { .. }),
+        "Undo pertama setelah snap HARUS mengembalikan goresan bebas asli!"
+    );
+    assert_eq!(page.objects[0].id(), "orig_stroke_1");
+
+    // Undo #2: Harus mengosongkan kertas (sebelum goresan dibuat)
+    state.undo(&mut page);
+    assert_eq!(
+        page.objects.len(),
+        0,
+        "Undo kedua harus mengembalikan kertas ke kondisi kosong"
+    );
+
+    // Redo #1: Maju ke Stroke
+    state.redo(&mut page);
+    assert_eq!(page.objects.len(), 1);
+    assert!(matches!(page.objects[0], DrawObject::Stroke { .. }));
+
+    // Redo #2: Maju ke Shape terkoreksi
+    state.redo(&mut page);
+    assert_eq!(page.objects.len(), 1);
+    assert!(matches!(page.objects[0], DrawObject::Shape { .. }));
+    assert_eq!(page.objects[0].id(), "recognized_rect_1");
+}
+
+#[test]
+fn test_auto_shape_toggle_state() {
+    let mut state = CanvasState::default();
+    assert!(state.auto_shape_enabled);
+
+    state.auto_shape_enabled = false;
+    assert!(!state.auto_shape_enabled);
+}
+
+#[test]
+fn test_lock_unlock_shape_and_connector_toggle() {
+    let mut state = CanvasState::default();
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "p_lock_test".to_string();
+
+    let s1 = DrawObject::Shape {
+        id: "s1".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: 50.0,
+        y: 50.0,
+        width: 100.0,
+        height: 80.0,
+        color: ColorData {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    let c1 = DrawObject::Connector {
+        id: "c1".to_string(),
+        start: ConnectorEnd::Free { x: 10.0, y: 10.0 },
+        end: ConnectorEnd::Free { x: 50.0, y: 50.0 },
+        route: ConnectorRoute::Straight,
+        control_points: Vec::new(),
+        style: ConnectorStyle::default(),
+        locked: false,
+    };
+    page.objects.push(s1);
+    page.objects.push(c1);
+
+    state.selected_ids = vec!["s1".to_string(), "c1".to_string()];
+    assert!(!state.is_selected_locked(&page));
+
+    // Toggle 1: Kunci kedua objek
+    assert!(state.toggle_lock_selected(&mut page));
+    assert!(state.is_selected_locked(&page));
+    assert!(page.objects[0].is_locked());
+    assert!(page.objects[1].is_locked());
+
+    // Toggle 2: Buka kunci kedua objek
+    assert!(state.toggle_lock_selected(&mut page));
+    assert!(!state.is_selected_locked(&page));
+    assert!(!page.objects[0].is_locked());
+    assert!(!page.objects[1].is_locked());
+
+    // Undo: Kembali ke terkunci
+    state.undo(&mut page);
+    assert!(page.objects[0].is_locked());
+    assert!(page.objects[1].is_locked());
+
+    // Redo: Kembali ke terbuka
+    state.redo(&mut page);
+    assert!(!page.objects[0].is_locked());
+    assert!(!page.objects[1].is_locked());
+}
+
+#[test]
+fn test_locked_objects_cannot_be_deleted_or_erased() {
+    let mut state = CanvasState::default();
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "p_protect_lock".to_string();
+
+    let locked_shape = DrawObject::Shape {
+        id: "locked_s".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: 100.0,
+        y: 100.0,
+        width: 100.0,
+        height: 100.0,
+        color: ColorData {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: true,
+        curve_points: Vec::new(),
+    };
+    let free_stroke = DrawObject::Stroke {
+        id: "free_st".to_string(),
+        points: vec![
+            StrokePoint {
+                x: 10.0,
+                y: 10.0,
+                pressure: 1.0,
+            },
+            StrokePoint {
+                x: 30.0,
+                y: 30.0,
+                pressure: 1.0,
+            },
+        ],
+        color: ColorData {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+        width: 2.0,
+        is_highlighter: false,
+    };
+    page.objects.push(locked_shape);
+    page.objects.push(free_stroke);
+
+    // Pilih keduanya dan panggil delete_selected
+    state.selected_ids = vec!["locked_s".to_string(), "free_st".to_string()];
+    state.delete_selected(&mut page);
+
+    // locked_shape HARUS tetap ada! free_stroke harus terhapus!
+    assert_eq!(page.objects.len(), 1);
+    assert_eq!(page.objects[0].id(), "locked_s");
+    assert!(page.objects[0].is_locked());
+
+    // Coba hapus locked_shape dengan eraser
+    state.eraser_mode = EraserMode::WholeStroke;
+    let erased = state.erase_at(&mut page, Pos2::new(150.0, 150.0), 10.0);
+    assert!(!erased);
+    assert_eq!(page.objects.len(), 1);
+    assert_eq!(page.objects[0].id(), "locked_s");
+}
+
+#[test]
+fn test_locked_shape_remains_valid_connector_snap_target() {
+    let locked_shape = DrawObject::Shape {
+        id: "target_shape".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: 100.0,
+        y: 100.0,
+        width: 100.0,
+        height: 100.0,
+        color: ColorData {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: true,
+        curve_points: Vec::new(),
+    };
+    let objects = vec![locked_shape];
+
+    // Titik kanan shape adalah (200.0, 150.0). Cari snap dekat (202.0, 149.0)
+    let p_near = Point2D::new(202.0, 149.0);
+    let snap = crate::geometry::find_connector_snap_site(&objects, p_near, 16.0, None);
+
+    assert!(
+        snap.is_some(),
+        "Bentuk terkunci HARUS tetap dapat menjadi snap target connector baru!"
+    );
+    let (id, site, anchor) = snap.unwrap();
+    assert_eq!(id, "target_shape");
+    assert_eq!(site, ConnectionSite::Right);
+    assert_eq!(anchor, Point2D::new(200.0, 150.0));
 }

@@ -10,6 +10,7 @@ pub enum ActiveTool {
     Eraser,
     Lasso,
     Shape(ShapeKind),
+    Connector,
     Text,
     StickyNote,
     Laser,
@@ -31,10 +32,18 @@ pub struct LaserTrailPoint {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ResizeCorner {
     NorthWest,
+    North,
     NorthEast,
+    East,
     SouthEast,
+    South,
     SouthWest,
+    West,
     Rotation,
     LineStart,
     LineEnd,
+    ConnectorStart,
+    ConnectorEnd,
+    ConnectorControl(usize),
+    QuickDiagramDot(crate::model::ConnectionSite),
 }

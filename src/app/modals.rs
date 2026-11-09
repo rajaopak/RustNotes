@@ -590,6 +590,11 @@ impl RustNotesApp {
                                     {
                                         matches.push((p_i, text.clone()));
                                     }
+                                    crate::model::DrawObject::Shape {
+                                        label: Some(lbl), ..
+                                    } if lbl.text.to_lowercase().contains(&q) => {
+                                        matches.push((p_i, format!("📐 {}", lbl.text)));
+                                    }
                                     _ => {}
                                 }
                             }
@@ -743,6 +748,7 @@ impl RustNotesApp {
                     });
                 });
         }
+
         if self.show_shortcut_modal {
             egui::Window::new("⌨ Pintasan Keyboard & Gestur (Shortcuts)")
                 .collapsible(false)
@@ -802,7 +808,7 @@ impl RustNotesApp {
                             ui.end_row();
 
                             ui.label("Arrow Keys (↑ ↓ ← →)");
-                            ui.label("Geser / Pan Kanvas ke 4 Arah (Shift + Arrow: Cepat)");
+                            ui.label("Geser / Pan Kanvas ke 4 Arah (Shift + Panah: Cepat)");
                             ui.end_row();
 
                             ui.label("Ctrl + A");
@@ -826,11 +832,7 @@ impl RustNotesApp {
                             ui.end_row();
 
                             ui.label("Drag Handle Atas ⟳");
-                            ui.label("Rotasi Bebas Objek Terpilih");
-                            ui.end_row();
-
-                            ui.label("Klik Kanan Kanvas");
-                            ui.label("Menu Konteks (Balik H/V, Pindah Depan/Belakang)");
+                            ui.label("Rotasi Bebas Objek Terpilih (Snap 15° saat dekat)");
                             ui.end_row();
 
                             ui.label("PageUp / PageDown");
@@ -841,18 +843,14 @@ impl RustNotesApp {
                             ui.label("Lompat ke Halaman Pertama / Terakhir");
                             ui.end_row();
 
-                            ui.label("F6 / Ctrl + B");
-                            ui.label("Tampilkan / Sembunyikan Panel Halaman");
-                            ui.end_row();
-
-                            ui.label("Alt + Z");
-                            ui.label("Buka / Tutup Zoom Window");
+                            ui.label("Esc");
+                            ui.label("Tutup Dialog Pop-up / Batalkan Seleksi");
                             ui.end_row();
                         });
 
-                    ui.add_space(14.0);
+                    ui.add_space(10.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("Tutup (Esc)").clicked() {
+                        if ui.button("Tutup").clicked() {
                             self.show_shortcut_modal = false;
                         }
                     });

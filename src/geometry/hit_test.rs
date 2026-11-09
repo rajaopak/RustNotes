@@ -75,6 +75,36 @@ pub fn distance_to_object(obj: &DrawObject, p: Pos2) -> Option<f32> {
         DrawObject::Text { .. } | DrawObject::StickyNote { .. } | DrawObject::Image { .. } => {
             if b.contains(p) { Some(0.0) } else { None }
         }
+        DrawObject::Connector {
+            start,
+            end,
+            control_points,
+            style,
+            ..
+        } => {
+            let mut pts = Vec::new();
+            if let crate::model::ConnectorEnd::Free { x, y } = start {
+                pts.push(Pos2::new(*x, *y));
+            }
+            for cp in control_points {
+                pts.push(Pos2::new(cp.x, cp.y));
+            }
+            if let crate::model::ConnectorEnd::Free { x, y } = end {
+                pts.push(Pos2::new(*x, *y));
+            }
+            if pts.is_empty() {
+                return if b.contains(p) { Some(0.0) } else { None };
+            }
+            let half_w = style.stroke_width * 0.5;
+            if pts.len() == 1 {
+                return Some(((p - pts[0]).length() - half_w).max(0.0));
+            }
+            let mut min_d = f32::INFINITY;
+            for i in 1..pts.len() {
+                min_d = min_d.min(point_to_segment_dist(p, pts[i - 1], pts[i]));
+            }
+            Some((min_d - half_w).max(0.0))
+        }
     }
 }
 
@@ -136,6 +166,34 @@ pub fn hit_test_object(obj: &DrawObject, p: Pos2, tolerance: f32) -> bool {
         }
         DrawObject::Text { .. } | DrawObject::StickyNote { .. } | DrawObject::Image { .. } => {
             b.contains(p)
+        }
+        DrawObject::Connector {
+            start,
+            end,
+            control_points,
+            style,
+            ..
+        } => {
+            let tol = tolerance + style.stroke_width * 0.5;
+            let mut pts = Vec::new();
+            if let crate::model::ConnectorEnd::Free { x, y } = start {
+                pts.push(Pos2::new(*x, *y));
+            }
+            for cp in control_points {
+                pts.push(Pos2::new(cp.x, cp.y));
+            }
+            if let crate::model::ConnectorEnd::Free { x, y } = end {
+                pts.push(Pos2::new(*x, *y));
+            }
+            if pts.len() == 1 {
+                return (p - pts[0]).length() <= tol;
+            }
+            for i in 1..pts.len() {
+                if point_to_segment_dist(p, pts[i - 1], pts[i]) <= tol {
+                    return true;
+                }
+            }
+            false
         }
     }
 }
@@ -207,6 +265,38 @@ pub fn object_in_lasso(obj: &DrawObject, polygon: &[Pos2]) -> bool {
                 b.left_bottom(),
             ];
             corners.iter().any(|&c| point_in_polygon(c, polygon))
+        }
+        DrawObject::Connector {
+            start,
+            end,
+            control_points,
+            ..
+        } => {
+            let mut pts = Vec::new();
+            if let crate::model::ConnectorEnd::Free { x, y } = start {
+                pts.push(Pos2::new(*x, *y));
+            }
+            for cp in control_points {
+                pts.push(Pos2::new(cp.x, cp.y));
+            }
+            if let crate::model::ConnectorEnd::Free { x, y } = end {
+                pts.push(Pos2::new(*x, *y));
+            }
+            if pts.iter().any(|&pt| point_in_polygon(pt, polygon)) {
+                return true;
+            }
+            for i in 1..pts.len() {
+                let p1 = pts[i - 1];
+                let p2 = pts[i];
+                for j in 0..polygon.len() {
+                    let l1 = polygon[j];
+                    let l2 = polygon[(j + 1) % polygon.len()];
+                    if segments_cross(p1, p2, l1, l2) {
+                        return true;
+                    }
+                }
+            }
+            false
         }
     }
 }

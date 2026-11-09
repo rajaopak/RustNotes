@@ -46,8 +46,9 @@ pub fn migrate(mut value: serde_json::Value) -> Result<Library, String> {
     }
 
     // Step-by-step sequential migration:
-    // v1 -> v2: Remove legacy "version" alias if present and set "schema_version" to 2
-    if version == 1
+    // v1 -> v2: Remove legacy "version" alias if present
+    // v2 -> v3: Mendukung Shape baru (rotation, corner_radius, label, locked) & DrawObject::Connector
+    if version < CURRENT_SCHEMA_VERSION
         && let serde_json::Value::Object(ref mut map) = value
     {
         map.remove("version");
@@ -927,6 +928,9 @@ pub fn export_page_to_png(
                 color,
                 stroke_width,
                 fill,
+                rotation,
+                corner_radius,
+                label,
                 ..
             } => {
                 let stroke_rgba = [color.r, color.g, color.b, color.a];
@@ -1003,6 +1007,51 @@ pub fn export_page_to_png(
                             );
                         }
                     }
+                }
+                if let Some(lbl) = label
+                    && !lbl.text.trim().is_empty()
+                {
+                    let (safe_w, safe_h) = crate::geometry::calculate_shape_text_bounds(
+                        *shape_type,
+                        *width,
+                        *height,
+                        *corner_radius,
+                        *stroke_width,
+                    );
+                    let auto_font = crate::geometry::calculate_auto_fit_font_size(
+                        lbl.font_size,
+                        &lbl.text,
+                        safe_w,
+                        safe_h,
+                        8.0,
+                    );
+                    let center_x = *x + *width / 2.0;
+                    let center_y = *y + *height / 2.0;
+                    let char_w = auto_font * 0.55;
+                    let max_line_len = lbl
+                        .text
+                        .lines()
+                        .map(|l| l.chars().count())
+                        .max()
+                        .unwrap_or(1)
+                        .max(1) as f32;
+                    let lines_cnt = lbl.text.lines().count().max(1) as f32;
+                    let text_w = max_line_len * char_w;
+                    let text_h = lines_cnt * auto_font * 1.25;
+                    let tx = (center_x - text_w / 2.0).max(*x);
+                    let ty = (center_y - text_h / 2.0).max(*y);
+
+                    draw_egui_text(
+                        &mut img,
+                        &fonts,
+                        tx,
+                        ty,
+                        &lbl.text,
+                        auto_font,
+                        [lbl.color.r, lbl.color.g, lbl.color.b, lbl.color.a],
+                        scale,
+                        *rotation,
+                    );
                 }
             }
             crate::model::DrawObject::Image {
@@ -1101,6 +1150,87 @@ pub fn export_page_to_png(
                     *rotation,
                 );
             }
+            crate::model::DrawObject::Connector { style, .. } => {
+                if let Some(poly) = crate::geometry::connector_polyline(obj, &page.objects)
+                    && poly.len() >= 2
+                {
+                    let stroke_rgba = [
+                        style.stroke_color.r,
+                        style.stroke_color.g,
+                        style.stroke_color.b,
+                        style.stroke_color.a,
+                    ];
+                    let r_stroke = (style.stroke_width * scale * 0.5).max(1.0);
+                    for i in 0..poly.len() - 1 {
+                        let p1 = eframe::egui::Pos2::new(poly[i].x * scale, poly[i].y * scale);
+                        let p2 =
+                            eframe::egui::Pos2::new(poly[i + 1].x * scale, poly[i + 1].y * scale);
+                        draw_capsule_segment(&mut img, p1, p2, r_stroke, stroke_rgba);
+                    }
+                    if style.end_marker == crate::model::MarkerKind::Arrow {
+                        let last = poly[poly.len() - 1];
+                        let prev = poly[poly.len() - 2];
+                        let dx = (last.x - prev.x) * scale;
+                        let dy = (last.y - prev.y) * scale;
+                        let len = (dx * dx + dy * dy).sqrt();
+                        if len > 0.001 {
+                            let dir_x = dx / len;
+                            let dir_y = dy / len;
+                            let perp_x = -dir_y;
+                            let perp_y = dir_x;
+                            let arrow_len = (style.stroke_width * 3.5 * scale).max(8.0 * scale);
+                            let arrow_half_w = arrow_len * 0.5;
+                            let tip = eframe::egui::Pos2::new(last.x * scale, last.y * scale);
+                            let base_center =
+                                tip - eframe::egui::Vec2::new(dir_x * arrow_len, dir_y * arrow_len);
+                            let left = base_center
+                                + eframe::egui::Vec2::new(
+                                    perp_x * arrow_half_w,
+                                    perp_y * arrow_half_w,
+                                );
+                            let right = base_center
+                                - eframe::egui::Vec2::new(
+                                    perp_x * arrow_half_w,
+                                    perp_y * arrow_half_w,
+                                );
+                            draw_capsule_segment(&mut img, tip, left, r_stroke, stroke_rgba);
+                            draw_capsule_segment(&mut img, tip, right, r_stroke, stroke_rgba);
+                            draw_capsule_segment(&mut img, left, right, r_stroke, stroke_rgba);
+                        }
+                    }
+                    if style.start_marker == crate::model::MarkerKind::Arrow {
+                        let first = poly[0];
+                        let next = poly[1];
+                        let dx = (first.x - next.x) * scale;
+                        let dy = (first.y - next.y) * scale;
+                        let len = (dx * dx + dy * dy).sqrt();
+                        if len > 0.001 {
+                            let dir_x = dx / len;
+                            let dir_y = dy / len;
+                            let perp_x = -dir_y;
+                            let perp_y = dir_x;
+                            let arrow_len = (style.stroke_width * 3.5 * scale).max(8.0 * scale);
+                            let arrow_half_w = arrow_len * 0.5;
+                            let tip = eframe::egui::Pos2::new(first.x * scale, first.y * scale);
+                            let base_center =
+                                tip - eframe::egui::Vec2::new(dir_x * arrow_len, dir_y * arrow_len);
+                            let left = base_center
+                                + eframe::egui::Vec2::new(
+                                    perp_x * arrow_half_w,
+                                    perp_y * arrow_half_w,
+                                );
+                            let right = base_center
+                                - eframe::egui::Vec2::new(
+                                    perp_x * arrow_half_w,
+                                    perp_y * arrow_half_w,
+                                );
+                            draw_capsule_segment(&mut img, tip, left, r_stroke, stroke_rgba);
+                            draw_capsule_segment(&mut img, tip, right, r_stroke, stroke_rgba);
+                            draw_capsule_segment(&mut img, left, right, r_stroke, stroke_rgba);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1147,6 +1277,425 @@ pub fn export_notebook_to_pdf(
         .save_to_file(output_path)
         .map_err(|e| format!("Gagal menyimpan PDF: {e}"))?;
     Ok(())
+}
+
+// --- Fase G12: Pure SVG Vector Export ---
+
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+pub fn export_page_to_svg(page: &Page) -> String {
+    let mut out = String::with_capacity(4096);
+    let w = page.width;
+    let h = page.height;
+
+    out.push_str(&format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {w} {h}\" width=\"{w}\" height=\"{h}\">\n<defs>\n  <filter id=\"sticky-shadow\" x=\"-5%\" y=\"-5%\" width=\"110%\" height=\"115%\">\n    <feDropShadow dx=\"1\" dy=\"3\" stdDeviation=\"3\" flood-opacity=\"0.18\"/>\n  </filter>\n</defs>\n"
+    ));
+
+    // 1. Background
+    let bg_color = format!(
+        "rgba({},{},{},{:.3})",
+        page.paper_color.r,
+        page.paper_color.g,
+        page.paper_color.b,
+        page.paper_color.a as f32 / 255.0
+    );
+    out.push_str(&format!(
+        "<rect width=\"{w}\" height=\"{h}\" fill=\"{bg_color}\"/>\n"
+    ));
+
+    // 2. Template Pattern
+    let spacing = 28.0;
+    match page.template {
+        crate::model::PageTemplate::Blank => {}
+        crate::model::PageTemplate::Ruled => {
+            let mut y = 48.0;
+            while y < h {
+                out.push_str(&format!(
+                    "<line x1=\"0\" y1=\"{y:.1}\" x2=\"{w:.1}\" y2=\"{y:.1}\" stroke=\"#E6EBF0\" stroke-width=\"0.8\"/>\n"
+                ));
+                y += spacing;
+            }
+        }
+        crate::model::PageTemplate::Grid => {
+            let mut y = spacing;
+            while y < h {
+                out.push_str(&format!(
+                    "<line x1=\"0\" y1=\"{y:.1}\" x2=\"{w:.1}\" y2=\"{y:.1}\" stroke=\"#EDF0F3\" stroke-width=\"0.8\"/>\n"
+                ));
+                y += spacing;
+            }
+            let mut x = spacing;
+            while x < w {
+                out.push_str(&format!(
+                    "<line x1=\"{x:.1}\" y1=\"0\" x2=\"{x:.1}\" y2=\"{h:.1}\" stroke=\"#EDF0F3\" stroke-width=\"0.8\"/>\n"
+                ));
+                x += spacing;
+            }
+        }
+        crate::model::PageTemplate::Dotted => {
+            let mut y = spacing;
+            while y < h {
+                let mut x = spacing;
+                while x < w {
+                    out.push_str(&format!(
+                        "<circle cx=\"{x:.1}\" cy=\"{y:.1}\" r=\"1.0\" fill=\"#CCD3DA\"/>\n"
+                    ));
+                    x += spacing;
+                }
+                y += spacing;
+            }
+        }
+        crate::model::PageTemplate::Cornell => {
+            let summary_y = h * 0.84;
+            let cue_x = w * 0.28;
+            let mut y = spacing * 1.5;
+            while y < summary_y {
+                out.push_str(&format!(
+                    "<line x1=\"0\" y1=\"{y:.1}\" x2=\"{w:.1}\" y2=\"{y:.1}\" stroke=\"#E6EBF0\" stroke-width=\"0.8\"/>\n"
+                ));
+                y += spacing;
+            }
+            out.push_str(&format!(
+                "<line x1=\"{cue_x:.1}\" y1=\"{:.1}\" x2=\"{cue_x:.1}\" y2=\"{summary_y:.1}\" stroke=\"#CCD3DA\" stroke-width=\"1.5\"/>\n",
+                h * 0.04
+            ));
+            out.push_str(&format!(
+                "<line x1=\"0\" y1=\"{summary_y:.1}\" x2=\"{w:.1}\" y2=\"{summary_y:.1}\" stroke=\"#CCD3DA\" stroke-width=\"1.5\"/>\n"
+            ));
+        }
+    }
+
+    // 3. DrawObjects
+    for obj in &page.objects {
+        match obj {
+            crate::model::DrawObject::Stroke {
+                points,
+                color,
+                width: stroke_w,
+                is_highlighter,
+                ..
+            } => {
+                if points.is_empty() {
+                    continue;
+                }
+                let c_alpha = if *is_highlighter {
+                    (color.a as f32 / 255.0) * 0.35
+                } else {
+                    color.a as f32 / 255.0
+                };
+                let stroke_color =
+                    format!("rgba({},{},{},{:.3})", color.r, color.g, color.b, c_alpha);
+                let mut d = String::new();
+                for (i, pt) in points.iter().enumerate() {
+                    if i == 0 {
+                        d.push_str(&format!("M {:.1} {:.1}", pt.x, pt.y));
+                    } else {
+                        d.push_str(&format!(" L {:.1} {:.1}", pt.x, pt.y));
+                    }
+                }
+                out.push_str(&format!(
+                    "<path d=\"{d}\" stroke=\"{stroke_color}\" stroke-width=\"{stroke_w:.1}\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"/>\n"
+                ));
+            }
+            crate::model::DrawObject::Shape {
+                shape_type,
+                x,
+                y,
+                width: sw,
+                height: sh,
+                color: stroke_color,
+                stroke_width,
+                fill,
+                corner_radius,
+                rotation,
+                label,
+                ..
+            } => {
+                let fill_str = if let Some(f) = fill {
+                    format!("rgba({},{},{},{:.3})", f.r, f.g, f.b, f.a as f32 / 255.0)
+                } else {
+                    "none".to_string()
+                };
+                let stroke_str = format!(
+                    "rgba({},{},{},{:.3})",
+                    stroke_color.r,
+                    stroke_color.g,
+                    stroke_color.b,
+                    stroke_color.a as f32 / 255.0
+                );
+                let center_x = *x + *sw / 2.0;
+                let center_y = *y + *sh / 2.0;
+                let rot_attr = if rotation.abs() > 0.001 {
+                    format!(
+                        " transform=\"rotate({:.2} {:.1} {:.1})\"",
+                        rotation.to_degrees(),
+                        center_x,
+                        center_y
+                    )
+                } else {
+                    String::new()
+                };
+
+                match shape_type {
+                    crate::model::ShapeKind::Rectangle => {
+                        out.push_str(&format!(
+                            "<rect x=\"{x:.1}\" y=\"{y:.1}\" width=\"{sw:.1}\" height=\"{sh:.1}\" rx=\"{corner_radius:.1}\" ry=\"{corner_radius:.1}\" fill=\"{fill_str}\" stroke=\"{stroke_str}\" stroke-width=\"{stroke_width:.1}\"{rot_attr}/>\n"
+                        ));
+                    }
+                    crate::model::ShapeKind::Ellipse => {
+                        let rx = (*sw / 2.0).max(0.5);
+                        let ry = (*sh / 2.0).max(0.5);
+                        out.push_str(&format!(
+                            "<ellipse cx=\"{center_x:.1}\" cy=\"{center_y:.1}\" rx=\"{rx:.1}\" ry=\"{ry:.1}\" fill=\"{fill_str}\" stroke=\"{stroke_str}\" stroke-width=\"{stroke_width:.1}\"{rot_attr}/>\n"
+                        ));
+                    }
+                    crate::model::ShapeKind::Line => {
+                        out.push_str(&format!(
+                            "<line x1=\"{x:.1}\" y1=\"{y:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"{stroke_str}\" stroke-width=\"{stroke_width:.1}\" stroke-linecap=\"round\"{rot_attr}/>\n",
+                            *x + *sw,
+                            *y + *sh
+                        ));
+                    }
+                    _ => {
+                        let verts = crate::geometry::shape_vertices(*shape_type, *x, *y, *sw, *sh);
+                        let points_str: String = verts
+                            .iter()
+                            .map(|v| format!("{:.1},{:.1}", v.x, v.y))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        out.push_str(&format!(
+                            "<polygon points=\"{points_str}\" fill=\"{fill_str}\" stroke=\"{stroke_str}\" stroke-width=\"{stroke_width:.1}\" stroke-linejoin=\"round\"{rot_attr}/>\n"
+                        ));
+                    }
+                }
+
+                // Shape Label
+                if let Some(lbl) = label
+                    && !lbl.text.trim().is_empty()
+                {
+                    let (safe_w, safe_h) = crate::geometry::calculate_shape_text_bounds(
+                        *shape_type,
+                        *sw,
+                        *sh,
+                        *corner_radius,
+                        *stroke_width,
+                    );
+                    let font_size = crate::geometry::calculate_auto_fit_font_size(
+                        lbl.font_size,
+                        &lbl.text,
+                        safe_w,
+                        safe_h,
+                        8.0,
+                    );
+                    let text_col = format!(
+                        "rgba({},{},{},{:.3})",
+                        lbl.color.r,
+                        lbl.color.g,
+                        lbl.color.b,
+                        lbl.color.a as f32 / 255.0
+                    );
+                    let lines: Vec<&str> = lbl.text.lines().collect();
+                    let line_height = font_size * 1.25;
+                    let total_text_h = lines.len() as f32 * line_height;
+                    let start_y = center_y - total_text_h / 2.0 + font_size * 0.85;
+
+                    out.push_str(&format!(
+                        "<text x=\"{center_x:.1}\" y=\"{start_y:.1}\" font-family=\"sans-serif\" font-size=\"{font_size:.1}\" fill=\"{text_col}\" text-anchor=\"middle\"{rot_attr}>"
+                    ));
+                    for (i, line) in lines.iter().enumerate() {
+                        let dy_str = if i == 0 {
+                            String::new()
+                        } else {
+                            format!(" x=\"{center_x:.1}\" dy=\"{line_height:.1}\"")
+                        };
+                        out.push_str(&format!("<tspan{dy_str}>{}</tspan>", escape_xml(line)));
+                    }
+                    out.push_str("</text>\n");
+                }
+            }
+            crate::model::DrawObject::Connector { style, .. } => {
+                if let Some(poly) = crate::geometry::connector_polyline(obj, &page.objects)
+                    && poly.len() >= 2
+                {
+                    let stroke_str = format!(
+                        "rgba({},{},{},{:.3})",
+                        style.stroke_color.r,
+                        style.stroke_color.g,
+                        style.stroke_color.b,
+                        style.stroke_color.a as f32 / 255.0
+                    );
+                    let points_str: String = poly
+                        .iter()
+                        .map(|p| format!("{:.1},{:.1}", p.x, p.y))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    out.push_str(&format!(
+                            "<polyline points=\"{points_str}\" stroke=\"{stroke_str}\" stroke-width=\"{:.1}\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"/>\n",
+                            style.stroke_width
+                        ));
+
+                    // Arrow markers
+                    if style.end_marker == crate::model::MarkerKind::Arrow {
+                        let last = poly[poly.len() - 1];
+                        let prev = poly[poly.len() - 2];
+                        let dx = last.x - prev.x;
+                        let dy = last.y - prev.y;
+                        let len = (dx * dx + dy * dy).sqrt();
+                        if len > 0.001 {
+                            let dir_x = dx / len;
+                            let dir_y = dy / len;
+                            let perp_x = -dir_y;
+                            let perp_y = dir_x;
+                            let arrow_len = (style.stroke_width * 3.5).max(9.0);
+                            let arrow_half_w = arrow_len * 0.5;
+                            let base_x = last.x - dir_x * arrow_len;
+                            let base_y = last.y - dir_y * arrow_len;
+                            let p1 = format!("{:.1},{:.1}", last.x, last.y);
+                            let p2 = format!(
+                                "{:.1},{:.1}",
+                                base_x + perp_x * arrow_half_w,
+                                base_y + perp_y * arrow_half_w
+                            );
+                            let p3 = format!(
+                                "{:.1},{:.1}",
+                                base_x - perp_x * arrow_half_w,
+                                base_y - perp_y * arrow_half_w
+                            );
+                            out.push_str(&format!(
+                                "<polygon points=\"{p1} {p2} {p3}\" fill=\"{stroke_str}\"/>\n"
+                            ));
+                        }
+                    }
+                    if style.start_marker == crate::model::MarkerKind::Arrow {
+                        let first = poly[0];
+                        let next = poly[1];
+                        let dx = first.x - next.x;
+                        let dy = first.y - next.y;
+                        let len = (dx * dx + dy * dy).sqrt();
+                        if len > 0.001 {
+                            let dir_x = dx / len;
+                            let dir_y = dy / len;
+                            let perp_x = -dir_y;
+                            let perp_y = dir_x;
+                            let arrow_len = (style.stroke_width * 3.5).max(9.0);
+                            let arrow_half_w = arrow_len * 0.5;
+                            let base_x = first.x - dir_x * arrow_len;
+                            let base_y = first.y - dir_y * arrow_len;
+                            let p1 = format!("{:.1},{:.1}", first.x, first.y);
+                            let p2 = format!(
+                                "{:.1},{:.1}",
+                                base_x + perp_x * arrow_half_w,
+                                base_y + perp_y * arrow_half_w
+                            );
+                            let p3 = format!(
+                                "{:.1},{:.1}",
+                                base_x - perp_x * arrow_half_w,
+                                base_y - perp_y * arrow_half_w
+                            );
+                            out.push_str(&format!(
+                                "<polygon points=\"{p1} {p2} {p3}\" fill=\"{stroke_str}\"/>\n"
+                            ));
+                        }
+                    }
+                }
+            }
+            crate::model::DrawObject::Text {
+                text,
+                x,
+                y,
+                font_size,
+                color,
+                rotation,
+                ..
+            } => {
+                let text_col = format!(
+                    "rgba({},{},{},{:.3})",
+                    color.r,
+                    color.g,
+                    color.b,
+                    color.a as f32 / 255.0
+                );
+                let rot_attr = if rotation.abs() > 0.001 {
+                    format!(
+                        " transform=\"rotate({:.2} {:.1} {:.1})\"",
+                        rotation.to_degrees(),
+                        x,
+                        y
+                    )
+                } else {
+                    String::new()
+                };
+                let lines: Vec<&str> = text.lines().collect();
+                let line_h = font_size * 1.25;
+                let start_y = *y + font_size * 0.85;
+                out.push_str(&format!(
+                    "<text x=\"{x:.1}\" y=\"{start_y:.1}\" font-family=\"sans-serif\" font-size=\"{font_size:.1}\" fill=\"{text_col}\"{rot_attr}>"
+                ));
+                for (i, line) in lines.iter().enumerate() {
+                    let dy_str = if i == 0 {
+                        String::new()
+                    } else {
+                        format!(" x=\"{x:.1}\" dy=\"{line_h:.1}\"")
+                    };
+                    out.push_str(&format!("<tspan{dy_str}>{}</tspan>", escape_xml(line)));
+                }
+                out.push_str("</text>\n");
+            }
+            crate::model::DrawObject::StickyNote {
+                text,
+                x,
+                y,
+                width: sw,
+                height: sh,
+                color,
+                ..
+            } => {
+                let note_col = format!(
+                    "rgba({},{},{},{:.3})",
+                    color.r,
+                    color.g,
+                    color.b,
+                    color.a as f32 / 255.0
+                );
+                out.push_str(&format!(
+                    "<rect x=\"{x:.1}\" y=\"{y:.1}\" width=\"{sw:.1}\" height=\"{sh:.1}\" rx=\"4\" ry=\"4\" fill=\"{note_col}\" filter=\"url(#sticky-shadow)\"/>\n"
+                ));
+                let lines: Vec<&str> = text.lines().collect();
+                let font_size = 13.0;
+                let line_h = 17.0;
+                let start_y = *y + 18.0;
+                let text_x = *x + 10.0;
+                out.push_str(&format!(
+                    "<text x=\"{text_x:.1}\" y=\"{start_y:.1}\" font-family=\"sans-serif\" font-size=\"{font_size:.1}\" fill=\"#2A2A2A\">"
+                ));
+                for (i, line) in lines.iter().enumerate() {
+                    let dy_str = if i == 0 {
+                        String::new()
+                    } else {
+                        format!(" x=\"{text_x:.1}\" dy=\"{line_h:.1}\"")
+                    };
+                    out.push_str(&format!("<tspan{dy_str}>{}</tspan>", escape_xml(line)));
+                }
+                out.push_str("</text>\n");
+            }
+            crate::model::DrawObject::Image { .. } => {}
+        }
+    }
+
+    out.push_str("</svg>\n");
+    out
+}
+
+pub fn export_page_to_svg_file(path: &Path, page: &Page) -> Result<(), String> {
+    let svg = export_page_to_svg(page);
+    std::fs::write(path, svg).map_err(|e| format!("Gagal menyimpan berkas SVG: {e}"))
 }
 
 pub fn save_library(library: &Library) -> Result<(), String> {
@@ -1255,6 +1804,73 @@ mod tests {
 
         let lib = migrate(raw).expect("migrate v1");
         assert_eq!(lib.schema_version, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_migrate_v1_and_v2_with_legacy_shapes_to_v3() {
+        let legacy_json = serde_json::json!({
+            "schema_version": 2,
+            "notebooks": [
+                {
+                    "id": "nb-legacy-1",
+                    "title": "Legacy Notebook",
+                    "cover_color": { "r": 25, "g": 40, "b": 70, "a": 255 },
+                    "created_at": 1700000000,
+                    "updated_at": 1700000000,
+                    "pages": [
+                        {
+                            "id": "page-1",
+                            "width": 800.0,
+                            "height": 1100.0,
+                            "template": "Blank",
+                            "paper_color": { "r": 255, "g": 255, "b": 255, "a": 255 },
+                            "bookmarked": false,
+                            "objects": [
+                                {
+                                    "type": "Shape",
+                                    "id": "legacy-shape-1",
+                                    "shape_type": "Rectangle",
+                                    "x": 50.0,
+                                    "y": 60.0,
+                                    "width": 120.0,
+                                    "height": 90.0,
+                                    "color": { "r": 0, "g": 0, "b": 0, "a": 255 },
+                                    "stroke_width": 2.0,
+                                    "fill": null
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ],
+            "folders": []
+        });
+
+        let lib = migrate(legacy_json).expect("migrate legacy shape to v3");
+        assert_eq!(lib.schema_version, 3);
+        assert_eq!(lib.notebooks.len(), 1);
+        let page = &lib.notebooks[0].pages[0];
+        assert_eq!(page.objects.len(), 1);
+
+        match &page.objects[0] {
+            crate::model::DrawObject::Shape {
+                id,
+                rotation,
+                corner_radius,
+                label,
+                locked,
+                curve_points,
+                ..
+            } => {
+                assert_eq!(id, "legacy-shape-1");
+                assert_eq!(*rotation, 0.0);
+                assert_eq!(*corner_radius, 0.0);
+                assert!(label.is_none());
+                assert!(!(*locked));
+                assert!(curve_points.is_empty());
+            }
+            _ => panic!("Expected DrawObject::Shape"),
+        }
     }
 
     #[test]
@@ -1661,5 +2277,80 @@ mod tests {
         let reloaded = load_settings_from_dir(dir);
         assert_eq!(reloaded.theme_mode, crate::model::ThemeMode::Light);
         assert_eq!(reloaded.pen_widths, vec![2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn test_export_page_to_svg_and_file() {
+        use crate::model::{ColorData, DrawObject};
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let svg_path = tmp.path().join("test_page.svg");
+
+        let mut page = Page::new(PageTemplate::Ruled);
+        page.width = 600.0;
+        page.height = 800.0;
+        let starter = crate::geometry::generate_diagram_starter(
+            crate::geometry::DiagramStarterKind::Flowchart,
+            600.0,
+            800.0,
+        );
+        page.objects.extend(starter);
+
+        // Tambah Stroke & Text
+        page.objects.push(DrawObject::Stroke {
+            id: uuid::Uuid::new_v4().to_string(),
+            points: vec![
+                crate::model::StrokePoint {
+                    x: 50.0,
+                    y: 50.0,
+                    pressure: 1.0,
+                },
+                crate::model::StrokePoint {
+                    x: 100.0,
+                    y: 60.0,
+                    pressure: 1.0,
+                },
+            ],
+            color: ColorData {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            width: 3.0,
+            is_highlighter: false,
+        });
+        page.objects.push(DrawObject::Text {
+            id: uuid::Uuid::new_v4().to_string(),
+            x: 200.0,
+            y: 40.0,
+            text: "Header Alur".to_string(),
+            font_size: 16.0,
+            color: ColorData {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            rotation: 0.0,
+        });
+
+        let svg = export_page_to_svg(&page);
+        assert!(svg.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\""));
+        assert!(svg.contains("viewBox=\"0 0 600 800\""));
+        assert!(svg.contains("<rect width=\"600\" height=\"800\""));
+        assert!(svg.contains("<line x1=\"0\"")); // Ruled pattern
+        assert!(svg.contains("<path d=\"M 50.0 50.0 L 100.0 60.0\""));
+        assert!(svg.contains("<polyline points=")); // Connectors
+        assert!(svg.contains("<polygon points=")); // Arrowheads
+        assert!(svg.contains("Mulai")); // Label flowchart
+        assert!(svg.contains("Header Alur")); // Text
+        assert!(svg.ends_with("</svg>\n"));
+
+        // File export
+        export_page_to_svg_file(&svg_path, &page).expect("export svg file");
+        assert!(svg_path.exists());
+        let read_back = std::fs::read_to_string(&svg_path).expect("read svg");
+        assert_eq!(read_back, svg);
     }
 }

@@ -6,13 +6,23 @@ use super::primitives::{
 use super::state::CanvasState;
 use super::types::{ActiveTool, EraserMode, ResizeCorner};
 use crate::geometry::{
-    combined_bounds, hit_test_object, object_bounds, object_in_lasso,
-    recognize_handwriting_from_strokes, recognize_shape, scale_object, should_reject_palm_input,
-    smooth_stroke_points, tessellate_stroke_ex, translate_object,
+    ShapeTransformBox, TransformHandleKind, calculate_auto_fit_font_size,
+    calculate_proportional_scale, calculate_shape_text_bounds, calculate_single_axis_resize,
+    change_shape_kind, combined_bounds, compute_transform_handles, connector_polyline,
+    find_alignment_guides, find_connector_snap_site, hit_test_connector_details,
+    hit_test_connector_midpoint, hit_test_connector_with_objects, hit_test_object,
+    hit_test_transform_handles, insert_control_point_at, next_shape_rect, object_bounds,
+    object_in_lasso, prune_collinear_control_points, prune_invalid_connector_control_points,
+    recognize_handwriting_from_strokes, recognize_shape, resolve_connector_endpoints, scale_object,
+    shape_connection_point, should_reject_palm_input, smooth_stroke_points, snap_point_to_grid,
+    snap_value_to_grid, tessellate_stroke_ex, translate_object,
 };
-use crate::model::{DrawObject, Page, ShapeKind, StrokePoint};
+use crate::model::{
+    ColorData, ConnectionSite, ConnectorEnd, ConnectorRoute, ConnectorStyle, DrawObject,
+    MarkerKind, Page, Point2D, ShapeKind, StrokePoint,
+};
 use eframe::egui::{
-    self, Color32, Key, PointerButton, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2,
+    self, Color32, CursorIcon, Key, PointerButton, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2,
 };
 use std::time::Instant;
 use uuid::Uuid;
@@ -117,6 +127,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 draw_non_stroke_object(
                     &painter,
                     obj,
+                    &page.objects,
                     page_to_screen,
                     state.zoom,
                     &state.texture_cache,
@@ -149,29 +160,103 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
     }
 
     // Active Selection Bounds
-    let selected_objects: Vec<&DrawObject> = page
-        .objects
-        .iter()
-        .filter(|o| state.selected_ids.contains(&o.id().to_string()))
-        .collect();
-
-    let selection_rect = combined_bounds(&selected_objects);
-    let selected_single_line: Option<(Pos2, Pos2)> = if selected_objects.len() == 1 {
-        if let DrawObject::Shape {
-            shape_type: ShapeKind::Line,
-            x,
-            y,
-            width,
-            height,
-            ..
-        } = selected_objects[0]
-        {
-            Some((Pos2::new(*x, *y), Pos2::new(*x + *width, *y + *height)))
+    let (
+        selection_rect,
+        selected_single_line,
+        selected_single_shape,
+        selected_single_connector,
+        selected_single_shape_quick_dots,
+        is_single_selected,
+        is_selection_fully_locked,
+    ) = {
+        let selected: Vec<&DrawObject> = page
+            .objects
+            .iter()
+            .filter(|o| state.selected_ids.contains(&o.id().to_string()))
+            .collect();
+        let rect = combined_bounds(&selected);
+        let single_line = if selected.len() == 1 {
+            if let DrawObject::Shape {
+                shape_type: ShapeKind::Line,
+                x,
+                y,
+                width,
+                height,
+                locked,
+                ..
+            } = selected[0]
+            {
+                if *locked {
+                    None
+                } else {
+                    Some((Pos2::new(*x, *y), Pos2::new(*x + *width, *y + *height)))
+                }
+            } else {
+                None
+            }
         } else {
             None
-        }
-    } else {
-        None
+        };
+        let single_shape = if selected.len() == 1 {
+            if let DrawObject::Shape {
+                x,
+                y,
+                width,
+                height,
+                rotation,
+                ..
+            } = selected[0]
+            {
+                Some((*x, *y, *width, *height, *rotation))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let single_connector = if selected.len() == 1 {
+            if let DrawObject::Connector { id, .. } = selected[0] {
+                Some((id.clone(), connector_polyline(selected[0], &page.objects)))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let is_selection_fully_locked =
+            !selected.is_empty() && selected.iter().all(|o| o.is_locked());
+        let quick_dots = if selected.len() == 1
+            && let DrawObject::Shape { id, locked, .. } = selected[0]
+            && !*locked
+        {
+            let shape = selected[0];
+            let sites = [
+                ConnectionSite::Top,
+                ConnectionSite::Right,
+                ConnectionSite::Bottom,
+                ConnectionSite::Left,
+            ];
+            let dots: Vec<(ConnectionSite, Pos2, Point2D)> = sites
+                .iter()
+                .map(|&site| {
+                    let (pt, dir) = shape_connection_point(shape, site, None);
+                    let dot_pt = pt + dir.to_vector() * 12.0;
+                    (site, dot_pt.to_pos2(), pt)
+                })
+                .collect();
+            Some((id.clone(), dots))
+        } else {
+            None
+        };
+        (
+            rect,
+            single_line,
+            single_shape,
+            single_connector,
+            quick_dots,
+            selected.len() == 1,
+            is_selection_fully_locked,
+        )
     };
 
     if response.drag_started_by(PointerButton::Primary)
@@ -221,38 +306,117 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 state.push_undo(&page.id, &page.objects);
                 return response;
             }
-        } else if state.current_tool == ActiveTool::Lasso
+        } else if let Some((source_id, dots)) = &selected_single_shape_quick_dots {
+            let dot_hit_dist = 14.0 / state.zoom;
+            if let Some(&(site, _, _)) = dots
+                .iter()
+                .find(|(_, dpos, _)| (page_p - *dpos).length() <= dot_hit_dist)
+            {
+                state.resize_corner = Some(ResizeCorner::QuickDiagramDot(site));
+                state.drag_start_pos = Some(page_p);
+                state.draft_connector_start = Some(ConnectorEnd::Attached {
+                    shape_id: source_id.clone(),
+                    site,
+                });
+                state.draft_connector_current = Some(Point2D::new(page_p.x, page_p.y));
+                return response;
+            }
+        }
+
+        if let Some((conn_id, Some(poly))) = &selected_single_connector {
+            let is_conn_locked = page
+                .objects
+                .iter()
+                .any(|o| o.id() == conn_id && o.is_locked());
+            if !is_conn_locked {
+                let handle_dist = 14.0 / state.zoom;
+                // 1. Cek midpoint handles untuk menambah tikungan baru (Task 8.2)
+                let start_pt = poly[0];
+                let end_pt = poly[poly.len() - 1];
+                if let Some((_seg_idx, mid_pt)) =
+                    hit_test_connector_midpoint(Point2D::new(page_p.x, page_p.y), poly, handle_dist)
+                {
+                    state.push_undo(&page.id, &page.objects);
+                    let mut new_idx = 0;
+                    for obj in &mut page.objects {
+                        if obj.id() == conn_id
+                            && let DrawObject::Connector { control_points, .. } = obj
+                        {
+                            new_idx =
+                                insert_control_point_at(control_points, start_pt, end_pt, mid_pt);
+                        }
+                    }
+                    state.resize_corner = Some(ResizeCorner::ConnectorControl(new_idx));
+                    state.drag_start_pos = Some(page_p);
+                    return response;
+                } else if let Some(target) =
+                    hit_test_connector_details(Point2D::new(page_p.x, page_p.y), poly, handle_dist)
+                {
+                    let corner = match target {
+                        crate::geometry::ConnectorHitTarget::StartHandle => {
+                            ResizeCorner::ConnectorStart
+                        }
+                        crate::geometry::ConnectorHitTarget::EndHandle => {
+                            ResizeCorner::ConnectorEnd
+                        }
+                        crate::geometry::ConnectorHitTarget::ControlPoint(idx) => {
+                            let cp_idx = if idx > 0 { idx - 1 } else { 0 };
+                            ResizeCorner::ConnectorControl(cp_idx)
+                        }
+                        crate::geometry::ConnectorHitTarget::LineSegment(_seg_idx) => {
+                            state.push_undo(&page.id, &page.objects);
+                            let mut new_idx = 0;
+                            for obj in &mut page.objects {
+                                if obj.id() == conn_id
+                                    && let DrawObject::Connector { control_points, .. } = obj
+                                {
+                                    new_idx = insert_control_point_at(
+                                        control_points,
+                                        start_pt,
+                                        end_pt,
+                                        Point2D::new(page_p.x, page_p.y),
+                                    );
+                                }
+                            }
+                            ResizeCorner::ConnectorControl(new_idx)
+                        }
+                    };
+                    state.resize_corner = Some(corner);
+                    state.drag_start_pos = Some(page_p);
+                    state.push_undo(&page.id, &page.objects);
+                    return response;
+                }
+            }
+        } else if matches!(state.current_tool, ActiveTool::Lasso | ActiveTool::Shape(_))
             && let Some(b) = selection_rect
+            && !is_selection_fully_locked
         {
             let handle_dist = 14.0 / state.zoom;
-            // Check rotation handle first (circle above selection center)
-            let rot_handle = Pos2::new(b.center().x, b.top() - 18.0 / state.zoom);
-            if (page_p - rot_handle).length() <= handle_dist {
-                state.resize_corner = Some(ResizeCorner::Rotation);
-                state.drag_start_pos = Some(page_p);
-                state.push_undo(&page.id, &page.objects);
-                return response;
-            }
-            if (page_p - b.right_bottom()).length() <= handle_dist {
-                state.resize_corner = Some(ResizeCorner::SouthEast);
-                state.drag_start_pos = Some(page_p);
-                state.push_undo(&page.id, &page.objects);
-                return response;
-            }
-            if (page_p - b.left_top()).length() <= handle_dist {
-                state.resize_corner = Some(ResizeCorner::NorthWest);
-                state.drag_start_pos = Some(page_p);
-                state.push_undo(&page.id, &page.objects);
-                return response;
-            }
-            if (page_p - Pos2::new(b.right(), b.top())).length() <= handle_dist {
-                state.resize_corner = Some(ResizeCorner::NorthEast);
-                state.drag_start_pos = Some(page_p);
-                state.push_undo(&page.id, &page.objects);
-                return response;
-            }
-            if (page_p - Pos2::new(b.left(), b.bottom())).length() <= handle_dist {
-                state.resize_corner = Some(ResizeCorner::SouthWest);
+            let (bx, by, bw, bh, brot) = if let Some(s) = selected_single_shape {
+                s
+            } else {
+                (b.min.x, b.min.y, b.width(), b.height(), 0.0)
+            };
+
+            let transform_handles =
+                compute_transform_handles(bx, by, bw, bh, brot, 20.0 / state.zoom);
+            if let Some(h_kind) = hit_test_transform_handles(
+                &transform_handles,
+                Point2D::new(page_p.x, page_p.y),
+                handle_dist,
+            ) {
+                let corner = match h_kind {
+                    TransformHandleKind::NorthWest => ResizeCorner::NorthWest,
+                    TransformHandleKind::North => ResizeCorner::North,
+                    TransformHandleKind::NorthEast => ResizeCorner::NorthEast,
+                    TransformHandleKind::East => ResizeCorner::East,
+                    TransformHandleKind::SouthEast => ResizeCorner::SouthEast,
+                    TransformHandleKind::South => ResizeCorner::South,
+                    TransformHandleKind::SouthWest => ResizeCorner::SouthWest,
+                    TransformHandleKind::West => ResizeCorner::West,
+                    TransformHandleKind::Rotation => ResizeCorner::Rotation,
+                };
+                state.resize_corner = Some(corner);
                 state.drag_start_pos = Some(page_p);
                 state.push_undo(&page.id, &page.objects);
                 return response;
@@ -281,8 +445,38 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
             }
             ActiveTool::Shape(_) => {
                 state.active_stroke_page_id = Some(page.id.clone());
-                state.draft_shape_start = Some(page_p);
-                state.draft_shape_current = Some(page_p);
+                let mut start_p = page_p;
+                if state.snap_to_grid {
+                    let (snapped, _) = snap_point_to_grid(
+                        Point2D::new(page_p.x, page_p.y),
+                        state.grid_spacing,
+                        8.0 / state.zoom,
+                    );
+                    start_p = snapped.to_pos2();
+                }
+                state.draft_shape_start = Some(start_p);
+                state.draft_shape_current = Some(start_p);
+                state.selected_ids.clear();
+            }
+            ActiveTool::Connector => {
+                state.active_stroke_page_id = Some(page.id.clone());
+                let snap = find_connector_snap_site(
+                    &page.objects,
+                    Point2D::new(page_p.x, page_p.y),
+                    24.0 / state.zoom,
+                    None,
+                );
+                let start_end = if let Some((shape_id, site, _pt)) = snap {
+                    ConnectorEnd::Attached { shape_id, site }
+                } else {
+                    ConnectorEnd::Free {
+                        x: page_p.x,
+                        y: page_p.y,
+                    }
+                };
+                state.draft_connector_start = Some(start_end);
+                state.draft_connector_current = Some(Point2D::new(page_p.x, page_p.y));
+                state.connector_snap_candidate = None;
                 state.selected_ids.clear();
             }
             ActiveTool::Eraser => {
@@ -370,10 +564,66 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         // Handle moving selection
         if state.is_dragging_selection {
             if let Some(start) = state.drag_start_pos {
-                let dx = page_p.x - start.x;
-                let dy = page_p.y - start.y;
+                let mut dx = page_p.x - start.x;
+                let mut dy = page_p.y - start.y;
+
+                // Shift-drag: Constrain ke gerakan ortogonal murni (Horizontal atau Vertikal)
+                let shift_held = ui.input(|i| i.modifiers.shift);
+                if shift_held {
+                    if dx.abs() > dy.abs() {
+                        dy = 0.0;
+                    } else {
+                        dx = 0.0;
+                    }
+                }
+
+                state.active_alignment_guides.clear();
+
+                // Evaluasi Smart Alignment Guides & Grid Snapping
+                let selected_objects: Vec<&DrawObject> = page
+                    .objects
+                    .iter()
+                    .filter(|o| state.selected_ids.contains(&o.id().to_string()) && !o.is_locked())
+                    .collect();
+
+                if let Some(moving_bounds) = combined_bounds(&selected_objects) {
+                    let tentative_rect = moving_bounds.translate(Vec2::new(dx, dy));
+
+                    if state.smart_guides {
+                        let target_rects: Vec<Rect> = page
+                            .objects
+                            .iter()
+                            .filter(|o| !state.selected_ids.contains(&o.id().to_string()))
+                            .map(object_bounds)
+                            .collect();
+
+                        let (snap_adjust, guides) =
+                            find_alignment_guides(tentative_rect, &target_rects, 8.0 / state.zoom);
+                        dx += snap_adjust.x;
+                        dy += snap_adjust.y;
+                        state.active_alignment_guides = guides;
+                    } else if state.snap_to_grid {
+                        let (snap_x, snapped_x) = snap_value_to_grid(
+                            tentative_rect.left(),
+                            state.grid_spacing,
+                            8.0 / state.zoom,
+                        );
+                        if snapped_x {
+                            dx += snap_x - tentative_rect.left();
+                        }
+                        let (snap_y, snapped_y) = snap_value_to_grid(
+                            tentative_rect.top(),
+                            state.grid_spacing,
+                            8.0 / state.zoom,
+                        );
+                        if snapped_y {
+                            dy += snap_y - tentative_rect.top();
+                        }
+                    }
+                }
+
                 for obj in &mut page.objects {
-                    if state.selected_ids.contains(&obj.id().to_string()) {
+                    if state.selected_ids.contains(&obj.id().to_string()) && !obj.is_locked() {
                         translate_object(obj, dx, dy);
                         let id = obj.id().to_string();
                         state.mesh_cache.retain(|(k, _), _| k != &id);
@@ -432,7 +682,11 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     };
                     let v_start = start - pivot;
                     let v_curr = page_p - pivot;
-                    let angle = v_curr.y.atan2(v_curr.x) - v_start.y.atan2(v_start.x);
+                    let mut angle = v_curr.y.atan2(v_curr.x) - v_start.y.atan2(v_start.x);
+                    if ui.input(|i| i.modifiers.shift) {
+                        let step = std::f32::consts::TAU / 24.0;
+                        angle = (angle / step).round() * step;
+                    }
                     if angle.abs() > 0.001 {
                         for obj in &mut page.objects {
                             if state.selected_ids.contains(&obj.id().to_string()) {
@@ -443,33 +697,248 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                         }
                         state.drag_start_pos = Some(page_p);
                     }
+                } else if matches!(
+                    corner,
+                    ResizeCorner::ConnectorStart
+                        | ResizeCorner::ConnectorEnd
+                        | ResizeCorner::ConnectorControl(_)
+                ) {
+                    let shapes_snapshot: Vec<DrawObject> = page
+                        .objects
+                        .iter()
+                        .filter(|o| matches!(o, DrawObject::Shape { .. }))
+                        .cloned()
+                        .collect();
+                    let snap = find_connector_snap_site(
+                        &shapes_snapshot,
+                        Point2D::new(page_p.x, page_p.y),
+                        24.0 / state.zoom,
+                        None,
+                    );
+                    state.connector_snap_candidate = snap.clone();
+                    for obj in &mut page.objects {
+                        if state.selected_ids.contains(&obj.id().to_string())
+                            && let DrawObject::Connector {
+                                start,
+                                end,
+                                route,
+                                control_points,
+                                ..
+                            } = obj
+                        {
+                            match corner {
+                                ResizeCorner::ConnectorStart => {
+                                    if let Some((shape_id, site, _)) = &snap {
+                                        *start = ConnectorEnd::Attached {
+                                            shape_id: shape_id.clone(),
+                                            site: *site,
+                                        };
+                                    } else {
+                                        *start = ConnectorEnd::Free {
+                                            x: page_p.x,
+                                            y: page_p.y,
+                                        };
+                                    }
+                                }
+                                ResizeCorner::ConnectorEnd => {
+                                    if let Some((shape_id, site, _)) = &snap {
+                                        *end = ConnectorEnd::Attached {
+                                            shape_id: shape_id.clone(),
+                                            site: *site,
+                                        };
+                                    } else {
+                                        *end = ConnectorEnd::Free {
+                                            x: page_p.x,
+                                            y: page_p.y,
+                                        };
+                                    }
+                                }
+                                ResizeCorner::ConnectorControl(idx) => {
+                                    let mut target_pt = Point2D::new(page_p.x, page_p.y);
+                                    if *route == ConnectorRoute::Orthogonal {
+                                        let prev = if idx == 0 {
+                                            resolve_connector_endpoints(
+                                                start,
+                                                end,
+                                                &shapes_snapshot,
+                                            )
+                                            .0
+                                            .0
+                                        } else if idx - 1 < control_points.len() {
+                                            control_points[idx - 1]
+                                        } else {
+                                            target_pt
+                                        };
+                                        let next = if idx + 1 < control_points.len() {
+                                            control_points[idx + 1]
+                                        } else {
+                                            resolve_connector_endpoints(
+                                                start,
+                                                end,
+                                                &shapes_snapshot,
+                                            )
+                                            .1
+                                            .0
+                                        };
+                                        if (target_pt.x - prev.x).abs() < 8.0 {
+                                            target_pt.x = prev.x;
+                                        } else if (target_pt.x - next.x).abs() < 8.0 {
+                                            target_pt.x = next.x;
+                                        }
+                                        if (target_pt.y - prev.y).abs() < 8.0 {
+                                            target_pt.y = prev.y;
+                                        } else if (target_pt.y - next.y).abs() < 8.0 {
+                                            target_pt.y = next.y;
+                                        }
+                                    }
+                                    if idx < control_points.len() {
+                                        control_points[idx] = target_pt;
+                                    } else {
+                                        control_points.push(target_pt);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    state.drag_start_pos = Some(page_p);
+                    ui.ctx().request_repaint();
+                } else if matches!(corner, ResizeCorner::QuickDiagramDot(_)) {
+                    state.draft_connector_current = Some(Point2D::new(page_p.x, page_p.y));
+                    let shapes_snapshot: Vec<DrawObject> = page
+                        .objects
+                        .iter()
+                        .filter(|o| matches!(o, DrawObject::Shape { .. }))
+                        .cloned()
+                        .collect();
+                    let snap = find_connector_snap_site(
+                        &shapes_snapshot,
+                        Point2D::new(page_p.x, page_p.y),
+                        24.0 / state.zoom,
+                        state.draft_connector_start.as_ref().and_then(|s| match s {
+                            ConnectorEnd::Attached { shape_id, .. } => Some(shape_id.as_str()),
+                            _ => None,
+                        }),
+                    );
+                    state.connector_snap_candidate = snap;
+                    ui.ctx().request_repaint();
+                } else if is_single_selected
+                    && let Some(obj) = page
+                        .objects
+                        .iter_mut()
+                        .find(|o| state.selected_ids.contains(&o.id().to_string()))
+                    && matches!(obj, DrawObject::Shape { .. })
+                {
+                    if let DrawObject::Shape {
+                        x,
+                        y,
+                        width,
+                        height,
+                        rotation,
+                        locked,
+                        ..
+                    } = obj
+                        && !*locked
+                    {
+                        let orig_box = ShapeTransformBox::new(*x, *y, *width, *height, *rotation);
+                        match corner {
+                            ResizeCorner::NorthWest
+                            | ResizeCorner::NorthEast
+                            | ResizeCorner::SouthEast
+                            | ResizeCorner::SouthWest => {
+                                let h_kind = match corner {
+                                    ResizeCorner::NorthWest => TransformHandleKind::NorthWest,
+                                    ResizeCorner::NorthEast => TransformHandleKind::NorthEast,
+                                    ResizeCorner::SouthEast => TransformHandleKind::SouthEast,
+                                    ResizeCorner::SouthWest => TransformHandleKind::SouthWest,
+                                    _ => TransformHandleKind::SouthEast,
+                                };
+                                let (nx, ny, nw, nh) = calculate_proportional_scale(
+                                    h_kind,
+                                    Point2D::new(page_p.x, page_p.y),
+                                    orig_box,
+                                    4.0,
+                                );
+                                *x = nx;
+                                *y = ny;
+                                *width = nw;
+                                *height = nh;
+                            }
+                            ResizeCorner::North
+                            | ResizeCorner::South
+                            | ResizeCorner::East
+                            | ResizeCorner::West => {
+                                let h_kind = match corner {
+                                    ResizeCorner::North => TransformHandleKind::North,
+                                    ResizeCorner::South => TransformHandleKind::South,
+                                    ResizeCorner::East => TransformHandleKind::East,
+                                    ResizeCorner::West => TransformHandleKind::West,
+                                    _ => TransformHandleKind::East,
+                                };
+                                let (nx, ny, nw, nh) = calculate_single_axis_resize(
+                                    h_kind,
+                                    Point2D::new(page_p.x, page_p.y),
+                                    orig_box,
+                                    4.0,
+                                );
+                                *x = nx;
+                                *y = ny;
+                                *width = nw;
+                                *height = nh;
+                            }
+                            _ => {}
+                        }
+                        let id = obj.id().to_string();
+                        state.mesh_cache.retain(|(k, _), _| k != &id);
+                    }
+                    state.drag_start_pos = Some(page_p);
                 } else {
-                    let origin = match corner {
-                        ResizeCorner::SouthEast => b.left_top(),
-                        ResizeCorner::NorthWest => b.right_bottom(),
-                        ResizeCorner::NorthEast => b.left_bottom(),
-                        ResizeCorner::SouthWest => b.right_top(),
-                        ResizeCorner::Rotation
-                        | ResizeCorner::LineStart
-                        | ResizeCorner::LineEnd => b.center(),
+                    let is_corner_handle = matches!(
+                        corner,
+                        ResizeCorner::NorthWest
+                            | ResizeCorner::NorthEast
+                            | ResizeCorner::SouthEast
+                            | ResizeCorner::SouthWest
+                    );
+
+                    let (origin, sx, sy) = match corner {
+                        ResizeCorner::SouthEast => (b.left_top(), true, true),
+                        ResizeCorner::NorthWest => (b.right_bottom(), true, true),
+                        ResizeCorner::NorthEast => (b.left_bottom(), true, true),
+                        ResizeCorner::SouthWest => (b.right_top(), true, true),
+                        ResizeCorner::East => (Pos2::new(b.left(), b.center().y), true, false),
+                        ResizeCorner::West => (Pos2::new(b.right(), b.center().y), true, false),
+                        ResizeCorner::South => (Pos2::new(b.center().x, b.top()), false, true),
+                        ResizeCorner::North => (Pos2::new(b.center().x, b.bottom()), false, true),
+                        _ => (b.center(), true, true),
                     };
+
                     let orig_w = b.width().max(1.0);
                     let orig_h = b.height().max(1.0);
-                    let mut sx = ((page_p.x - origin.x).abs() / orig_w).max(0.05);
-                    let mut sy = ((page_p.y - origin.y).abs() / orig_h).max(0.05);
-                    // Shift+drag: kunci rasio aspek untuk proportional resize
-                    if ui.input(|i| i.modifiers.shift) {
-                        let s = if (sx - 1.0).abs() > (sy - 1.0).abs() {
-                            sx
+                    let mut scale_x = if sx {
+                        ((page_p.x - origin.x).abs() / orig_w).max(0.05)
+                    } else {
+                        1.0
+                    };
+                    let mut scale_y = if sy {
+                        ((page_p.y - origin.y).abs() / orig_h).max(0.05)
+                    } else {
+                        1.0
+                    };
+
+                    if is_corner_handle || ui.input(|i| i.modifiers.shift) {
+                        let s = if (scale_x - 1.0).abs() > (scale_y - 1.0).abs() {
+                            scale_x
                         } else {
-                            sy
+                            scale_y
                         };
-                        sx = s;
-                        sy = s;
+                        scale_x = s;
+                        scale_y = s;
                     }
+
                     for obj in &mut page.objects {
                         if state.selected_ids.contains(&obj.id().to_string()) {
-                            scale_object(obj, origin, sx, sy);
+                            scale_object(obj, origin, scale_x, scale_y);
                             let id = obj.id().to_string();
                             state.mesh_cache.retain(|(k, _), _| k != &id);
                         }
@@ -482,12 +951,41 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 ActiveTool::Pen | ActiveTool::Pencil | ActiveTool::Highlighter => {
                     if state.active_stroke_page_id.as_deref() == Some(&page.id) {
                         if let Some(recognized) = &mut state.recognized_draft_shape {
-                            if recognized.kind == ShapeKind::Line {
-                                // Sama seperti tools Shape -> Line: titik awal (recognized.x, recognized.y)
-                                // menjadi pusat rotasi (pivot), dan titik akhirnya berotasi mengikuti kursor!
-                                recognized.width = page_p.x - recognized.x;
-                                recognized.height = page_p.y - recognized.y;
-                                ui.ctx().request_repaint();
+                            let shift_held = ui.input(|i| i.modifiers.shift);
+                            match recognized.kind {
+                                ShapeKind::Line => {
+                                    // Ujung bebas mengikuti kursor dengan 15-degree angle snapping
+                                    let mut dx = page_p.x - recognized.x;
+                                    let mut dy = page_p.y - recognized.y;
+                                    let angle = dy.atan2(dx);
+                                    let snap_interval = 15.0_f32.to_radians();
+                                    let snapped_angle =
+                                        (angle / snap_interval).round() * snap_interval;
+                                    let angle_diff = (angle - snapped_angle).abs();
+                                    if shift_held || angle_diff < 5.0_f32.to_radians() {
+                                        let len = (dx * dx + dy * dy).sqrt();
+                                        dx = len * snapped_angle.cos();
+                                        dy = len * snapped_angle.sin();
+                                    }
+                                    recognized.width = dx;
+                                    recognized.height = dy;
+                                    ui.ctx().request_repaint();
+                                }
+                                _ => {
+                                    // Rectangle, Ellipse, Diamond, Triangle: kursor menyesuaikan ukuran
+                                    let mut w = page_p.x - recognized.x;
+                                    let mut h = page_p.y - recognized.y;
+                                    if shift_held {
+                                        let s = w.abs().max(h.abs());
+                                        w = s * if w >= 0.0 { 1.0 } else { -1.0 };
+                                        h = s * if h >= 0.0 { 1.0 } else { -1.0 };
+                                    }
+                                    if w.abs() > 4.0 && h.abs() > 4.0 {
+                                        recognized.width = w;
+                                        recognized.height = h;
+                                    }
+                                    ui.ctx().request_repaint();
+                                }
                             }
                         } else if let Some(pts) = &mut state.draft_stroke {
                             let dt_secs = state
@@ -511,7 +1009,39 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 }
                 ActiveTool::Shape(_) => {
                     if state.active_stroke_page_id.as_deref() == Some(&page.id) {
-                        state.draft_shape_current = Some(page_p);
+                        let mut final_p = page_p;
+                        if state.snap_to_grid {
+                            let (snapped, _) = snap_point_to_grid(
+                                Point2D::new(page_p.x, page_p.y),
+                                state.grid_spacing,
+                                8.0 / state.zoom,
+                            );
+                            final_p = snapped.to_pos2();
+                        }
+                        state.draft_shape_current = Some(final_p);
+                    }
+                }
+                ActiveTool::Connector => {
+                    if state.active_stroke_page_id.as_deref() == Some(&page.id) {
+                        let exclude = match &state.draft_connector_start {
+                            Some(ConnectorEnd::Attached { shape_id, .. }) => {
+                                Some(shape_id.as_str())
+                            }
+                            _ => None,
+                        };
+                        state.connector_snap_candidate = find_connector_snap_site(
+                            &page.objects,
+                            Point2D::new(page_p.x, page_p.y),
+                            24.0 / state.zoom,
+                            exclude,
+                        );
+                        let cur_pt = state
+                            .connector_snap_candidate
+                            .as_ref()
+                            .map(|(_, _, p)| *p)
+                            .unwrap_or(Point2D::new(page_p.x, page_p.y));
+                        state.draft_connector_current = Some(cur_pt);
+                        ui.ctx().request_repaint();
                     }
                 }
                 ActiveTool::Eraser => {
@@ -548,8 +1078,9 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         }
     }
 
-    // Fase 8.1: Deteksi tahan pena (~500 ms) di akhir goresan untuk Shape Recognition
-    if state.active_stroke_page_id.as_deref() == Some(&page.id)
+    // Fase 8.1 & G4: Deteksi tahan pena (~500 ms) di akhir goresan untuk Shape Recognition
+    if state.auto_shape_enabled
+        && state.active_stroke_page_id.as_deref() == Some(&page.id)
         && matches!(
             state.current_tool,
             ActiveTool::Pen | ActiveTool::Pencil | ActiveTool::Highlighter
@@ -561,7 +1092,9 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         let elapsed = now.saturating_duration_since(last_move);
         if elapsed >= std::time::Duration::from_millis(500) {
             if let Some(recognized) = recognize_shape(pts) {
-                state.recognized_draft_shape = Some(recognized);
+                state.recognized_draft_shape = Some(recognized.clone());
+                state.snap_initial_shape = Some(recognized);
+                state.snap_flash_time = Some(Instant::now());
                 ui.ctx().request_repaint();
             } else {
                 // Jangan cek berulang kali jika goresan bukan bentuk geometri hingga bergerak lagi
@@ -574,6 +1107,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
     }
 
     if response.drag_stopped() {
+        state.active_alignment_guides.clear();
         state.eraser_undo_pushed = false;
         state.last_whole_erase_pos = None;
         if state.laser_is_drawing {
@@ -587,10 +1121,250 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         if state.is_dragging_selection {
             state.is_dragging_selection = false;
             state.drag_start_pos = None;
+            // Task 8.5: Periksa bila ada shape bergerak yang menimpa control points pada connector
+            let shapes_snapshot: Vec<DrawObject> = page
+                .objects
+                .iter()
+                .filter(|o| matches!(o, DrawObject::Shape { .. }))
+                .cloned()
+                .collect();
+            for obj in &mut page.objects {
+                prune_invalid_connector_control_points(obj, &shapes_snapshot);
+            }
             state.spatial_grid.rebuild(&page.objects);
-        } else if state.resize_corner.is_some() {
-            state.resize_corner = None;
+        } else if let Some(corner) = state.resize_corner.take() {
             state.drag_start_pos = None;
+            // Task 8.3: Jika selesai drag control point, bersihkan jika hampir segaris
+            if matches!(corner, ResizeCorner::ConnectorControl(_)) {
+                let shapes_snapshot: Vec<DrawObject> = page
+                    .objects
+                    .iter()
+                    .filter(|o| matches!(o, DrawObject::Shape { .. }))
+                    .cloned()
+                    .collect();
+                for obj in &mut page.objects {
+                    if state.selected_ids.contains(&obj.id().to_string())
+                        && let DrawObject::Connector {
+                            start,
+                            end,
+                            control_points,
+                            ..
+                        } = obj
+                    {
+                        let ((start_pt, _), (end_pt, _)) =
+                            resolve_connector_endpoints(start, end, &shapes_snapshot);
+                        prune_collinear_control_points(control_points, start_pt, end_pt, 6.0);
+                    }
+                }
+            }
+
+            // Task 9.2 & 9.3: Quick Diagramming (Ketuk titik atau seret konektor)
+            if let ResizeCorner::QuickDiagramDot(site) = corner {
+                let stop_page_p = pointer_pos
+                    .map(screen_to_page)
+                    .unwrap_or(Pos2::new(0.0, 0.0));
+                let drag_dist = state
+                    .drag_start_pos
+                    .map_or(0.0, |p| (stop_page_p - p).length());
+                if let Some(ConnectorEnd::Attached {
+                    shape_id: source_id,
+                    ..
+                }) = state.draft_connector_start.take()
+                {
+                    if drag_dist <= 6.0 {
+                        // Task 9.2: Ketuk / Klik titik -> buat bentuk baru terhubung searah titik
+                        if let Some(source_obj) =
+                            page.objects.iter().find(|o| o.id() == source_id).cloned()
+                            && let DrawObject::Shape {
+                                x: sx,
+                                y: sy,
+                                width: sw,
+                                height: sh,
+                                shape_type,
+                                color,
+                                stroke_width,
+                                fill,
+                                corner_radius,
+                                ..
+                            } = source_obj
+                        {
+                            state.push_undo(&page.id, &page.objects);
+                            let (nx, ny, nw, nh, opp_site) = next_shape_rect(
+                                (sx, sy, sw, sh),
+                                site,
+                                60.0,
+                                &page.objects,
+                                (page.width, page.height),
+                            );
+                            let new_shape_id = Uuid::new_v4().to_string();
+                            let new_shape = DrawObject::Shape {
+                                id: new_shape_id.clone(),
+                                x: nx,
+                                y: ny,
+                                width: nw,
+                                height: nh,
+                                color: color.clone(),
+                                stroke_width,
+                                fill,
+                                shape_type,
+                                rotation: 0.0,
+                                corner_radius,
+                                curve_points: Vec::new(),
+                                label: Some(crate::model::ShapeLabel {
+                                    text: String::new(),
+                                    font_size: 16.0,
+                                    color,
+                                    alignment: crate::model::TextAlign::Center,
+                                    vertical_alignment: crate::model::VerticalAlign::Middle,
+                                }),
+                                locked: false,
+                            };
+                            let new_conn = DrawObject::Connector {
+                                id: Uuid::new_v4().to_string(),
+                                start: ConnectorEnd::Attached {
+                                    shape_id: source_id,
+                                    site,
+                                },
+                                end: ConnectorEnd::Attached {
+                                    shape_id: new_shape_id.clone(),
+                                    site: opp_site,
+                                },
+                                route: ConnectorRoute::Orthogonal,
+                                control_points: Vec::new(),
+                                style: ConnectorStyle {
+                                    stroke_color: ColorData {
+                                        r: 40,
+                                        g: 45,
+                                        b: 55,
+                                        a: 255,
+                                    },
+                                    stroke_width: 2.0,
+                                    start_marker: MarkerKind::None,
+                                    end_marker: MarkerKind::Arrow,
+                                },
+                                locked: false,
+                            };
+                            page.objects.push(new_shape);
+                            page.objects.push(new_conn);
+                            state.selected_ids = vec![new_shape_id.clone()];
+                            state.editing_text_id = Some(new_shape_id);
+                            state.focus_text_edit = true;
+                        }
+                    } else if let Some((target_id, target_site, _)) =
+                        state.connector_snap_candidate.take()
+                    {
+                        // Task 9.3: Lepas pada bentuk lain -> sambungkan konektor
+                        state.push_undo(&page.id, &page.objects);
+                        let new_conn = DrawObject::Connector {
+                            id: Uuid::new_v4().to_string(),
+                            start: ConnectorEnd::Attached {
+                                shape_id: source_id,
+                                site,
+                            },
+                            end: ConnectorEnd::Attached {
+                                shape_id: target_id,
+                                site: target_site,
+                            },
+                            route: ConnectorRoute::Orthogonal,
+                            control_points: Vec::new(),
+                            style: ConnectorStyle {
+                                stroke_color: ColorData {
+                                    r: 40,
+                                    g: 45,
+                                    b: 55,
+                                    a: 255,
+                                },
+                                stroke_width: 2.0,
+                                start_marker: MarkerKind::None,
+                                end_marker: MarkerKind::Arrow,
+                            },
+                            locked: false,
+                        };
+                        page.objects.push(new_conn);
+                    } else {
+                        // Task 9.3: Lepas di ruang kosong -> buat bentuk baru di sana
+                        if let Some(source_obj) =
+                            page.objects.iter().find(|o| o.id() == source_id).cloned()
+                            && let DrawObject::Shape {
+                                width: sw,
+                                height: sh,
+                                shape_type,
+                                color,
+                                stroke_width,
+                                fill,
+                                corner_radius,
+                                ..
+                            } = source_obj
+                        {
+                            state.push_undo(&page.id, &page.objects);
+                            let margin = 16.0_f32;
+                            let nw = sw.abs();
+                            let nh = sh.abs();
+                            let nx = (stop_page_p.x - nw * 0.5)
+                                .clamp(margin, (page.width - nw - margin).max(margin));
+                            let ny = (stop_page_p.y - nh * 0.5)
+                                .clamp(margin, (page.height - nh - margin).max(margin));
+
+                            let new_shape_id = Uuid::new_v4().to_string();
+                            let new_shape = DrawObject::Shape {
+                                id: new_shape_id.clone(),
+                                x: nx,
+                                y: ny,
+                                width: nw,
+                                height: nh,
+                                color: color.clone(),
+                                stroke_width,
+                                fill,
+                                shape_type,
+                                rotation: 0.0,
+                                corner_radius,
+                                curve_points: Vec::new(),
+                                label: Some(crate::model::ShapeLabel {
+                                    text: String::new(),
+                                    font_size: 16.0,
+                                    color,
+                                    alignment: crate::model::TextAlign::Center,
+                                    vertical_alignment: crate::model::VerticalAlign::Middle,
+                                }),
+                                locked: false,
+                            };
+                            let new_conn = DrawObject::Connector {
+                                id: Uuid::new_v4().to_string(),
+                                start: ConnectorEnd::Attached {
+                                    shape_id: source_id,
+                                    site,
+                                },
+                                end: ConnectorEnd::Attached {
+                                    shape_id: new_shape_id.clone(),
+                                    site: ConnectionSite::Auto,
+                                },
+                                route: ConnectorRoute::Orthogonal,
+                                control_points: Vec::new(),
+                                style: ConnectorStyle {
+                                    stroke_color: ColorData {
+                                        r: 40,
+                                        g: 45,
+                                        b: 55,
+                                        a: 255,
+                                    },
+                                    stroke_width: 2.0,
+                                    start_marker: MarkerKind::None,
+                                    end_marker: MarkerKind::Arrow,
+                                },
+                                locked: false,
+                            };
+                            page.objects.push(new_shape);
+                            page.objects.push(new_conn);
+                            state.selected_ids = vec![new_shape_id.clone()];
+                            state.editing_text_id = Some(new_shape_id);
+                            state.focus_text_edit = true;
+                        }
+                    }
+                }
+                state.draft_connector_start = None;
+                state.draft_connector_current = None;
+                state.connector_snap_candidate = None;
+            }
             state.spatial_grid.rebuild(&page.objects);
         } else if state.active_stroke_page_id.as_deref() == Some(&page.id) {
             state.active_stroke_page_id = None;
@@ -622,10 +1396,33 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     } else {
                         state.stroke_color
                     };
-                    // Fase 8.1: Shape Recognition — jika sudah ditahan ~500ms dan dikenali sebagai Shape
+                    // Fase 8.1 & G4: Shape Recognition & Determinisme Undo
                     if let Some(recognized) = recognized_shape {
                         let new_id = Uuid::new_v4().to_string();
                         let is_line = recognized.kind == ShapeKind::Line;
+                        let corner_radius = if recognized.kind == ShapeKind::Rectangle {
+                            (recognized.width.abs().min(recognized.height.abs()) * 0.12)
+                                .clamp(4.0, 14.0)
+                        } else {
+                            0.0
+                        };
+
+                        // Fase G4.3: Simpan stroke asli ke snapshot pertama, lalu ganti dengan shape terkoreksi
+                        // Undo #1 -> kembali ke goresan asli pengguna
+                        // Undo #2 -> hapus goresan (kertas kosong)
+                        state.push_undo(&page.id, &page.objects);
+                        let orig_stroke = DrawObject::Stroke {
+                            id: Uuid::new_v4().to_string(),
+                            points: pts.clone(),
+                            color: color.into(),
+                            width: stroke_width,
+                            is_highlighter,
+                        };
+                        page.objects.push(orig_stroke);
+
+                        state.push_undo(&page.id, &page.objects);
+                        page.objects.pop();
+
                         page.objects.push(DrawObject::Shape {
                             id: new_id.clone(),
                             shape_type: recognized.kind,
@@ -636,6 +1433,11 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                             color: color.into(),
                             stroke_width,
                             fill: None,
+                            rotation: 0.0,
+                            corner_radius,
+                            label: None,
+                            locked: false,
+                            curve_points: Vec::new(),
                         });
                         if is_line {
                             state.selected_ids = vec![new_id];
@@ -662,20 +1464,96 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 state.push_undo(&page.id, &page.objects);
                 if let ActiveTool::Shape(kind) = state.current_tool {
                     let new_id = Uuid::new_v4().to_string();
+                    let w = curr.x - start.x;
+                    let h = curr.y - start.y;
+                    let corner_radius = if kind == ShapeKind::Rectangle {
+                        (w.abs().min(h.abs()) * 0.12).clamp(4.0, 14.0)
+                    } else {
+                        0.0
+                    };
                     page.objects.push(DrawObject::Shape {
                         id: new_id.clone(),
                         shape_type: kind,
                         x: start.x,
                         y: start.y,
-                        width: curr.x - start.x,
-                        height: curr.y - start.y,
+                        width: w,
+                        height: h,
                         color: state.stroke_color.into(),
                         stroke_width: state.stroke_width,
                         fill: None,
+                        rotation: 0.0,
+                        corner_radius,
+                        label: None,
+                        locked: false,
+                        curve_points: Vec::new(),
                     });
                     if kind == ShapeKind::Line {
                         state.selected_ids = vec![new_id];
                     }
+                    state.spatial_grid.rebuild(&page.objects);
+                }
+            } else if let Some(start_end) = state.draft_connector_start.take() {
+                let stop_page_p = pointer_pos
+                    .map(screen_to_page)
+                    .unwrap_or(Pos2::new(0.0, 0.0));
+                let curr_pt = state
+                    .draft_connector_current
+                    .take()
+                    .unwrap_or_else(|| Point2D::new(stop_page_p.x, stop_page_p.y));
+                let end_end =
+                    if let Some((snap_id, snap_site, _)) = state.connector_snap_candidate.take() {
+                        ConnectorEnd::Attached {
+                            shape_id: snap_id,
+                            site: snap_site,
+                        }
+                    } else {
+                        ConnectorEnd::Free {
+                            x: curr_pt.x,
+                            y: curr_pt.y,
+                        }
+                    };
+
+                let start_pos = match &start_end {
+                    ConnectorEnd::Attached { shape_id, site } => {
+                        if let Some(s) = page.objects.iter().find(|o| o.id() == shape_id) {
+                            shape_connection_point(s, *site, None).0
+                        } else {
+                            Point2D::new(stop_page_p.x, stop_page_p.y)
+                        }
+                    }
+                    ConnectorEnd::Free { x, y } => Point2D::new(*x, *y),
+                };
+
+                let end_pos = match &end_end {
+                    ConnectorEnd::Attached { shape_id, site } => {
+                        if let Some(s) = page.objects.iter().find(|o| o.id() == shape_id) {
+                            shape_connection_point(s, *site, Some(start_pos)).0
+                        } else {
+                            curr_pt
+                        }
+                    }
+                    ConnectorEnd::Free { x, y } => Point2D::new(*x, *y),
+                };
+
+                if start_pos.dist(end_pos) > 6.0 {
+                    state.push_undo(&page.id, &page.objects);
+                    let new_id = Uuid::new_v4().to_string();
+                    let new_conn = DrawObject::Connector {
+                        id: new_id.clone(),
+                        start: start_end,
+                        end: end_end,
+                        route: ConnectorRoute::Orthogonal,
+                        control_points: Vec::new(),
+                        style: ConnectorStyle {
+                            stroke_color: state.stroke_color.into(),
+                            stroke_width: state.stroke_width.clamp(1.5, 6.0),
+                            start_marker: MarkerKind::None,
+                            end_marker: MarkerKind::Arrow,
+                        },
+                        locked: false,
+                    };
+                    page.objects.push(new_conn);
+                    state.selected_ids = vec![new_id];
                     state.spatial_grid.rebuild(&page.objects);
                 }
             } else if !state.lasso_points.is_empty() {
@@ -697,6 +1575,11 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
     if state.active_stroke_page_id.as_deref() == Some(&page.id) {
         if let Some(recognized) = &state.recognized_draft_shape {
             let stroke = Stroke::new(state.stroke_width * state.zoom, state.stroke_color);
+            let corner_radius = if recognized.kind == ShapeKind::Rectangle {
+                (recognized.width.abs().min(recognized.height.abs()) * 0.12).clamp(4.0, 14.0)
+            } else {
+                0.0
+            };
             draw_shape_primitive(
                 &painter,
                 recognized.kind,
@@ -704,10 +1587,40 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 recognized.y,
                 recognized.width,
                 recognized.height,
+                0.0,
+                corner_radius,
+                &[],
                 Color32::TRANSPARENT,
                 stroke,
                 page_to_screen,
             );
+
+            // Fase G4.1: Visual feedback snap flash halus saat baru saja snap (< 220 ms)
+            if let Some(flash_t) = state.snap_flash_time {
+                let flash_elapsed = now.saturating_duration_since(flash_t).as_millis();
+                if flash_elapsed < 220 {
+                    let flash_alpha = ((220 - flash_elapsed) as f32 / 220.0 * 180.0) as u8;
+                    let flash_col = Color32::from_rgba_unmultiplied(0, 180, 255, flash_alpha);
+                    let flash_stroke =
+                        Stroke::new((state.stroke_width + 2.5) * state.zoom, flash_col);
+                    draw_shape_primitive(
+                        &painter,
+                        recognized.kind,
+                        recognized.x,
+                        recognized.y,
+                        recognized.width,
+                        recognized.height,
+                        0.0,
+                        corner_radius,
+                        &[],
+                        Color32::TRANSPARENT,
+                        flash_stroke,
+                        page_to_screen,
+                    );
+                    ui.ctx().request_repaint();
+                }
+            }
+
             if recognized.kind == ShapeKind::Line {
                 let s_start = page_to_screen(Pos2::new(recognized.x, recognized.y));
                 let s_end = page_to_screen(Pos2::new(
@@ -750,13 +1663,23 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         if let (Some(start), Some(curr)) = (state.draft_shape_start, state.draft_shape_current) {
             let stroke = Stroke::new(state.stroke_width * state.zoom, state.stroke_color);
             if let ActiveTool::Shape(kind) = state.current_tool {
+                let w = curr.x - start.x;
+                let h = curr.y - start.y;
+                let corner_radius = if kind == ShapeKind::Rectangle {
+                    (w.abs().min(h.abs()) * 0.12).clamp(4.0, 14.0)
+                } else {
+                    0.0
+                };
                 draw_shape_primitive(
                     &painter,
                     kind,
                     start.x,
                     start.y,
-                    curr.x - start.x,
-                    curr.y - start.y,
+                    w,
+                    h,
+                    0.0,
+                    corner_radius,
+                    &[],
                     Color32::TRANSPARENT,
                     stroke,
                     page_to_screen,
@@ -768,6 +1691,93 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     painter.circle(s_start, 6.5, Color32::WHITE, handle_stroke);
                     painter.circle_filled(s_start, 3.0, Color32::from_rgb(0, 114, 206));
                     painter.circle(s_end, 6.0, Color32::WHITE, handle_stroke);
+                }
+            }
+        }
+
+        // Preview Draft Connector saat ditarik (Task 7.1)
+        if let (Some(start_end), Some(curr_pt)) =
+            (&state.draft_connector_start, &state.draft_connector_current)
+        {
+            let start_pos = match start_end {
+                ConnectorEnd::Attached { shape_id, site } => {
+                    if let Some(s) = page.objects.iter().find(|o| o.id() == shape_id) {
+                        shape_connection_point(s, *site, None).0
+                    } else {
+                        *curr_pt
+                    }
+                }
+                ConnectorEnd::Free { x, y } => Point2D::new(*x, *y),
+            };
+            let path = crate::geometry::route_orthogonal(
+                start_pos,
+                crate::geometry::Direction::Right,
+                *curr_pt,
+                crate::geometry::Direction::Left,
+                16.0,
+            );
+            if path.len() >= 2 {
+                let stroke = Stroke::new(
+                    (state.stroke_width * state.zoom).max(1.5),
+                    Color32::from_rgb(0, 114, 206),
+                );
+                for i in 0..path.len() - 1 {
+                    let p1 = page_to_screen(path[i].to_pos2());
+                    let p2 = page_to_screen(path[i + 1].to_pos2());
+                    painter.line_segment([p1, p2], stroke);
+                }
+                let last = path[path.len() - 1];
+                let prev = path[path.len() - 2];
+                let dir = last - prev;
+                let arrow = crate::geometry::arrowhead_geometry(last, dir, 12.0, 8.0);
+                let p_tip = page_to_screen(arrow[0].to_pos2());
+                let p_l = page_to_screen(arrow[1].to_pos2());
+                let p_r = page_to_screen(arrow[2].to_pos2());
+                painter.add(egui::Shape::convex_polygon(
+                    vec![p_tip, p_l, p_r],
+                    Color32::from_rgb(0, 114, 206),
+                    Stroke::NONE,
+                ));
+            }
+        }
+    }
+
+    // Visual feedback titik sambung pada bentuk saat alat Connector aktif atau saat re-anchor (Task 7.1, 7.3)
+    if state.current_tool == ActiveTool::Connector
+        || state.draft_connector_start.is_some()
+        || matches!(
+            state.resize_corner,
+            Some(ResizeCorner::ConnectorStart | ResizeCorner::ConnectorEnd)
+        )
+    {
+        for obj in &page.objects {
+            if let DrawObject::Shape { locked, .. } = obj
+                && !*locked
+            {
+                for &site in &[
+                    ConnectionSite::Top,
+                    ConnectionSite::Right,
+                    ConnectionSite::Bottom,
+                    ConnectionSite::Left,
+                ] {
+                    let (anchor, _) = shape_connection_point(obj, site, None);
+                    let s_pt = page_to_screen(anchor.to_pos2());
+                    let is_candidate = state
+                        .connector_snap_candidate
+                        .as_ref()
+                        .is_some_and(|(_, _, pt)| pt.dist_sq(anchor) < 1.0);
+
+                    if is_candidate {
+                        painter.circle_filled(s_pt, 7.0, Color32::from_rgb(40, 167, 69));
+                        painter.circle_stroke(s_pt, 9.0, Stroke::new(2.0_f32, Color32::WHITE));
+                    } else {
+                        painter.circle_filled(
+                            s_pt,
+                            4.5,
+                            Color32::from_rgba_unmultiplied(0, 114, 206, 160),
+                        );
+                        painter.circle_stroke(s_pt, 4.5, Stroke::new(1.2_f32, Color32::WHITE));
+                    }
                 }
             }
         }
@@ -784,31 +1794,469 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
     }
 
     // 6. Render Selection Bounding Box & Handles (recompute after drag mutations)
-    let updated_selected_objects: Vec<&DrawObject> = page
-        .objects
-        .iter()
-        .filter(|o| state.selected_ids.contains(&o.id().to_string()))
-        .collect();
-    let updated_selection_rect = combined_bounds(&updated_selected_objects);
-    let updated_single_line: Option<(Pos2, Pos2)> = if updated_selected_objects.len() == 1 {
-        if let DrawObject::Shape {
-            shape_type: ShapeKind::Line,
-            x,
-            y,
-            width,
-            height,
-            ..
-        } = updated_selected_objects[0]
-        {
-            Some((Pos2::new(*x, *y), Pos2::new(*x + *width, *y + *height)))
+    let (
+        updated_selection_rect,
+        updated_single_line,
+        updated_single_shape,
+        updated_single_connector,
+        any_locked,
+        all_locked,
+        has_shapes_selected,
+        updated_single_shape_quick_dots,
+    ) = {
+        let selected: Vec<&DrawObject> = page
+            .objects
+            .iter()
+            .filter(|o| state.selected_ids.contains(&o.id().to_string()))
+            .collect();
+        let rect = combined_bounds(&selected);
+        let single_line = if selected.len() == 1 {
+            if let DrawObject::Shape {
+                shape_type: ShapeKind::Line,
+                x,
+                y,
+                width,
+                height,
+                ..
+            } = selected[0]
+            {
+                Some((Pos2::new(*x, *y), Pos2::new(*x + *width, *y + *height)))
+            } else {
+                None
+            }
         } else {
             None
-        }
-    } else {
-        None
+        };
+        let single_shape = if selected.len() == 1 {
+            if let DrawObject::Shape {
+                x,
+                y,
+                width,
+                height,
+                rotation,
+                ..
+            } = selected[0]
+            {
+                Some((*x, *y, *width, *height, *rotation))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let single_connector = if selected.len() == 1 {
+            if let DrawObject::Connector { id, .. } = selected[0] {
+                Some((id.clone(), connector_polyline(selected[0], &page.objects)))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let any_l = selected.iter().any(|o| o.is_locked());
+        let all_l = !selected.is_empty() && selected.iter().all(|o| o.is_locked());
+        let has_shapes = selected
+            .iter()
+            .any(|o| matches!(o, DrawObject::Shape { .. }));
+        let quick_dots = if selected.len() == 1
+            && let DrawObject::Shape { id, locked, .. } = selected[0]
+            && !*locked
+        {
+            let shape = selected[0];
+            let sites = [
+                ConnectionSite::Top,
+                ConnectionSite::Right,
+                ConnectionSite::Bottom,
+                ConnectionSite::Left,
+            ];
+            let dots: Vec<(ConnectionSite, Pos2, Point2D)> = sites
+                .iter()
+                .map(|&site| {
+                    let (pt, dir) = shape_connection_point(shape, site, None);
+                    let dot_pt = pt + dir.to_vector() * 12.0;
+                    (site, dot_pt.to_pos2(), pt)
+                })
+                .collect();
+            Some((id.clone(), dots))
+        } else {
+            None
+        };
+        (
+            rect,
+            single_line,
+            single_shape,
+            single_connector,
+            any_l,
+            all_l,
+            has_shapes,
+            quick_dots,
+        )
     };
 
-    if let Some((line_start, line_end)) = updated_single_line {
+    if let Some((conn_id, Some(poly))) = &updated_single_connector {
+        if poly.len() >= 2 {
+            let is_conn_locked = page
+                .objects
+                .iter()
+                .any(|o| o.id() == conn_id && o.is_locked());
+            let handle_stroke = if is_conn_locked {
+                Stroke::new(1.8_f32, Color32::from_rgb(140, 150, 165))
+            } else {
+                Stroke::new(2.0_f32, Color32::from_rgb(0, 114, 206))
+            };
+
+            // Garis highlight seleksi
+            let highlight_col = if is_conn_locked {
+                Color32::from_rgba_unmultiplied(140, 150, 165, 50)
+            } else {
+                Color32::from_rgba_unmultiplied(0, 114, 206, 50)
+            };
+            for i in 0..poly.len() - 1 {
+                let p1 = page_to_screen(poly[i].to_pos2());
+                let p2 = page_to_screen(poly[i + 1].to_pos2());
+                painter.line_segment([p1, p2], Stroke::new(6.0_f32, highlight_col));
+            }
+
+            if is_conn_locked {
+                // Task 10.1: Visual lock badge 🔒 di titik tengah connector
+                let mid_idx = poly.len() / 2;
+                let lock_pos = page_to_screen(poly[mid_idx].to_pos2());
+                painter.circle(
+                    lock_pos,
+                    11.0,
+                    Color32::WHITE,
+                    Stroke::new(1.8_f32, Color32::from_rgb(140, 150, 165)),
+                );
+                painter.text(
+                    lock_pos,
+                    egui::Align2::CENTER_CENTER,
+                    "🔒",
+                    egui::FontId::proportional(12.0),
+                    Color32::from_rgb(90, 100, 115),
+                );
+                if let Some(pos) = pointer_pos
+                    && (pos - lock_pos).length() <= 14.0
+                {
+                    egui::show_tooltip(
+                        ui.ctx(),
+                        ui.layer_id(),
+                        egui::Id::new("locked_conn_badge_tooltip"),
+                        |ui| {
+                            ui.label("🔒 Terkunci: Connector tidak dapat digeser atau diubah titik jalurnya. Tekan Ctrl+L atau gunakan toolbar untuk membuka kunci.");
+                        },
+                    );
+                }
+            } else {
+                // Start Handle di poly[0]
+                let s_start = page_to_screen(poly[0].to_pos2());
+                painter.circle(s_start, 6.5, Color32::WHITE, handle_stroke);
+                painter.circle_filled(s_start, 3.0, Color32::from_rgb(0, 114, 206));
+
+                // End Handle di poly[last]
+                let s_end = page_to_screen(poly[poly.len() - 1].to_pos2());
+                painter.circle(s_end, 6.5, Color32::WHITE, handle_stroke);
+                painter.circle_filled(s_end, 3.0, Color32::from_rgb(0, 114, 206));
+
+                // Waypoint handles di titik tikungan (Task 8.1, 8.3)
+                for pt in poly.iter().take(poly.len() - 1).skip(1) {
+                    let s_cp = page_to_screen(pt.to_pos2());
+                    painter.circle(s_cp, 5.0, Color32::WHITE, handle_stroke);
+                    painter.circle_filled(s_cp, 2.5, Color32::from_rgb(0, 114, 206));
+                }
+
+                // Midpoint ghost handles untuk menambah tikungan baru (Task 8.1, 8.2)
+                let mid_stroke =
+                    Stroke::new(1.2_f32, Color32::from_rgba_unmultiplied(0, 114, 206, 180));
+                for i in 0..poly.len() - 1 {
+                    let mid = (poly[i] + poly[i + 1]) * 0.5;
+                    let s_mid = page_to_screen(mid.to_pos2());
+                    painter.circle(s_mid, 4.0, Color32::WHITE, mid_stroke);
+                    painter.circle_filled(s_mid, 1.5, Color32::from_rgb(0, 114, 206));
+                }
+
+                // Task 8.1 & 8.3: Tooltip & kursor pada handle connector saat hover
+                if let Some(pos) = pointer_pos
+                    && state.resize_corner.is_none()
+                    && !state.is_dragging_selection
+                {
+                    let page_p = screen_to_page(pos);
+                    let handle_dist = 14.0 / state.zoom;
+                    if let Some((_seg_idx, _mid_pt)) = hit_test_connector_midpoint(
+                        Point2D::new(page_p.x, page_p.y),
+                        poly,
+                        handle_dist,
+                    ) {
+                        ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+                        egui::show_tooltip(
+                            ui.ctx(),
+                            ui.layer_id(),
+                            egui::Id::new("connector_mid_tooltip"),
+                            |ui| {
+                                ui.label(
+                                    "Tambah Tikungan: Seret untuk menambah titik kontrol baru.",
+                                );
+                            },
+                        );
+                    } else if let Some(target) = hit_test_connector_details(
+                        Point2D::new(page_p.x, page_p.y),
+                        poly,
+                        handle_dist,
+                    ) {
+                        match target {
+                            crate::geometry::ConnectorHitTarget::StartHandle
+                            | crate::geometry::ConnectorHitTarget::EndHandle => {
+                                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                                egui::show_tooltip(
+                                    ui.ctx(),
+                                    ui.layer_id(),
+                                    egui::Id::new("connector_end_tooltip"),
+                                    |ui| {
+                                        ui.label("Ujung Connector: Seret untuk menyambung atau melepas titik sambung.");
+                                    },
+                                );
+                            }
+                            crate::geometry::ConnectorHitTarget::ControlPoint(_) => {
+                                ui.ctx().set_cursor_icon(CursorIcon::Grab);
+                                egui::show_tooltip(
+                                    ui.ctx(),
+                                    ui.layer_id(),
+                                    egui::Id::new("connector_cp_tooltip"),
+                                    |ui| {
+                                        ui.label("Titik Kontrol: Seret untuk memindahkan jalur. Klik ganda untuk menghapus.");
+                                    },
+                                );
+                            }
+                            crate::geometry::ConnectorHitTarget::LineSegment(_) => {
+                                ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Floating Toolbar untuk Connector Terpilih (Task 7.6)
+            let s_mid = page_to_screen(poly[poly.len() / 2].to_pos2());
+            let panel_pos = Pos2::new(
+                s_mid.x.clamp(rect.left() + 250.0, rect.right() - 250.0),
+                (s_mid.y - 28.0).max(rect.top() + 8.0),
+            );
+
+            let area_id = egui::Id::new("floating_connector_toolbar");
+            egui::Area::new(area_id)
+                .fixed_pos(panel_pos)
+                .pivot(egui::Align2::CENTER_BOTTOM)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style())
+                        .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 250))
+                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(205, 218, 232)))
+                        .corner_radius(8.0)
+                        .shadow(egui::epaint::Shadow {
+                            offset: [0, 3],
+                            blur: 10,
+                            spread: 0,
+                            color: Color32::from_rgba_unmultiplied(0, 0, 0, 35),
+                        })
+                        .inner_margin(egui::Margin::symmetric(8, 4))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
+
+                                // 1. Jenis Rute Jalur
+                                ui.menu_button("🔀 Rute", |ui| {
+                                    if ui.button("📏 Garis Lurus").clicked() {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if obj.id() == conn_id
+                                                && let DrawObject::Connector {
+                                                    route,
+                                                    control_points,
+                                                    ..
+                                                } = obj
+                                            {
+                                                *route = ConnectorRoute::Straight;
+                                                control_points.clear();
+                                            }
+                                        }
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("🔀 Siku (Orthogonal)").clicked() {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if obj.id() == conn_id
+                                                && let DrawObject::Connector {
+                                                    route,
+                                                    control_points,
+                                                    ..
+                                                } = obj
+                                            {
+                                                *route = ConnectorRoute::Orthogonal;
+                                                control_points.clear();
+                                            }
+                                        }
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("〰 Lengkung (Curved)").clicked() {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if obj.id() == conn_id
+                                                && let DrawObject::Connector {
+                                                    route,
+                                                    control_points,
+                                                    ..
+                                                } = obj
+                                            {
+                                                *route = ConnectorRoute::Curved;
+                                                control_points.clear();
+                                            }
+                                        }
+                                        ui.close_menu();
+                                    }
+                                });
+
+                                ui.separator();
+
+                                // 2. Marker Ujung Panah
+                                ui.menu_button("➔ Ujung", |ui| {
+                                    if ui.button("Tanpa Panah").clicked() {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if obj.id() == conn_id
+                                                && let DrawObject::Connector { style, .. } = obj
+                                            {
+                                                style.start_marker = MarkerKind::None;
+                                                style.end_marker = MarkerKind::None;
+                                            }
+                                        }
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("➔ Panah di Akhir").clicked() {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if obj.id() == conn_id
+                                                && let DrawObject::Connector { style, .. } = obj
+                                            {
+                                                style.start_marker = MarkerKind::None;
+                                                style.end_marker = MarkerKind::Arrow;
+                                            }
+                                        }
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("↔ Panah di Kedua Ujung").clicked() {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if obj.id() == conn_id
+                                                && let DrawObject::Connector { style, .. } = obj
+                                            {
+                                                style.start_marker = MarkerKind::Arrow;
+                                                style.end_marker = MarkerKind::Arrow;
+                                            }
+                                        }
+                                        ui.close_menu();
+                                    }
+                                });
+
+                                ui.separator();
+
+                                // 3. Warna Garis
+                                for &col in &[
+                                    Color32::from_rgb(33, 37, 41),
+                                    Color32::from_rgb(0, 114, 206),
+                                    Color32::from_rgb(220, 53, 69),
+                                    Color32::from_rgb(40, 167, 69),
+                                    Color32::from_rgb(253, 126, 20),
+                                    Color32::from_rgb(111, 66, 193),
+                                ] {
+                                    let (c_rect, resp) = ui.allocate_exact_size(
+                                        Vec2::splat(16.0),
+                                        egui::Sense::click(),
+                                    );
+                                    ui.painter().circle_filled(c_rect.center(), 7.0, col);
+                                    if resp.hovered() {
+                                        ui.painter().circle_stroke(
+                                            c_rect.center(),
+                                            8.0,
+                                            Stroke::new(1.5_f32, Color32::from_rgb(0, 114, 206)),
+                                        );
+                                    }
+                                    if resp.clicked() {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if obj.id() == conn_id
+                                                && let DrawObject::Connector { style, .. } = obj
+                                            {
+                                                style.stroke_color = col.into();
+                                            }
+                                        }
+                                    }
+                                }
+
+                                ui.separator();
+
+                                // 4. Ketebalan Garis
+                                for &w in &[1.5_f32, 2.5_f32, 4.0_f32, 6.0_f32] {
+                                    let label = format!("{:.0}px", w);
+                                    if ui.selectable_label(false, label).clicked() {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if obj.id() == conn_id
+                                                && let DrawObject::Connector { style, .. } = obj
+                                            {
+                                                style.stroke_width = w;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                ui.separator();
+
+                                // 5. Kunci / Buka Kunci
+                                let is_locked = page.objects.iter().any(|o| {
+                                    o.id() == conn_id
+                                        && matches!(o, DrawObject::Connector { locked: true, .. })
+                                });
+                                let lock_text = if is_locked { "🔓 Buka" } else { "🔒 Kunci" };
+                                if ui
+                                    .button(lock_text)
+                                    .on_hover_text("Kunci atau Buka Kunci Connector")
+                                    .clicked()
+                                {
+                                    state.push_undo(&page.id, &page.objects);
+                                    for obj in &mut page.objects {
+                                        if obj.id() == conn_id
+                                            && let DrawObject::Connector { locked, .. } = obj
+                                        {
+                                            *locked = !is_locked;
+                                        }
+                                    }
+                                }
+
+                                // Task 8.3 & 8.6: Reset Jalur Otomatis bila memiliki titik kontrol manual
+                                let has_cps = page.objects.iter().any(|o| {
+                                    o.id() == conn_id
+                                        && matches!(o, DrawObject::Connector { control_points, .. } if !control_points.is_empty())
+                                });
+                                if has_cps {
+                                    ui.separator();
+                                    if ui
+                                        .button("↺ Jalur Otomatis")
+                                        .on_hover_text("Hapus semua tikungan manual dan kembali ke rute otomatis")
+                                        .clicked()
+                                    {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if obj.id() == conn_id
+                                                && let DrawObject::Connector { control_points, .. } = obj
+                                            {
+                                                control_points.clear();
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                        });
+                });
+        }
+    } else if let Some((line_start, line_end)) = updated_single_line {
         let s_start = page_to_screen(line_start);
         let s_end = page_to_screen(line_end);
         let handle_stroke = Stroke::new(2.0_f32, Color32::from_rgb(0, 114, 206));
@@ -844,43 +2292,564 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
             Color32::from_rgb(0, 114, 206),
         );
     } else if let Some(b) = updated_selection_rect {
-        let screen_box = Rect::from_min_max(page_to_screen(b.min), page_to_screen(b.max));
-        painter.rect_stroke(
-            screen_box.expand(4.0),
-            2.0,
-            Stroke::new(1.5_f32, Color32::from_rgb(0, 114, 206)),
-            egui::StrokeKind::Outside,
-        );
+        let (bx, by, bw, bh, brot) = if let Some(s) = updated_single_shape {
+            s
+        } else {
+            (b.min.x, b.min.y, b.width(), b.height(), 0.0)
+        };
 
-        // Corner handles
-        let handle_stroke = Stroke::new(2.0_f32, Color32::from_rgb(0, 114, 206));
-        painter.circle(
-            screen_box.right_bottom(),
-            6.0,
-            Color32::WHITE,
-            handle_stroke,
-        );
-        painter.circle(screen_box.left_top(), 6.0, Color32::WHITE, handle_stroke);
-        painter.circle(screen_box.right_top(), 6.0, Color32::WHITE, handle_stroke);
-        painter.circle(screen_box.left_bottom(), 6.0, Color32::WHITE, handle_stroke);
+        let transform_handles = compute_transform_handles(bx, by, bw, bh, brot, 20.0 / state.zoom);
 
-        // Rotation stem & handle (with ⟳ symbol)
-        let stem_top = Pos2::new(screen_box.center().x, screen_box.top() - 18.0);
-        painter.line_segment(
-            [
-                Pos2::new(screen_box.center().x, screen_box.top() - 4.0),
-                stem_top,
-            ],
-            handle_stroke,
-        );
-        painter.circle(stem_top, 7.0, Color32::WHITE, handle_stroke);
-        painter.text(
-            stem_top,
-            egui::Align2::CENTER_CENTER,
-            "⟳",
-            egui::FontId::proportional(11.0),
-            Color32::from_rgb(0, 114, 206),
-        );
+        let mut handle_screen_map = std::collections::HashMap::new();
+        for h in &transform_handles {
+            handle_screen_map.insert(h.kind, page_to_screen(h.pos.to_pos2()));
+        }
+
+        let s_nw = handle_screen_map[&TransformHandleKind::NorthWest];
+        let s_ne = handle_screen_map[&TransformHandleKind::NorthEast];
+        let s_se = handle_screen_map[&TransformHandleKind::SouthEast];
+        let s_sw = handle_screen_map[&TransformHandleKind::SouthWest];
+        let s_n = handle_screen_map[&TransformHandleKind::North];
+        let s_e = handle_screen_map[&TransformHandleKind::East];
+        let s_s = handle_screen_map[&TransformHandleKind::South];
+        let s_w = handle_screen_map[&TransformHandleKind::West];
+        let s_rot = handle_screen_map[&TransformHandleKind::Rotation];
+
+        // Garis batas seleksi berotasi
+        let box_stroke = if all_locked {
+            Stroke::new(1.5_f32, Color32::from_rgb(140, 150, 165))
+        } else {
+            Stroke::new(1.5_f32, Color32::from_rgb(0, 114, 206))
+        };
+        painter.line_segment([s_nw, s_ne], box_stroke);
+        painter.line_segment([s_ne, s_se], box_stroke);
+        painter.line_segment([s_se, s_sw], box_stroke);
+        painter.line_segment([s_sw, s_nw], box_stroke);
+
+        if all_locked {
+            // Task 10.1: Visual lock badge 🔒 di sudut kanan-atas bounding box
+            let lock_badge_pos = s_ne + Vec2::new(10.0, -10.0);
+            painter.circle(
+                lock_badge_pos,
+                11.0,
+                Color32::WHITE,
+                Stroke::new(1.8_f32, Color32::from_rgb(140, 150, 165)),
+            );
+            painter.text(
+                lock_badge_pos,
+                egui::Align2::CENTER_CENTER,
+                "🔒",
+                egui::FontId::proportional(12.0),
+                Color32::from_rgb(90, 100, 115),
+            );
+            if let Some(pos) = pointer_pos
+                && (pos - lock_badge_pos).length() <= 14.0
+            {
+                egui::show_tooltip(
+                    ui.ctx(),
+                    ui.layer_id(),
+                    egui::Id::new("locked_shape_badge_tooltip"),
+                    |ui| {
+                        ui.label("🔒 Terkunci: Bentuk tidak dapat digeser atau diubah ukurannya. Tekan Ctrl+L atau gunakan toolbar untuk membuka kunci.");
+                    },
+                );
+            }
+        } else {
+            // 4 Corner handles: Lingkaran putih di tiap sudut untuk scale proporsional (A1)
+            let corner_stroke = Stroke::new(2.0_f32, Color32::from_rgb(0, 114, 206));
+            for pos in [s_nw, s_ne, s_se, s_sw] {
+                painter.circle(pos, 6.0, Color32::WHITE, corner_stroke);
+            }
+
+            // 4 Edge handles: Persegi biru di tengah sisi untuk resize satu sumbu (A1)
+            for pos in [s_n, s_e, s_s, s_w] {
+                let edge_rect = Rect::from_center_size(pos, Vec2::splat(9.0));
+                painter.rect_filled(edge_rect, 1.5, Color32::from_rgb(0, 114, 206));
+                painter.rect_stroke(
+                    edge_rect,
+                    1.5,
+                    Stroke::new(1.0_f32, Color32::WHITE),
+                    egui::StrokeKind::Outside,
+                );
+            }
+
+            // 1 Rotation handle: Lingkaran putih menonjol di atas dengan ⟳
+            painter.line_segment([s_n, s_rot], corner_stroke);
+            painter.circle(s_rot, 7.5, Color32::WHITE, corner_stroke);
+            painter.text(
+                s_rot,
+                egui::Align2::CENTER_CENTER,
+                "⟳",
+                egui::FontId::proportional(11.0),
+                Color32::from_rgb(0, 114, 206),
+            );
+        }
+
+        // Kursor dinamis saat hover di atas handle seleksi
+        if let Some(pos) = pointer_pos {
+            let page_p = screen_to_page(pos);
+            if let Some(corner) = state.resize_corner {
+                match corner {
+                    ResizeCorner::Rotation => ui.ctx().set_cursor_icon(CursorIcon::Crosshair),
+                    ResizeCorner::North | ResizeCorner::South => {
+                        ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical)
+                    }
+                    ResizeCorner::East | ResizeCorner::West => {
+                        ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal)
+                    }
+                    ResizeCorner::NorthWest | ResizeCorner::SouthEast => {
+                        ui.ctx().set_cursor_icon(CursorIcon::ResizeNwSe)
+                    }
+                    ResizeCorner::NorthEast | ResizeCorner::SouthWest => {
+                        ui.ctx().set_cursor_icon(CursorIcon::ResizeNeSw)
+                    }
+                    ResizeCorner::LineStart | ResizeCorner::LineEnd => {
+                        ui.ctx().set_cursor_icon(CursorIcon::Crosshair)
+                    }
+                    ResizeCorner::ConnectorStart | ResizeCorner::ConnectorEnd => {
+                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand)
+                    }
+                    ResizeCorner::ConnectorControl(_) => ui.ctx().set_cursor_icon(CursorIcon::Grab),
+                    ResizeCorner::QuickDiagramDot(_) => {
+                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand)
+                    }
+                }
+            } else if state.is_dragging_selection {
+                ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+            } else if matches!(state.current_tool, ActiveTool::Lasso | ActiveTool::Shape(_))
+                && !all_locked
+            {
+                let handle_dist = 14.0 / state.zoom;
+                if let Some(h_kind) = hit_test_transform_handles(
+                    &transform_handles,
+                    Point2D::new(page_p.x, page_p.y),
+                    handle_dist,
+                ) {
+                    match h_kind {
+                        TransformHandleKind::Rotation => {
+                            ui.ctx().set_cursor_icon(CursorIcon::Crosshair)
+                        }
+                        TransformHandleKind::North | TransformHandleKind::South => {
+                            ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical)
+                        }
+                        TransformHandleKind::East | TransformHandleKind::West => {
+                            ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal)
+                        }
+                        TransformHandleKind::NorthWest | TransformHandleKind::SouthEast => {
+                            ui.ctx().set_cursor_icon(CursorIcon::ResizeNwSe)
+                        }
+                        TransformHandleKind::NorthEast | TransformHandleKind::SouthWest => {
+                            ui.ctx().set_cursor_icon(CursorIcon::ResizeNeSw)
+                        }
+                    }
+                } else if b.contains(page_p) {
+                    ui.ctx().set_cursor_icon(CursorIcon::Grab);
+                }
+            }
+        }
+
+        // 3.4 & A7: Locked Badge bila ada objek terkunci yang sedang dipilih
+        if any_locked {
+            let lock_pos = s_ne + Vec2::new(12.0, -12.0);
+            painter.circle_filled(lock_pos, 9.0, Color32::from_rgb(220, 53, 69));
+            painter.text(
+                lock_pos,
+                egui::Align2::CENTER_CENTER,
+                "🔒",
+                egui::FontId::proportional(11.0),
+                Color32::WHITE,
+            );
+        }
+
+        // Task 5.2 & 5.5: Panel Gaya Melayang di dekat seleksi
+        if has_shapes_selected {
+            let min_screen_y = s_nw.y.min(s_ne.y).min(s_rot.y);
+            let center_screen_x = (s_nw.x + s_se.x) * 0.5;
+            let panel_pos = Pos2::new(
+                center_screen_x.clamp(rect.left() + 250.0, rect.right() - 250.0),
+                (min_screen_y - 24.0).max(rect.top() + 8.0),
+            );
+
+            let area_id = egui::Id::new("floating_shape_toolbar");
+            egui::Area::new(area_id)
+                .fixed_pos(panel_pos)
+                .pivot(egui::Align2::CENTER_BOTTOM)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style())
+                        .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 250))
+                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(205, 218, 232)))
+                        .corner_radius(8.0)
+                        .shadow(egui::epaint::Shadow {
+                            offset: [0, 3],
+                            blur: 10,
+                            spread: 0,
+                            color: Color32::from_rgba_unmultiplied(0, 0, 0, 35),
+                        })
+                        .inner_margin(egui::Margin::symmetric(8, 4))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
+
+                                // 1. Tombol Cepat "Rounded Rectangle" (Task 5.5) & Jenis Bentuk (5.3)
+                                ui.menu_button("📐 Bentuk", |ui| {
+                                    if ui.button("▢ Rounded Rect").clicked() {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if state.selected_ids.contains(&obj.id().to_string())
+                                                && let DrawObject::Shape { width, height, .. } = obj
+                                            {
+                                                let cr =
+                                                    ((*width).min(*height) * 0.12).clamp(4.0, 14.0);
+                                                change_shape_kind(obj, ShapeKind::Rectangle, cr);
+                                            }
+                                        }
+                                        state.mesh_cache.clear();
+                                        state.spatial_grid.rebuild(&page.objects);
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("▭ Persegi Panjang").clicked() {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if state.selected_ids.contains(&obj.id().to_string()) {
+                                                change_shape_kind(obj, ShapeKind::Rectangle, 0.0);
+                                            }
+                                        }
+                                        state.mesh_cache.clear();
+                                        state.spatial_grid.rebuild(&page.objects);
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("⬭ Elips").clicked() {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if state.selected_ids.contains(&obj.id().to_string()) {
+                                                change_shape_kind(obj, ShapeKind::Ellipse, 0.0);
+                                            }
+                                        }
+                                        state.mesh_cache.clear();
+                                        state.spatial_grid.rebuild(&page.objects);
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("◇ Belah Ketupat").clicked() {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if state.selected_ids.contains(&obj.id().to_string()) {
+                                                change_shape_kind(obj, ShapeKind::Diamond, 0.0);
+                                            }
+                                        }
+                                        state.mesh_cache.clear();
+                                        state.spatial_grid.rebuild(&page.objects);
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("△ Segitiga").clicked() {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if state.selected_ids.contains(&obj.id().to_string()) {
+                                                change_shape_kind(obj, ShapeKind::Triangle, 0.0);
+                                            }
+                                        }
+                                        state.mesh_cache.clear();
+                                        state.spatial_grid.rebuild(&page.objects);
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("▱ Jajar Genjang").clicked() {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if state.selected_ids.contains(&obj.id().to_string()) {
+                                                change_shape_kind(
+                                                    obj,
+                                                    ShapeKind::Parallelogram,
+                                                    0.0,
+                                                );
+                                            }
+                                        }
+                                        state.mesh_cache.clear();
+                                        state.spatial_grid.rebuild(&page.objects);
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("╱ Garis").clicked() {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if state.selected_ids.contains(&obj.id().to_string()) {
+                                                change_shape_kind(obj, ShapeKind::Line, 0.0);
+                                            }
+                                        }
+                                        state.mesh_cache.clear();
+                                        state.spatial_grid.rebuild(&page.objects);
+                                        ui.close_menu();
+                                    }
+                                });
+
+                                // Tombol Cepat "Rounded Rectangle" (Task 5.5)
+                                if ui
+                                    .button("▢ Bulat")
+                                    .on_hover_text("Beralih ke Rounded Rectangle")
+                                    .clicked()
+                                {
+                                    state.push_undo(&page.id, &page.objects);
+                                    for obj in &mut page.objects {
+                                        if state.selected_ids.contains(&obj.id().to_string())
+                                            && let DrawObject::Shape { width, height, .. } = obj
+                                        {
+                                            let cr =
+                                                ((*width).min(*height) * 0.12).clamp(4.0, 14.0);
+                                            change_shape_kind(obj, ShapeKind::Rectangle, cr);
+                                        }
+                                    }
+                                    state.mesh_cache.clear();
+                                    state.spatial_grid.rebuild(&page.objects);
+                                }
+
+                                ui.separator();
+
+                                // 2. Warna Garis
+                                for &col in &[
+                                    Color32::from_rgb(33, 37, 41),   // Hitam
+                                    Color32::from_rgb(0, 114, 206),  // Biru
+                                    Color32::from_rgb(220, 53, 69),  // Merah
+                                    Color32::from_rgb(40, 167, 69),  // Hijau
+                                    Color32::from_rgb(253, 126, 20), // Oranye
+                                    Color32::from_rgb(111, 66, 193), // Ungu
+                                ] {
+                                    let (c_rect, resp) = ui.allocate_exact_size(
+                                        Vec2::splat(16.0),
+                                        egui::Sense::click(),
+                                    );
+                                    ui.painter().circle_filled(c_rect.center(), 7.0, col);
+                                    if resp.hovered() {
+                                        ui.painter().circle_stroke(
+                                            c_rect.center(),
+                                            8.0,
+                                            Stroke::new(1.5_f32, Color32::from_rgb(0, 114, 206)),
+                                        );
+                                    }
+                                    if resp.clicked() {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if state.selected_ids.contains(&obj.id().to_string())
+                                                && let DrawObject::Shape { color, .. } = obj
+                                            {
+                                                *color = col.into();
+                                            }
+                                        }
+                                        state.mesh_cache.clear();
+                                    }
+                                }
+
+                                ui.separator();
+
+                                // 3. Ketebalan Garis
+                                for &w in &[1.5_f32, 2.5_f32, 4.0_f32, 6.0_f32] {
+                                    let label = format!("{:.0}px", w);
+                                    if ui.selectable_label(false, label).clicked() {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if state.selected_ids.contains(&obj.id().to_string())
+                                                && let DrawObject::Shape { stroke_width, .. } = obj
+                                            {
+                                                *stroke_width = w;
+                                            }
+                                        }
+                                        state.mesh_cache.clear();
+                                    }
+                                }
+
+                                ui.separator();
+
+                                // 4. Warna Isi
+                                if ui
+                                    .button("⊘ Isi")
+                                    .on_hover_text("Tanpa Isi (Transparan)")
+                                    .clicked()
+                                {
+                                    state.push_undo(&page.id, &page.objects);
+                                    for obj in &mut page.objects {
+                                        if state.selected_ids.contains(&obj.id().to_string())
+                                            && let DrawObject::Shape { fill, .. } = obj
+                                        {
+                                            *fill = None;
+                                        }
+                                    }
+                                    state.mesh_cache.clear();
+                                }
+
+                                for &(f_col, tooltip) in &[
+                                    (
+                                        Color32::from_rgba_unmultiplied(0, 114, 206, 45),
+                                        "Biru Lembut",
+                                    ),
+                                    (
+                                        Color32::from_rgba_unmultiplied(255, 220, 50, 55),
+                                        "Kuning Lembut",
+                                    ),
+                                    (
+                                        Color32::from_rgba_unmultiplied(40, 167, 69, 45),
+                                        "Hijau Lembut",
+                                    ),
+                                    (
+                                        Color32::from_rgba_unmultiplied(220, 53, 69, 45),
+                                        "Merah Lembut",
+                                    ),
+                                    (
+                                        Color32::from_rgba_unmultiplied(240, 243, 246, 220),
+                                        "Putih Kartu",
+                                    ),
+                                ] {
+                                    let (f_rect, resp) = ui.allocate_exact_size(
+                                        Vec2::splat(16.0),
+                                        egui::Sense::click(),
+                                    );
+                                    ui.painter().rect_filled(f_rect, 2.0, f_col);
+                                    ui.painter().rect_stroke(
+                                        f_rect,
+                                        2.0,
+                                        Stroke::new(1.0_f32, Color32::from_rgb(180, 195, 210)),
+                                        egui::StrokeKind::Outside,
+                                    );
+                                    let resp = resp.on_hover_text(tooltip);
+                                    if resp.hovered() {
+                                        ui.painter().rect_stroke(
+                                            f_rect,
+                                            2.0,
+                                            Stroke::new(1.5_f32, Color32::from_rgb(0, 114, 206)),
+                                            egui::StrokeKind::Outside,
+                                        );
+                                    }
+                                    if resp.clicked() {
+                                        state.push_undo(&page.id, &page.objects);
+                                        for obj in &mut page.objects {
+                                            if state.selected_ids.contains(&obj.id().to_string())
+                                                && let DrawObject::Shape { fill, .. } = obj
+                                            {
+                                                *fill = Some(f_col.into());
+                                            }
+                                        }
+                                        state.mesh_cache.clear();
+                                    }
+                                }
+
+                                ui.separator();
+
+                                // Tombol Tambah/Edit Teks di dalam Bentuk (Task 6.1)
+                                if ui
+                                    .button("✍ Teks")
+                                    .on_hover_text("Tulis atau Sunting Teks di dalam Bentuk")
+                                    .clicked()
+                                    && let Some(id) = state.selected_ids.first().cloned()
+                                    && let Some(obj) =
+                                        page.objects.iter_mut().find(|o| o.id() == id)
+                                    && !obj.is_locked()
+                                {
+                                    if let DrawObject::Shape { label, color, .. } = obj
+                                        && label.is_none()
+                                    {
+                                        *label = Some(crate::model::ShapeLabel {
+                                            text: String::new(),
+                                            font_size: 16.0,
+                                            color: color.clone(),
+                                            alignment: crate::model::TextAlign::Center,
+                                            vertical_alignment: crate::model::VerticalAlign::Middle,
+                                        });
+                                    }
+                                    state.push_undo(&page.id, &page.objects);
+                                    state.editing_text_id = Some(id);
+                                    state.focus_text_edit = true;
+                                }
+
+                                ui.separator();
+
+                                // 5. Kunci / Buka Kunci (Lock / Unlock)
+                                let lock_text = if all_locked {
+                                    "🔓 Buka"
+                                } else {
+                                    "🔒 Kunci"
+                                };
+                                if ui
+                                    .button(lock_text)
+                                    .on_hover_text("Kunci atau Buka Kunci Bentuk")
+                                    .clicked()
+                                {
+                                    state.push_undo(&page.id, &page.objects);
+                                    let new_state = !all_locked;
+                                    for obj in &mut page.objects {
+                                        if state.selected_ids.contains(&obj.id().to_string())
+                                            && let DrawObject::Shape { locked, .. } = obj
+                                        {
+                                            *locked = new_state;
+                                        }
+                                    }
+                                }
+                            });
+                        });
+                });
+        }
+
+        // Task 9.1 & A8: Visual feedback 4 titik tepi (Quick Diagramming edge dots)
+        if let Some((_source_id, dots)) = &updated_single_shape_quick_dots {
+            let dot_stroke = Stroke::new(1.8_f32, Color32::from_rgb(0, 114, 206));
+            let hover_p = pointer_pos.map(screen_to_page);
+            for &(site, dpos, _) in dots {
+                let s_dot = page_to_screen(dpos);
+                let is_hovered = hover_p.is_some_and(|p| (p - dpos).length() <= 14.0 / state.zoom);
+
+                if is_hovered {
+                    painter.circle(
+                        s_dot,
+                        10.0,
+                        Color32::from_rgba_unmultiplied(0, 114, 206, 40),
+                        Stroke::NONE,
+                    );
+                    painter.circle(
+                        s_dot,
+                        8.5,
+                        Color32::from_rgb(230, 242, 251),
+                        Stroke::new(2.2_f32, Color32::from_rgb(0, 114, 206)),
+                    );
+                    painter.text(
+                        s_dot,
+                        egui::Align2::CENTER_CENTER,
+                        "+",
+                        egui::FontId::proportional(12.0),
+                        Color32::from_rgb(0, 114, 206),
+                    );
+                    egui::show_tooltip(
+                        ui.ctx(),
+                        ui.layer_id(),
+                        egui::Id::new(format!("quick_diagram_tooltip_{:?}", site)),
+                        |ui| {
+                            ui.label("Quick Diagramming: Ketuk untuk membuat bentuk terhubung. Seret untuk menarik konektor.");
+                        },
+                    );
+                } else {
+                    painter.circle(s_dot, 7.0, Color32::WHITE, dot_stroke);
+                    painter.circle_filled(s_dot, 2.5, Color32::from_rgb(0, 114, 206));
+                }
+            }
+        }
+    }
+
+    // Fase G11: Render Smart Alignment Guides (Garis Panduan Magnetik Berwarna Magenta)
+    if !state.active_alignment_guides.is_empty() {
+        let guide_stroke = Stroke::new(1.3_f32, Color32::from_rgb(235, 0, 140));
+        for guide in &state.active_alignment_guides {
+            match guide.orientation {
+                crate::geometry::GuideOrientation::Horizontal => {
+                    let y = guide.position;
+                    let p1 = page_to_screen(Pos2::new(guide.min_span, y));
+                    let p2 = page_to_screen(Pos2::new(guide.max_span, y));
+                    painter.line_segment([p1, p2], guide_stroke);
+                    painter.circle_filled(p1, 2.5, Color32::from_rgb(235, 0, 140));
+                    painter.circle_filled(p2, 2.5, Color32::from_rgb(235, 0, 140));
+                }
+                crate::geometry::GuideOrientation::Vertical => {
+                    let x = guide.position;
+                    let p1 = page_to_screen(Pos2::new(x, guide.min_span));
+                    let p2 = page_to_screen(Pos2::new(x, guide.max_span));
+                    painter.line_segment([p1, p2], guide_stroke);
+                    painter.circle_filled(p1, 2.5, Color32::from_rgb(235, 0, 140));
+                    painter.circle_filled(p2, 2.5, Color32::from_rgb(235, 0, 140));
+                }
+            }
+        }
     }
 
     // 7. Render Glowing Laser Trail (Multi-stroke Neon Laser Sesuai Gambar Referensi)
@@ -972,16 +2941,149 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         );
     }
 
-    // Double-click pada objek Teks atau StickyNote untuk menyunting isinya secara langsung
+    // Task 9.6: Quick Diagramming via Keyboard (Tab: Right / Child, Enter: Bottom / Sibling)
+    if state.editing_text_id.is_none()
+        && let Some((source_id, _)) = &updated_single_shape_quick_dots
+    {
+        let tab_pressed = ui.input(|i| i.key_pressed(Key::Tab));
+        let enter_pressed = ui.input(|i| i.key_pressed(Key::Enter));
+        if tab_pressed || enter_pressed {
+            let target_site = if tab_pressed {
+                ConnectionSite::Right
+            } else {
+                ConnectionSite::Bottom
+            };
+            if let Some(source_obj) = page.objects.iter().find(|o| o.id() == source_id).cloned()
+                && let DrawObject::Shape {
+                    x: sx,
+                    y: sy,
+                    width: sw,
+                    height: sh,
+                    shape_type,
+                    color,
+                    stroke_width,
+                    fill,
+                    corner_radius,
+                    ..
+                } = source_obj
+            {
+                state.push_undo(&page.id, &page.objects);
+                let (nx, ny, nw, nh, opp_site) = next_shape_rect(
+                    (sx, sy, sw, sh),
+                    target_site,
+                    60.0,
+                    &page.objects,
+                    (page.width, page.height),
+                );
+                let new_shape_id = Uuid::new_v4().to_string();
+                let new_shape = DrawObject::Shape {
+                    id: new_shape_id.clone(),
+                    x: nx,
+                    y: ny,
+                    width: nw,
+                    height: nh,
+                    color: color.clone(),
+                    stroke_width,
+                    fill,
+                    shape_type,
+                    rotation: 0.0,
+                    corner_radius,
+                    curve_points: Vec::new(),
+                    label: Some(crate::model::ShapeLabel {
+                        text: String::new(),
+                        font_size: 16.0,
+                        color,
+                        alignment: crate::model::TextAlign::Center,
+                        vertical_alignment: crate::model::VerticalAlign::Middle,
+                    }),
+                    locked: false,
+                };
+                let new_conn = DrawObject::Connector {
+                    id: Uuid::new_v4().to_string(),
+                    start: ConnectorEnd::Attached {
+                        shape_id: source_id.clone(),
+                        site: target_site,
+                    },
+                    end: ConnectorEnd::Attached {
+                        shape_id: new_shape_id.clone(),
+                        site: opp_site,
+                    },
+                    route: ConnectorRoute::Orthogonal,
+                    control_points: Vec::new(),
+                    style: ConnectorStyle {
+                        stroke_color: ColorData {
+                            r: 40,
+                            g: 45,
+                            b: 55,
+                            a: 255,
+                        },
+                        stroke_width: 2.0,
+                        start_marker: MarkerKind::None,
+                        end_marker: MarkerKind::Arrow,
+                    },
+                    locked: false,
+                };
+                page.objects.push(new_shape);
+                page.objects.push(new_conn);
+                state.selected_ids = vec![new_shape_id.clone()];
+                state.editing_text_id = Some(new_shape_id);
+                state.focus_text_edit = true;
+                state.spatial_grid.rebuild(&page.objects);
+                ui.ctx().request_repaint();
+            }
+        }
+    }
+
+    // Double-click pada control point connector untuk menghapus titik kontrol (Task 8.3)
+    if response.double_clicked()
+        && let Some(pos) = pointer_pos
+        && let Some((conn_id, Some(poly))) = &updated_single_connector
+    {
+        let page_p = screen_to_page(pos);
+        let handle_dist = 14.0 / state.zoom;
+        if let Some(crate::geometry::ConnectorHitTarget::ControlPoint(idx)) =
+            hit_test_connector_details(Point2D::new(page_p.x, page_p.y), poly, handle_dist)
+        {
+            state.push_undo(&page.id, &page.objects);
+            for obj in &mut page.objects {
+                if obj.id() == conn_id
+                    && let DrawObject::Connector { control_points, .. } = obj
+                {
+                    if idx > 0 && idx <= control_points.len() {
+                        control_points.remove(idx - 1);
+                    } else if !control_points.is_empty() {
+                        control_points.pop();
+                    }
+                }
+            }
+            ui.ctx().request_repaint();
+        }
+    }
+
+    // Double-click pada objek Teks, StickyNote, atau Shape untuk menyunting isinya secara langsung (Task 6.1)
     if response.double_clicked()
         && let Some(pos) = pointer_pos
     {
         let page_p = screen_to_page(pos);
-        if let Some(obj) = page.objects.iter().rev().find(|obj| {
-            matches!(obj, DrawObject::Text { .. } | DrawObject::StickyNote { .. })
-                && hit_test_object(obj, page_p, 8.0 / state.zoom)
-        }) {
+        if let Some(obj) = page.objects.iter_mut().rev().find(|obj| {
+            matches!(
+                obj,
+                DrawObject::Text { .. } | DrawObject::StickyNote { .. } | DrawObject::Shape { .. }
+            ) && hit_test_object(obj, page_p, 8.0 / state.zoom)
+        }) && !obj.is_locked()
+        {
             let id = obj.id().to_string();
+            if let DrawObject::Shape { label, color, .. } = obj
+                && label.is_none()
+            {
+                *label = Some(crate::model::ShapeLabel {
+                    text: String::new(),
+                    font_size: 16.0,
+                    color: color.clone(),
+                    alignment: crate::model::TextAlign::Center,
+                    vertical_alignment: crate::model::VerticalAlign::Middle,
+                });
+            }
             state.push_undo(&page.id, &page.objects);
             state.selected_ids = vec![id.clone()];
             state.editing_text_id = Some(id);
@@ -1067,12 +3169,22 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
             }
             state.eraser_undo_pushed = false;
             state.last_whole_erase_pos = None;
-        } else if state.current_tool == ActiveTool::Lasso {
-            let hit = page
-                .objects
-                .iter()
-                .rev()
-                .find(|obj| hit_test_object(obj, page_p, 8.0 / state.zoom));
+        } else if matches!(
+            state.current_tool,
+            ActiveTool::Lasso | ActiveTool::Shape(_) | ActiveTool::Connector
+        ) {
+            let hit = page.objects.iter().rev().find(|obj| {
+                if let DrawObject::Connector { .. } = obj {
+                    hit_test_connector_with_objects(
+                        obj,
+                        Point2D::new(page_p.x, page_p.y),
+                        8.0 / state.zoom,
+                        &page.objects,
+                    )
+                } else {
+                    hit_test_object(obj, page_p, 8.0 / state.zoom)
+                }
+            });
             if let Some(obj) = hit {
                 let id = obj.id().to_string();
                 if shift_held {
@@ -1091,7 +3203,60 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         }
     }
 
-    // 9. Inline Text / StickyNote Editor langsung di atas kanvas halaman
+    // Escape key: membatalkan seleksi saat tidak sedang menyunting teks (Task 5.4)
+    if ui.input(|i| i.key_pressed(Key::Escape)) && state.editing_text_id.is_none() {
+        state.selected_ids.clear();
+    }
+
+    // Shortcut Ctrl+L: Lock / Unlock selected shape(s) & connector(s) (Fase G10)
+    if state.editing_text_id.is_none()
+        && ui.input(|i| i.modifiers.command && i.key_pressed(Key::L))
+        && state.toggle_lock_selected(page)
+    {
+        ui.ctx().request_repaint();
+    }
+
+    // Enter / F2 key: buka inline editor jika satu bentuk/teks/sticky terpilih dan tidak terkunci (Task 6.1)
+    if state.editing_text_id.is_none()
+        && state.selected_ids.len() == 1
+        && ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::F2))
+    {
+        let sel_id = state.selected_ids[0].clone();
+        let can_edit = page.objects.iter().any(|o| {
+            if o.id() == sel_id {
+                match o {
+                    DrawObject::Shape { locked, .. } => !locked,
+                    DrawObject::Text { .. } | DrawObject::StickyNote { .. } => true,
+                    _ => false,
+                }
+            } else {
+                false
+            }
+        });
+        if can_edit {
+            for obj in &mut page.objects {
+                if obj.id() == sel_id {
+                    if let DrawObject::Shape { label, color, .. } = obj
+                        && label.is_none()
+                    {
+                        *label = Some(crate::model::ShapeLabel {
+                            text: String::new(),
+                            font_size: 16.0,
+                            color: color.clone(),
+                            alignment: crate::model::TextAlign::Center,
+                            vertical_alignment: crate::model::VerticalAlign::Middle,
+                        });
+                    }
+                    break;
+                }
+            }
+            state.push_undo(&page.id, &page.objects);
+            state.editing_text_id = Some(sel_id);
+            state.focus_text_edit = true;
+        }
+    }
+
+    // 9. Inline Text / StickyNote / Shape Text Editor langsung di atas kanvas halaman
     if let Some(edit_id) = state.editing_text_id.clone() {
         let mut close_editor = ui.input(|i| i.key_pressed(Key::Escape));
         if let Some(obj) = page.objects.iter_mut().find(|o| o.id() == edit_id) {
@@ -1182,6 +3347,91 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                         close_editor = true;
                     }
                 }
+                DrawObject::Shape {
+                    shape_type,
+                    x,
+                    y,
+                    width,
+                    height,
+                    stroke_width,
+                    corner_radius,
+                    label,
+                    locked,
+                    ..
+                } => {
+                    if *locked {
+                        close_editor = true;
+                    } else {
+                        if label.is_none() {
+                            *label = Some(crate::model::ShapeLabel {
+                                text: String::new(),
+                                font_size: 16.0,
+                                color: crate::model::ColorData {
+                                    r: 35,
+                                    g: 35,
+                                    b: 35,
+                                    a: 255,
+                                },
+                                alignment: crate::model::TextAlign::Center,
+                                vertical_alignment: crate::model::VerticalAlign::Middle,
+                            });
+                        }
+                        if let Some(lbl) = label.as_mut() {
+                            let (safe_w, safe_h) = calculate_shape_text_bounds(
+                                *shape_type,
+                                *width,
+                                *height,
+                                *corner_radius,
+                                *stroke_width,
+                            );
+                            let auto_font = calculate_auto_fit_font_size(
+                                lbl.font_size,
+                                &lbl.text,
+                                safe_w,
+                                safe_h,
+                                8.0,
+                            );
+                            let scaled_font = (auto_font * state.zoom).clamp(10.0, 72.0);
+
+                            let center_page = Pos2::new(*x + *width / 2.0, *y + *height / 2.0);
+                            let center_screen = page_to_screen(center_page);
+                            let screen_w = (safe_w * state.zoom).max(60.0);
+                            let screen_h = (safe_h * state.zoom).max(28.0);
+                            let edit_rect = Rect::from_center_size(
+                                center_screen,
+                                Vec2::new(screen_w, screen_h),
+                            );
+
+                            painter.rect_filled(
+                                edit_rect.expand(4.0),
+                                4.0,
+                                Color32::from_rgba_unmultiplied(255, 255, 255, 215),
+                            );
+                            painter.rect_stroke(
+                                edit_rect.expand(4.0),
+                                4.0,
+                                Stroke::new(1.8_f32, Color32::from_rgb(0, 114, 206)),
+                                egui::StrokeKind::Outside,
+                            );
+
+                            let te_id = egui::Id::new(("canvas_inline_shape_text", &edit_id));
+                            let te = egui::TextEdit::multiline(&mut lbl.text)
+                                .id(te_id)
+                                .font(egui::FontId::proportional(scaled_font))
+                                .text_color(lbl.color.to_color32())
+                                .hint_text("Teks label...")
+                                .frame(false)
+                                .desired_width(screen_w);
+                            let te_resp = ui.put(edit_rect, te);
+                            if state.focus_text_edit {
+                                te_resp.request_focus();
+                                state.focus_text_edit = false;
+                            } else if te_resp.lost_focus() {
+                                close_editor = true;
+                            }
+                        }
+                    }
+                }
                 _ => {
                     close_editor = true;
                 }
@@ -1191,6 +3441,14 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
             state.editing_text_id = None;
             page.objects
                 .retain(|o| !matches!(o, DrawObject::Text { text, .. } if text.trim().is_empty()));
+            for obj in &mut page.objects {
+                if let DrawObject::Shape { label, .. } = obj
+                    && let Some(lbl) = label
+                    && lbl.text.trim().is_empty()
+                {
+                    *label = None;
+                }
+            }
             state.clean_redundant_top_undo(&page.id, &page.objects);
             state.spatial_grid.rebuild(&page.objects);
         }
@@ -1233,6 +3491,17 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
             }
             if ui.button("🗑 Hapus (Del)").clicked() {
                 state.delete_selected(page);
+                ui.close_menu();
+            }
+            ui.separator();
+            let is_locked = state.is_selected_locked(page);
+            let lock_label = if is_locked {
+                "🔓 Buka Kunci (Ctrl+L)"
+            } else {
+                "🔒 Kunci Objek (Ctrl+L)"
+            };
+            if ui.button(lock_label).clicked() {
+                state.toggle_lock_selected(page);
                 ui.close_menu();
             }
             ui.separator();

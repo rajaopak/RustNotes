@@ -30,6 +30,9 @@ pub struct CanvasState {
     pub draft_shape_current: Option<Pos2>,
     pub last_stroke_move_time: Option<Instant>,
     pub recognized_draft_shape: Option<crate::geometry::RecognizedShape>,
+    pub snap_initial_shape: Option<crate::geometry::RecognizedShape>,
+    pub snap_flash_time: Option<Instant>,
+    pub auto_shape_enabled: bool,
 
     // Lasso selection
     pub lasso_points: Vec<Pos2>,
@@ -78,6 +81,18 @@ pub struct CanvasState {
     pub focus_text_edit: bool,
     #[allow(dead_code)]
     pub text_buffer: String,
+
+    // Fase G7: Connector interactive creation & snapping state
+    pub draft_connector_start: Option<crate::model::ConnectorEnd>,
+    pub draft_connector_current: Option<crate::model::Point2D>,
+    pub connector_snap_candidate:
+        Option<(String, crate::model::ConnectionSite, crate::model::Point2D)>,
+
+    // Fase G11: Grid & Ruler Snapping, Smart Alignment Guides
+    pub snap_to_grid: bool,
+    pub smart_guides: bool,
+    pub grid_spacing: f32,
+    pub active_alignment_guides: Vec<crate::geometry::AlignmentGuide>,
 }
 
 impl Default for CanvasState {
@@ -99,6 +114,9 @@ impl Default for CanvasState {
             draft_shape_current: None,
             last_stroke_move_time: None,
             recognized_draft_shape: None,
+            snap_initial_shape: None,
+            snap_flash_time: None,
+            auto_shape_enabled: true,
             lasso_points: Vec::new(),
             selected_ids: Vec::new(),
             is_dragging_selection: false,
@@ -128,6 +146,13 @@ impl Default for CanvasState {
             editing_text_id: None,
             focus_text_edit: false,
             text_buffer: String::new(),
+            draft_connector_start: None,
+            draft_connector_current: None,
+            connector_snap_candidate: None,
+            snap_to_grid: false,
+            smart_guides: true,
+            grid_spacing: 30.0,
+            active_alignment_guides: Vec::new(),
         }
     }
 }
@@ -179,13 +204,24 @@ impl CanvasState {
         if self.selected_ids.is_empty() {
             return;
         }
+        let ids_to_delete: Vec<String> = page
+            .objects
+            .iter()
+            .filter(|o| self.selected_ids.contains(&o.id().to_string()) && !o.is_locked())
+            .map(|o| o.id().to_string())
+            .collect();
+        if ids_to_delete.is_empty() {
+            return;
+        }
         self.push_undo(&page.id, &page.objects);
-        for id in &self.selected_ids {
+        // Lepaskan connector yang terikat pada bentuk yang akan dihapus (Asumsi A5 / Task 7.5)
+        crate::geometry::detach_connectors_from_shapes(&mut page.objects, &ids_to_delete);
+        for id in &ids_to_delete {
             self.mesh_cache.retain(|(k, _), _| k != id);
         }
         page.objects
-            .retain(|o| !self.selected_ids.contains(&o.id().to_string()));
-        self.selected_ids.clear();
+            .retain(|o| !ids_to_delete.contains(&o.id().to_string()));
+        self.selected_ids.retain(|id| !ids_to_delete.contains(id));
         self.spatial_grid.rebuild(&page.objects);
     }
 
@@ -196,22 +232,31 @@ impl CanvasState {
         self.push_undo(&page.id, &page.objects);
         let mut new_ids = Vec::new();
         let mut duplicated = Vec::new();
+        let mut id_map = std::collections::HashMap::new();
+
         for obj in &page.objects {
             if self.selected_ids.contains(&obj.id().to_string()) {
                 let mut clone = obj.clone();
+                let old_id = obj.id().to_string();
                 let new_id = Uuid::new_v4().to_string();
+                id_map.insert(old_id, new_id.clone());
                 crate::geometry::translate_object(&mut clone, 20.0, 20.0);
                 match &mut clone {
                     DrawObject::Stroke { id, .. }
                     | DrawObject::Shape { id, .. }
                     | DrawObject::Text { id, .. }
                     | DrawObject::StickyNote { id, .. }
-                    | DrawObject::Image { id, .. } => *id = new_id.clone(),
+                    | DrawObject::Image { id, .. }
+                    | DrawObject::Connector { id, .. } => *id = new_id.clone(),
                 }
                 new_ids.push(new_id);
                 duplicated.push(clone);
             }
         }
+
+        // Remap connector endpoints (Task 7.5)
+        crate::geometry::remap_connector_endpoints_on_copy(&mut duplicated, &id_map, &page.objects);
+
         page.objects.extend(duplicated);
         self.selected_ids = new_ids;
         self.spatial_grid.rebuild(&page.objects);
@@ -224,6 +269,7 @@ impl CanvasState {
         self.push_undo(&page.id, &page.objects);
         let mut new_ids = Vec::new();
         let mut pasted = self.object_clipboard.clone();
+        let mut id_map = std::collections::HashMap::new();
 
         let offset = if let Some(target) = target_pos {
             let b = combined_bounds(&pasted.iter().collect::<Vec<_>>()).unwrap_or(Rect::NOTHING);
@@ -233,17 +279,27 @@ impl CanvasState {
         };
 
         for obj in &mut pasted {
+            let old_id = obj.id().to_string();
             let new_id = Uuid::new_v4().to_string();
+            id_map.insert(old_id, new_id.clone());
             crate::geometry::translate_object(obj, offset.x, offset.y);
             match obj {
                 DrawObject::Stroke { id, .. }
                 | DrawObject::Shape { id, .. }
                 | DrawObject::Text { id, .. }
                 | DrawObject::StickyNote { id, .. }
-                | DrawObject::Image { id, .. } => *id = new_id.clone(),
+                | DrawObject::Image { id, .. }
+                | DrawObject::Connector { id, .. } => *id = new_id.clone(),
             }
             new_ids.push(new_id);
         }
+
+        // Remap connector endpoints (Task 7.5)
+        crate::geometry::remap_connector_endpoints_on_copy(
+            &mut pasted,
+            &id_map,
+            &self.object_clipboard,
+        );
 
         page.objects.extend(pasted);
         self.selected_ids = new_ids;
@@ -277,6 +333,7 @@ impl CanvasState {
 
                 for &idx in &candidate_indices {
                     if idx < page.objects.len()
+                        && !page.objects[idx].is_locked()
                         && let Some(dist) = distance_to_object(&page.objects[idx], page_p)
                         && dist <= precision_tol
                     {
@@ -299,6 +356,10 @@ impl CanvasState {
                         self.eraser_undo_pushed = true;
                     }
                     let rem_id = page.objects[target_idx].id().to_string();
+                    crate::geometry::detach_connectors_from_shapes(
+                        &mut page.objects,
+                        std::slice::from_ref(&rem_id),
+                    );
                     self.mesh_cache.retain(|(k, _), _| k != &rem_id);
                     page.objects.remove(target_idx);
                     self.spatial_grid.rebuild(&page.objects);
@@ -325,7 +386,7 @@ impl CanvasState {
                             }
                         }
                         other => {
-                            if hit_test_object(other, page_p, radius) {
+                            if !other.is_locked() && hit_test_object(other, page_p, radius) {
                                 modifications.insert(idx, None);
                             }
                         }
@@ -341,11 +402,15 @@ impl CanvasState {
                     self.eraser_undo_pushed = true;
                 }
 
+                let mut deleted_shape_ids = Vec::new();
                 let mut new_objects = Vec::with_capacity(page.objects.len() + modifications.len());
                 for (idx, obj) in page.objects.drain(..).enumerate() {
                     if let Some(mod_entry) = modifications.remove(&idx) {
                         let old_id = obj.id().to_string();
                         self.mesh_cache.retain(|(k, _), _| k != &old_id);
+                        if let DrawObject::Shape { id, .. } = &obj {
+                            deleted_shape_ids.push(id.clone());
+                        }
 
                         if let (
                             Some(segments),
@@ -370,6 +435,13 @@ impl CanvasState {
                     } else {
                         new_objects.push(obj);
                     }
+                }
+
+                if !deleted_shape_ids.is_empty() {
+                    crate::geometry::detach_connectors_from_shapes(
+                        &mut new_objects,
+                        &deleted_shape_ids,
+                    );
                 }
 
                 page.objects = new_objects;
@@ -404,17 +476,62 @@ impl CanvasState {
         self.zoom_target_rect = Rect::from_min_size(Pos2::new(left_margin, new_y), Vec2::new(w, h));
     }
 
+    pub fn is_selected_locked(&self, page: &Page) -> bool {
+        if self.selected_ids.is_empty() {
+            return false;
+        }
+        page.objects
+            .iter()
+            .any(|o| self.selected_ids.contains(&o.id().to_string()) && o.is_locked())
+    }
+
+    pub fn toggle_lock_selected(&mut self, page: &mut Page) -> bool {
+        if self.selected_ids.is_empty() {
+            return false;
+        }
+        let lockable_count = page
+            .objects
+            .iter()
+            .filter(|o| {
+                self.selected_ids.contains(&o.id().to_string())
+                    && matches!(o, DrawObject::Shape { .. } | DrawObject::Connector { .. })
+            })
+            .count();
+        if lockable_count == 0 {
+            return false;
+        }
+
+        let all_locked = page.objects.iter().all(|o| {
+            if self.selected_ids.contains(&o.id().to_string())
+                && matches!(o, DrawObject::Shape { .. } | DrawObject::Connector { .. })
+            {
+                o.is_locked()
+            } else {
+                true
+            }
+        });
+
+        self.push_undo(&page.id, &page.objects);
+        let new_locked = !all_locked;
+        for obj in &mut page.objects {
+            if self.selected_ids.contains(&obj.id().to_string()) {
+                obj.set_locked(new_locked);
+            }
+        }
+        true
+    }
+
     pub fn flip_selected_horizontal(&mut self, page: &mut Page) {
         let selected: Vec<&DrawObject> = page
             .objects
             .iter()
-            .filter(|o| self.selected_ids.contains(&o.id().to_string()))
+            .filter(|o| self.selected_ids.contains(&o.id().to_string()) && !o.is_locked())
             .collect();
         if let Some(b) = combined_bounds(&selected) {
             self.push_undo(&page.id, &page.objects);
             let center_x = b.center().x;
             for obj in &mut page.objects {
-                if self.selected_ids.contains(&obj.id().to_string()) {
+                if self.selected_ids.contains(&obj.id().to_string()) && !obj.is_locked() {
                     crate::geometry::flip_object_horizontal(obj, center_x);
                     let id = obj.id().to_string();
                     self.mesh_cache.retain(|(k, _), _| k != &id);
@@ -428,13 +545,13 @@ impl CanvasState {
         let selected: Vec<&DrawObject> = page
             .objects
             .iter()
-            .filter(|o| self.selected_ids.contains(&o.id().to_string()))
+            .filter(|o| self.selected_ids.contains(&o.id().to_string()) && !o.is_locked())
             .collect();
         if let Some(b) = combined_bounds(&selected) {
             self.push_undo(&page.id, &page.objects);
             let center_y = b.center().y;
             for obj in &mut page.objects {
-                if self.selected_ids.contains(&obj.id().to_string()) {
+                if self.selected_ids.contains(&obj.id().to_string()) && !obj.is_locked() {
                     crate::geometry::flip_object_vertical(obj, center_y);
                     let id = obj.id().to_string();
                     self.mesh_cache.retain(|(k, _), _| k != &id);

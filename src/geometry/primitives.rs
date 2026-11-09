@@ -93,6 +93,43 @@ pub fn object_bounds(obj: &DrawObject) -> Rect {
             let bb_h = *width * sin_a + *height * cos_a;
             Rect::from_center_size(Pos2::new(cx, cy), Vec2::new(bb_w, bb_h))
         }
+        DrawObject::Connector {
+            start,
+            end,
+            control_points,
+            style,
+            ..
+        } => {
+            let mut pts = Vec::new();
+            if let crate::model::ConnectorEnd::Free { x, y } = start {
+                pts.push(Pos2::new(*x, *y));
+            }
+            if let crate::model::ConnectorEnd::Free { x, y } = end {
+                pts.push(Pos2::new(*x, *y));
+            }
+            for cp in control_points {
+                pts.push(Pos2::new(cp.x, cp.y));
+            }
+            if pts.is_empty() {
+                Rect::from_min_size(Pos2::ZERO, Vec2::splat(10.0))
+            } else {
+                let mut min_x = f32::MAX;
+                let mut min_y = f32::MAX;
+                let mut max_x = f32::MIN;
+                let mut max_y = f32::MIN;
+                for p in pts {
+                    min_x = min_x.min(p.x);
+                    min_y = min_y.min(p.y);
+                    max_x = max_x.max(p.x);
+                    max_y = max_y.max(p.y);
+                }
+                let half = style.stroke_width * 0.5 + 4.0;
+                Rect::from_min_max(
+                    Pos2::new(min_x - half, min_y - half),
+                    Pos2::new(max_x + half, max_y + half),
+                )
+            }
+        }
     }
 }
 
@@ -126,12 +163,18 @@ pub fn shape_vertices(shape_type: ShapeKind, x: f32, y: f32, width: f32, height:
     let p2 = Pos2::new(x + width, y + height);
     let r = Rect::from_two_pos(p1, p2);
     match shape_type {
-        ShapeKind::Line => vec![p1, p2],
+        ShapeKind::Line | ShapeKind::Curve => vec![p1, p2],
         ShapeKind::Rectangle | ShapeKind::Ellipse => vec![
             r.left_top(),
             r.right_top(),
             r.right_bottom(),
             r.left_bottom(),
+        ],
+        ShapeKind::Diamond => vec![
+            Pos2::new(r.center().x, r.top()),
+            Pos2::new(r.right(), r.center().y),
+            Pos2::new(r.center().x, r.bottom()),
+            Pos2::new(r.left(), r.center().y),
         ],
         ShapeKind::Triangle => vec![
             Pos2::new(r.center().x, r.top()),

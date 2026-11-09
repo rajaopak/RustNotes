@@ -3,7 +3,8 @@ use super::types::ViewMode;
 use crate::canvas::{ActiveTool, EraserMode};
 use crate::model::{ShapeKind, ThemeMode};
 use crate::storage::{
-    app_storage_dir, export_notebook_to_pdf, export_page_to_png, save_settings_to_dir,
+    app_storage_dir, export_notebook_to_pdf, export_page_to_png, export_page_to_svg_file,
+    save_settings_to_dir,
 };
 use eframe::egui::{
     self, Align, Button, Color32, FontId, Layout, Pos2, Rect, RichText, Sense, Stroke, StrokeKind,
@@ -285,6 +286,31 @@ impl RustNotesApp {
                                         }
                                     }
                                 }
+                                if ui.button("📐 Export Page to SVG (Vector)").clicked() {
+                                    ui.close_menu();
+                                    let page = &self.library.notebooks[nb_idx].pages
+                                        [self.current_page_index];
+                                    let default_name =
+                                        format!("page_{}.svg", self.current_page_index + 1);
+                                    if let Some(path) = rfd::FileDialog::new()
+                                        .set_file_name(&default_name)
+                                        .add_filter("SVG Vector Graphic", &["svg"])
+                                        .save_file()
+                                    {
+                                        match export_page_to_svg_file(&path, page) {
+                                            Ok(()) => {
+                                                self.toast_message = Some(
+                                                    "✅ Halaman berhasil diekspor ke SVG (Vector)."
+                                                        .to_string(),
+                                                );
+                                            }
+                                            Err(e) => {
+                                                self.toast_message =
+                                                    Some(format!("⚠ Gagal ekspor SVG: {e}"));
+                                            }
+                                        }
+                                    }
+                                }
                             },
                         );
 
@@ -410,6 +436,11 @@ impl RustNotesApp {
                                     ActiveTool::Shape(active_shape_kind),
                                     "📐",
                                     "Shapes — Klik lagi untuk pilih bentuk",
+                                ),
+                                (
+                                    ActiveTool::Connector,
+                                    "🔗",
+                                    "Connector (C) — Tarik garis penghubung antar bentuk",
                                 ),
                                 (ActiveTool::Lasso, "✂", "Lasso Selection (L)"),
                                 (ActiveTool::Text, "T", "Text Box (T)"),
@@ -551,6 +582,11 @@ impl RustNotesApp {
                                     ActiveTool::Shape(active_shape_kind),
                                     "📐",
                                     "Shapes — Klik lagi untuk pilih bentuk",
+                                ),
+                                (
+                                    ActiveTool::Connector,
+                                    "🔗",
+                                    "Connector (C) — Tarik garis penghubung antar bentuk",
                                 ),
                                 (ActiveTool::Lasso, "✂", "Lasso Selection (L)"),
                                 (ActiveTool::Text, "T", "Text Box (T)"),
@@ -869,6 +905,52 @@ impl RustNotesApp {
                                 }
                             }
                         });
+
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new("📋 Template Diagram Siap Pakai:")
+                                .strong()
+                                .size(11.5),
+                        );
+                        ui.horizontal_wrapped(|ui| {
+                            for kind in crate::geometry::DiagramStarterKind::ALL {
+                                if ui
+                                    .button(kind.title())
+                                    .on_hover_text(kind.description())
+                                    .clicked()
+                                {
+                                    let cur_p = &self.library.notebooks[nb_idx].pages
+                                        [self.current_page_index];
+                                    let new_objs = crate::geometry::generate_diagram_starter(
+                                        kind,
+                                        cur_p.width,
+                                        cur_p.height,
+                                    );
+                                    let added_count = new_objs.len();
+                                    self.canvas_state.push_undo(&cur_p.id, &cur_p.objects);
+                                    let new_ids =
+                                        new_objs.iter().map(|o| o.id().to_string()).collect();
+                                    self.library.notebooks[nb_idx].pages[self.current_page_index]
+                                        .objects
+                                        .extend(new_objs);
+                                    self.canvas_state.selected_ids = new_ids;
+                                    self.canvas_state.current_tool = ActiveTool::Lasso;
+                                    self.canvas_state.mesh_cache.clear();
+                                    self.canvas_state.spatial_grid.rebuild(
+                                        &self.library.notebooks[nb_idx].pages
+                                            [self.current_page_index]
+                                            .objects,
+                                    );
+                                    self.mark_dirty(&notebook_id);
+                                    self.toast_message = Some(format!(
+                                        "✅ Template {} disisipkan ({} objek).",
+                                        kind.title(),
+                                        added_count
+                                    ));
+                                    self.show_tool_popup = false;
+                                }
+                            }
+                        });
                     }
 
                     // Opsi Spesifik Penghapus (Eraser Mode)
@@ -893,13 +975,47 @@ impl RustNotesApp {
                         });
                     }
 
-                    ui.add_space(6.0);
+                    // Fase G4.4: Opsi Otomatis Koreksi Bentuk (Hold-to-Snap)
+                    ui.separator();
                     ui.horizontal(|ui| {
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.button("Selesai").clicked() {
-                                self.show_tool_popup = false;
-                            }
-                        });
+                        if ui
+                            .checkbox(
+                                &mut self.settings.auto_shape_enabled,
+                                lang.tr(
+                                    "📐 Otomatis Koreksi Bentuk (Hold-to-Snap)",
+                                    "📐 Auto-convert Shapes (Hold-to-Snap)",
+                                ),
+                            )
+                            .changed()
+                        {
+                            self.canvas_state.auto_shape_enabled = self.settings.auto_shape_enabled;
+                            let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
+                        }
+                    });
+
+                    // Fase G11: Snapping Options (Smart Guides & Snap to Grid)
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.checkbox(
+                            &mut self.canvas_state.smart_guides,
+                            lang.tr(
+                                "🧲 Garis Pemandu Magnetik (Smart Guides)",
+                                "🧲 Smart Alignment Guides",
+                            ),
+                        );
+                    });
+                    ui.horizontal(|ui| {
+                        ui.checkbox(
+                            &mut self.canvas_state.snap_to_grid,
+                            lang.tr("▦ Tempel ke Kisi Kertas (Snap to Grid)", "▦ Snap to Grid"),
+                        );
+                    });
+
+                    ui.add_space(6.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button("Selesai").clicked() {
+                            self.show_tool_popup = false;
+                        }
                     });
                 });
         }
@@ -1087,6 +1203,50 @@ impl RustNotesApp {
                         self.new_template_name =
                             format!("Template {}", self.current_page_index + 1);
                     }
+
+                    ui.menu_button(
+                        RichText::new("📊 Insert Starter Diagram ▶").color(Color32::WHITE),
+                        |ui| {
+                            for kind in crate::geometry::DiagramStarterKind::ALL {
+                                if ui
+                                    .button(kind.title())
+                                    .on_hover_text(kind.description())
+                                    .clicked()
+                                {
+                                    ui.close_menu();
+                                    let cur_p = &self.library.notebooks[nb_idx].pages
+                                        [self.current_page_index];
+                                    let new_objs = crate::geometry::generate_diagram_starter(
+                                        kind,
+                                        cur_p.width,
+                                        cur_p.height,
+                                    );
+                                    let added_count = new_objs.len();
+                                    self.canvas_state.push_undo(&cur_p.id, &cur_p.objects);
+                                    let new_ids =
+                                        new_objs.iter().map(|o| o.id().to_string()).collect();
+                                    self.library.notebooks[nb_idx].pages[self.current_page_index]
+                                        .objects
+                                        .extend(new_objs);
+                                    self.canvas_state.selected_ids = new_ids;
+                                    self.canvas_state.current_tool = ActiveTool::Lasso;
+                                    self.canvas_state.mesh_cache.clear();
+                                    self.canvas_state.spatial_grid.rebuild(
+                                        &self.library.notebooks[nb_idx].pages
+                                            [self.current_page_index]
+                                            .objects,
+                                    );
+                                    self.mark_dirty(&notebook_id);
+                                    self.toast_message = Some(format!(
+                                        "✅ Template {} disisipkan ({} objek).",
+                                        kind.title(),
+                                        added_count
+                                    ));
+                                    self.show_more_menu_popup = false;
+                                }
+                            }
+                        },
+                    );
 
                     // Go to Page row (`Go to Page   ◀ 1 of N ▶`)
                     ui.horizontal(|ui| {
