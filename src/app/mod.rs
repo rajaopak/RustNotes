@@ -125,7 +125,7 @@ impl eframe::App for RustNotesApp {
                     && let Some(idx) = self.library.notebooks.iter().position(|n| &n.id == id)
                     && let Ok(bytes) = std::fs::read(path)
                 {
-                    self.insert_image_to_page(idx, &bytes, &ext, None);
+                    self.insert_image_to_page(idx, self.current_page_index, &bytes, &ext, None);
                     self.toast_message =
                         Some("✅ Gambar berhasil disisipkan via Drag & Drop.".to_string());
                 }

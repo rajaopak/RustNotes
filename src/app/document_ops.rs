@@ -409,18 +409,18 @@ impl RustNotesApp {
         }
     }
 
-    // Fase 3: Helper menyisipkan gambar ke halaman aktif
+    // Fase 3: Helper menyisipkan gambar ke halaman tertentu (atau halaman aktif)
     pub(crate) fn insert_image_to_page(
         &mut self,
         nb_idx: usize,
+        page_idx: usize,
         img_bytes: &[u8],
         extension: &str,
         target_pos: Option<Pos2>,
     ) -> bool {
         let storage_dir = app_storage_dir();
         let nb_id = self.library.notebooks[nb_idx].id.clone();
-        let cur_page_idx = self.current_page_index;
-        if cur_page_idx >= self.library.notebooks[nb_idx].pages.len() {
+        if page_idx >= self.library.notebooks[nb_idx].pages.len() {
             return false;
         }
 
@@ -429,7 +429,7 @@ impl RustNotesApp {
         {
             let (orig_w, orig_h) = (dyn_img.width() as f32, dyn_img.height() as f32);
             let (page_w, page_h) = {
-                let p = &self.library.notebooks[nb_idx].pages[cur_page_idx];
+                let p = &self.library.notebooks[nb_idx].pages[page_idx];
                 (p.width, p.height)
             };
 
@@ -448,7 +448,7 @@ impl RustNotesApp {
                 (x, y)
             };
 
-            let page = &mut self.library.notebooks[nb_idx].pages[cur_page_idx];
+            let page = &mut self.library.notebooks[nb_idx].pages[page_idx];
             self.canvas_state.push_undo(&page.id, &page.objects);
             let new_img_id = uuid::Uuid::new_v4().to_string();
             let img_obj = crate::model::DrawObject::Image {
@@ -472,13 +472,14 @@ impl RustNotesApp {
         false
     }
 
-    // Fase 3: Menempel gambar dari clipboard (Ctrl+V)
+    // Fase 3: Menempel gambar dari clipboard (Ctrl+V) ke halaman tertentu
     pub(crate) fn try_paste_clipboard_image(
         &mut self,
         nb_idx: usize,
+        page_idx: usize,
         target_pos: Option<Pos2>,
     ) -> bool {
-        for _ in 0..2 {
+        for attempt in 0..4 {
             if let Ok(mut clipboard) = arboard::Clipboard::new() {
                 // 1. Coba baca bitmap/image langsung dari clipboard
                 if let Ok(img) = clipboard.get_image()
@@ -495,7 +496,7 @@ impl RustNotesApp {
                         .is_ok()
                     {
                         let bytes = cursor.into_inner();
-                        if self.insert_image_to_page(nb_idx, &bytes, "png", target_pos) {
+                        if self.insert_image_to_page(nb_idx, page_idx, &bytes, "png", target_pos) {
                             self.toast_message =
                                 Some("✅ Gambar berhasil ditempel dari clipboard.".to_string());
                             return true;
@@ -515,7 +516,9 @@ impl RustNotesApp {
                         if ["png", "jpg", "jpeg", "webp", "bmp", "gif"]
                             .contains(&ext_lower.as_str())
                             && let Ok(bytes) = std::fs::read(candidate_path)
-                            && self.insert_image_to_page(nb_idx, &bytes, &ext_lower, target_pos)
+                            && self.insert_image_to_page(
+                                nb_idx, page_idx, &bytes, &ext_lower, target_pos,
+                            )
                         {
                             self.toast_message =
                                 Some("✅ Gambar berhasil ditempel dari berkas.".to_string());
@@ -524,7 +527,34 @@ impl RustNotesApp {
                     }
                 }
             }
-            std::thread::sleep(std::time::Duration::from_millis(5));
+
+            // 3. Di Windows: periksa apakah ada daftar file CF_HDROP (misal dicopy langsung dari Windows File Explorer)
+            #[cfg(target_os = "windows")]
+            {
+                let hdrop_files = try_get_clipboard_hdrop_files();
+                for candidate_path in hdrop_files {
+                    if candidate_path.is_file()
+                        && let Some(ext) = candidate_path.extension().and_then(|s| s.to_str())
+                    {
+                        let ext_lower = ext.to_lowercase();
+                        if ["png", "jpg", "jpeg", "webp", "bmp", "gif"]
+                            .contains(&ext_lower.as_str())
+                            && let Ok(bytes) = std::fs::read(&candidate_path)
+                            && self.insert_image_to_page(
+                                nb_idx, page_idx, &bytes, &ext_lower, target_pos,
+                            )
+                        {
+                            self.toast_message =
+                                Some("✅ Gambar berhasil ditempel dari File Explorer.".to_string());
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            if attempt < 3 {
+                std::thread::sleep(std::time::Duration::from_millis(15));
+            }
         }
         false
     }
@@ -601,4 +631,41 @@ impl RustNotesApp {
         }
         false
     }
+}
+
+#[cfg(target_os = "windows")]
+fn try_get_clipboard_hdrop_files() -> Vec<std::path::PathBuf> {
+    unsafe extern "system" {
+        fn OpenClipboard(hWndNewOwner: *mut std::ffi::c_void) -> i32;
+        fn CloseClipboard() -> i32;
+        fn GetClipboardData(uFormat: u32) -> *mut std::ffi::c_void;
+        fn DragQueryFileW(
+            hDrop: *mut std::ffi::c_void,
+            iFile: u32,
+            lpszFile: *mut u16,
+            cch: u32,
+        ) -> u32;
+    }
+    const CF_HDROP: u32 = 15;
+    let mut paths = Vec::new();
+    unsafe {
+        if OpenClipboard(std::ptr::null_mut()) != 0 {
+            let hdrop = GetClipboardData(CF_HDROP);
+            if !hdrop.is_null() {
+                let count = DragQueryFileW(hdrop, 0xFFFFFFFF, std::ptr::null_mut(), 0);
+                for i in 0..count {
+                    let len = DragQueryFileW(hdrop, i, std::ptr::null_mut(), 0);
+                    if len > 0 {
+                        let mut buf = vec![0u16; (len + 1) as usize];
+                        if DragQueryFileW(hdrop, i, buf.as_mut_ptr(), len + 1) > 0 {
+                            let s = String::from_utf16_lossy(&buf[..len as usize]);
+                            paths.push(std::path::PathBuf::from(s));
+                        }
+                    }
+                }
+            }
+            CloseClipboard();
+        }
+    }
+    paths
 }

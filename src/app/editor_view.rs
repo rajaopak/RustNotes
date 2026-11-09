@@ -1,6 +1,6 @@
 use super::state::RustNotesApp;
 use super::theme::resolve_theme_mode;
-use super::types::{ViewMode, get_windows_clipboard_sequence};
+use super::types::{ViewMode, get_windows_clipboard_sequence, is_v_key_physically_pressed};
 use crate::canvas::{ActiveTool, render_page_canvas, render_zoom_window_canvas};
 use crate::model::{ShapeKind, ShortcutAction, ThemeMode};
 use crate::storage::{app_storage_dir, save_settings_to_dir};
@@ -29,8 +29,14 @@ impl RustNotesApp {
             }
         };
 
-        if let Some(target_pos) = self.canvas_state.request_paste_image.take() {
-            if self.try_paste_clipboard_image(nb_idx, Some(target_pos)) {
+        if let Some((target_page_id, target_pos)) = self.canvas_state.request_paste_image.take() {
+            let target_page_idx = self.library.notebooks[nb_idx]
+                .pages
+                .iter()
+                .position(|p| p.id == target_page_id)
+                .unwrap_or(self.current_page_index);
+            self.current_page_index = target_page_idx;
+            if self.try_paste_clipboard_image(nb_idx, target_page_idx, Some(target_pos)) {
                 self.mark_dirty(&notebook_id);
             } else {
                 self.toast_message = Some("⚠️ Tidak ada gambar di clipboard.".to_string());
@@ -115,7 +121,8 @@ impl RustNotesApp {
             || self.show_new_folder_modal
             || self.show_add_outline_modal
             || self.show_new_notebook_modal
-            || self.canvas_state.editing_text_id.is_some();
+            || self.canvas_state.editing_text_id.is_some()
+            || ctx.wants_keyboard_input();
 
         if !is_text_editing {
             // Help / Shortcuts cheat sheet: F1 or Shift+Slash (?)
@@ -170,6 +177,24 @@ impl RustNotesApp {
                 self.canvas_state.current_tool = ActiveTool::Lasso;
             }
 
+            // Direct Windows Ctrl+V edge detection:
+            // When an image is in the Windows clipboard, egui-winit's internal handler swallows
+            // the V key event and Paste event because its text clipboard returns None.
+            // Detecting physical V press edge when Ctrl is active ensures reliable image pasting.
+            let v_physically_down = is_v_key_physically_pressed();
+            let v_pressed_edge = v_physically_down && !self.last_v_key_down;
+            self.last_v_key_down = v_physically_down;
+
+            let paste_binding = self.settings.shortcuts.get(ShortcutAction::Paste);
+            let is_custom_paste_ctrl_v = paste_binding.key.eq_ignore_ascii_case("V")
+                && paste_binding.ctrl
+                && !paste_binding.alt
+                && !paste_binding.shift;
+
+            let win_ctrl_v_triggered = is_custom_paste_ctrl_v
+                && v_pressed_edge
+                && ctx.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.focused);
+
             // Shortcuts: Copy, Cut, Duplicate, Paste
             let is_copy = ctx.input(|i| {
                 crate::app::is_action_triggered(ShortcutAction::Copy, &self.settings.shortcuts, i)
@@ -199,7 +224,7 @@ impl RustNotesApp {
             }) || ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::COMMAND, egui::Key::V)
                     || i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
-            });
+            }) || win_ctrl_v_triggered;
 
             // Ctrl+C: Copy selected objects across any page of active notebook
             if is_copy {
@@ -218,6 +243,7 @@ impl RustNotesApp {
                 if !copied.is_empty() {
                     self.canvas_state.object_clipboard = copied;
                     self.canvas_state.app_clipboard_timestamp = Some(Instant::now());
+                    self.app_clipboard_win_seq = get_windows_clipboard_sequence();
                     self.toast_message = Some(format!(
                         "📋 {} objek disalin.",
                         self.canvas_state.object_clipboard.len()
@@ -229,6 +255,7 @@ impl RustNotesApp {
             if is_cut && !self.canvas_state.selected_ids.is_empty() {
                 let p = &mut self.library.notebooks[nb_idx].pages[self.current_page_index];
                 self.canvas_state.cut_selected(p);
+                self.app_clipboard_win_seq = get_windows_clipboard_sequence();
                 self.mark_dirty(&notebook_id);
                 self.toast_message = Some(format!(
                     "✂ {} objek dipotong.",
@@ -246,33 +273,61 @@ impl RustNotesApp {
 
             // Ctrl+V: Paste system clipboard image or paste object clipboard
             if is_paste {
-                let app_time = self.canvas_state.app_clipboard_timestamp;
-                let win_time = self.win_clipboard_timestamp;
-
-                // Tentukan prioritas berdasarkan timestamp:
-                // Jika objek aplikasi disalin LEBIH BARU daripada aksi copy di Windows:
-                let app_is_newer = match app_time {
-                    Some(t) => t >= win_time,
-                    None => false,
+                // Tentukan target page dan posisi kursor lokal:
+                // 1. Kursor sedang berada di atas halaman tertentu
+                // 2. Atau halaman terakhir yang diklik/diinteraksi
+                // 3. Atau halaman aktif saat ini
+                let (target_page_idx, paste_pos) = if let Some(hover_id) =
+                    &self.canvas_state.hovered_page_id
+                    && let Some(p_idx) = self.library.notebooks[nb_idx]
+                        .pages
+                        .iter()
+                        .position(|p| &p.id == hover_id)
+                {
+                    (p_idx, self.canvas_state.hovered_page_pos)
+                } else if let Some(last_id) = &self.canvas_state.last_interacted_page_id
+                    && let Some(p_idx) = self.library.notebooks[nb_idx]
+                        .pages
+                        .iter()
+                        .position(|p| &p.id == last_id)
+                {
+                    (p_idx, None)
+                } else {
+                    let idx = self
+                        .current_page_index
+                        .min(self.library.notebooks[nb_idx].pages.len().saturating_sub(1));
+                    (idx, None)
                 };
+
+                let win_seq = get_windows_clipboard_sequence();
+                // Sequence number Windows bertambah setiap kali ada data baru disalin ke clipboard Windows.
+                // Jika sequence berbeda dari saat objek RustNotes terakhir disalin,
+                // berarti pengguna baru saja menyalin sesuatu di luar (mis. browser / Snipping Tool).
+                let win_clipboard_changed = win_seq != 0 && win_seq != self.app_clipboard_win_seq;
+
+                let prefer_internal =
+                    !self.canvas_state.object_clipboard.is_empty() && !win_clipboard_changed;
 
                 let mut pasted = false;
 
-                if app_is_newer && !self.canvas_state.object_clipboard.is_empty() {
-                    let p = &mut self.library.notebooks[nb_idx].pages[self.current_page_index];
-                    self.canvas_state.paste_clipboard(p, None);
+                if prefer_internal {
+                    let p = &mut self.library.notebooks[nb_idx].pages[target_page_idx];
+                    self.canvas_state.paste_clipboard(p, paste_pos);
+                    self.current_page_index = target_page_idx;
                     self.mark_dirty(&notebook_id);
                     self.toast_message = Some("📋 Objek berhasil ditempel.".to_string());
                     pasted = true;
                 } else {
-                    // Windows clipboard lebih baru (atau belum pernah copy objek di aplikasi): coba tempel gambar
-                    if self.try_paste_clipboard_image(nb_idx, None) {
+                    // Coba tempel gambar dari clipboard sistem Windows (arboard / CF_HDROP Explorer)
+                    if self.try_paste_clipboard_image(nb_idx, target_page_idx, paste_pos) {
+                        self.current_page_index = target_page_idx;
                         self.mark_dirty(&notebook_id);
                         pasted = true;
                     } else if !self.canvas_state.object_clipboard.is_empty() {
-                        // Jika tidak ada gambar di Windows clipboard, gunakan objek aplikasi
-                        let p = &mut self.library.notebooks[nb_idx].pages[self.current_page_index];
-                        self.canvas_state.paste_clipboard(p, None);
+                        // Jika tidak ada gambar di clipboard sistem, fallback ke objek aplikasi jika tersedia
+                        let p = &mut self.library.notebooks[nb_idx].pages[target_page_idx];
+                        self.canvas_state.paste_clipboard(p, paste_pos);
+                        self.current_page_index = target_page_idx;
                         self.mark_dirty(&notebook_id);
                         self.toast_message = Some("📋 Objek berhasil ditempel.".to_string());
                         pasted = true;
@@ -678,18 +733,10 @@ impl RustNotesApp {
                         ui.vertical_centered(|ui| {
                             ui.add_space(24.0);
                             let pages_count = self.library.notebooks[nb_idx].pages.len();
-                            let first_page_h = self.library.notebooks[nb_idx]
-                                .pages
-                                .first()
-                                .map(|p| (p.height * self.canvas_state.zoom).max(80.0))
-                                .unwrap_or(400.0);
-                            let anchor_offset = (canvas_top_rect.height() * 0.22)
-                                .clamp(48.0, 140.0)
-                                .min(first_page_h * 0.5);
-                            let anchor_y = canvas_top_rect.top() + 24.0 + anchor_offset;
-                            let mut best_page_idx =
+                            let mut clicked_page_idx: Option<usize> = None;
+                            let mut most_visible_page_idx =
                                 self.current_page_index.min(pages_count.saturating_sub(1));
-                            let mut best_dist = f32::MAX;
+                            let mut max_visible_h = 0.0f32;
 
                             for p_i in 0..pages_count {
                                 let prev_obj_count =
@@ -717,19 +764,16 @@ impl RustNotesApp {
                                     desired_size,
                                 );
 
-                                // Hitung jarak vertikal halaman terhadap garis baca (`anchor_y`)
-                                let dist = if anchor_y >= next_page_rect.top()
-                                    && anchor_y <= next_page_rect.bottom()
-                                {
-                                    0.0
+                                // Hitung porsi tinggi halaman yang terlihat di dalam viewport layar
+                                let visible_rect = canvas_top_rect.intersect(next_page_rect);
+                                let visible_h = if visible_rect.is_positive() {
+                                    visible_rect.height()
                                 } else {
-                                    (next_page_rect.top() - anchor_y)
-                                        .abs()
-                                        .min((anchor_y - next_page_rect.bottom()).abs())
+                                    0.0
                                 };
-                                if dist < best_dist {
-                                    best_dist = dist;
-                                    best_page_idx = p_i;
+                                if visible_h > max_visible_h {
+                                    max_visible_h = visible_h;
+                                    most_visible_page_idx = p_i;
                                 }
 
                                 // Virtualization: render hanya halaman yang terlihat di layar
@@ -741,9 +785,19 @@ impl RustNotesApp {
                                             .layout(Layout::top_down(Align::Min)),
                                     );
                                     page_ui.set_clip_rect(canvas_top_rect);
-                                    page_ui.push_id(p_i, |ui| {
-                                        render_page_canvas(ui, page, &mut self.canvas_state);
-                                    });
+                                    let page_resp = page_ui
+                                        .push_id(p_i, |ui| {
+                                            render_page_canvas(ui, page, &mut self.canvas_state)
+                                        })
+                                        .inner;
+
+                                    if page_resp.clicked()
+                                        || page_resp.secondary_clicked()
+                                        || page_resp.drag_started()
+                                    {
+                                        clicked_page_idx = Some(p_i);
+                                    }
+
                                     if self.library.notebooks[nb_idx].pages[p_i].objects.len()
                                         != prev_obj_count
                                     {
@@ -755,9 +809,20 @@ impl RustNotesApp {
                                 ui.add_space(desired_size.y + 24.0 * self.canvas_state.zoom);
                             }
 
-                            // Sinkronkan nomor halaman aktif dengan halaman yang sedang tertampil saat scroll
-                            if !just_jumped && best_page_idx < pages_count {
-                                self.current_page_index = best_page_idx;
+                            // Jika ada interaksi klik/context menu dari render_page_canvas
+                            if let Some(interacted_id) = &self.canvas_state.last_interacted_page_id
+                                && let Some(idx) = self.library.notebooks[nb_idx]
+                                    .pages
+                                    .iter()
+                                    .position(|p| &p.id == interacted_id)
+                            {
+                                clicked_page_idx = Some(idx);
+                            }
+
+                            // Sinkronkan nomor halaman aktif: prioritas klik user, lalu halaman paling terlihat
+                            let best_idx = clicked_page_idx.unwrap_or(most_visible_page_idx);
+                            if !just_jumped && best_idx < pages_count {
+                                self.current_page_index = best_idx;
                             }
 
                             // Ruang bawah ekstra agar halaman terakhir tetap bisa di-scroll ke posisi baca atas

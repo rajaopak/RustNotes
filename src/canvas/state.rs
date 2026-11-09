@@ -60,7 +60,10 @@ pub struct CanvasState {
     // Fase 4: Object clipboard
     pub object_clipboard: Vec<DrawObject>,
     pub app_clipboard_timestamp: Option<Instant>,
-    pub request_paste_image: Option<Pos2>,
+    pub request_paste_image: Option<(String, Pos2)>,
+    pub hovered_page_id: Option<String>,
+    pub hovered_page_pos: Option<Pos2>,
+    pub last_interacted_page_id: Option<String>,
 
     // Fase 8.2: Eraser mode & undo tracking per drag gesture
     pub eraser_mode: EraserMode,
@@ -135,6 +138,9 @@ impl Default for CanvasState {
             object_clipboard: Vec::new(),
             app_clipboard_timestamp: None,
             request_paste_image: None,
+            hovered_page_id: None,
+            hovered_page_pos: None,
+            last_interacted_page_id: None,
             eraser_mode: EraserMode::Partial,
             eraser_undo_pushed: false,
             last_whole_erase_pos: None,

@@ -503,7 +503,13 @@ impl RustNotesApp {
                             {
                                 let ext =
                                     path.extension().and_then(|s| s.to_str()).unwrap_or("png");
-                                if self.insert_image_to_page(nb_idx, &bytes, ext, None) {
+                                if self.insert_image_to_page(
+                                    nb_idx,
+                                    self.current_page_index,
+                                    &bytes,
+                                    ext,
+                                    None,
+                                ) {
                                     self.toast_message = Some(
                                         "✅ Gambar berhasil disisipkan ke halaman.".to_string(),
                                     );
@@ -648,7 +654,13 @@ impl RustNotesApp {
                             {
                                 let ext =
                                     path.extension().and_then(|s| s.to_str()).unwrap_or("png");
-                                if self.insert_image_to_page(nb_idx, &bytes, ext, None) {
+                                if self.insert_image_to_page(
+                                    nb_idx,
+                                    self.current_page_index,
+                                    &bytes,
+                                    ext,
+                                    None,
+                                ) {
                                     self.toast_message = Some(
                                         "✅ Gambar berhasil disisipkan ke halaman.".to_string(),
                                     );

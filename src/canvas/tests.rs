@@ -997,3 +997,99 @@ fn test_locked_shape_remains_valid_connector_snap_target() {
     assert_eq!(site, ConnectionSite::Right);
     assert_eq!(anchor, Point2D::new(200.0, 150.0));
 }
+
+#[test]
+fn test_context_menu_paste_image_target_page_resolution() {
+    let mut state = CanvasState::default();
+    assert!(state.request_paste_image.is_none());
+    assert!(state.hovered_page_id.is_none());
+    assert!(state.hovered_page_pos.is_none());
+
+    // Simulasikan klik kanan pada halaman 2 ("page-2-uuid") pada koordinat lokal (120.0, 340.0)
+    state.request_paste_image = Some(("page-2-uuid".to_string(), Pos2::new(120.0, 340.0)));
+    state.last_interacted_page_id = Some("page-2-uuid".to_string());
+    state.hovered_page_id = Some("page-2-uuid".to_string());
+    state.hovered_page_pos = Some(Pos2::new(120.0, 340.0));
+
+    // Buat daftar halaman simulasi: Page 1 ("page-1-uuid") dan Page 2 ("page-2-uuid")
+    let page1 = Page {
+        id: "page-1-uuid".to_string(),
+        ..Page::new(PageTemplate::Blank)
+    };
+    let page2 = Page {
+        id: "page-2-uuid".to_string(),
+        ..Page::new(PageTemplate::Blank)
+    };
+    let pages = vec![page1, page2];
+
+    // Ambil permintaan paste image dan pastikan target page teridentifikasi tepat pada page 2 (index 1)
+    let (target_id, target_pos) = state
+        .request_paste_image
+        .take()
+        .expect("Request paste image harus ada");
+    let resolved_idx = pages
+        .iter()
+        .position(|p| p.id == target_id)
+        .expect("Page harus ditemukan");
+
+    assert_eq!(
+        resolved_idx, 1,
+        "Target paste gambar HARUS halaman 2, bukan halaman 1!"
+    );
+    assert_eq!(target_pos, Pos2::new(120.0, 340.0));
+    assert_eq!(
+        state.last_interacted_page_id.as_deref(),
+        Some("page-2-uuid")
+    );
+}
+
+#[test]
+fn test_paste_clipboard_with_target_pos_on_specific_page() {
+    let mut state = CanvasState::default();
+    let page1 = Page {
+        id: "p1".to_string(),
+        ..Page::new(PageTemplate::Blank)
+    };
+    let mut page2 = Page {
+        id: "p2".to_string(),
+        ..Page::new(PageTemplate::Blank)
+    };
+
+    // Masukkan sebuah stroke ke clipboard
+    let obj = DrawObject::Stroke {
+        id: "orig_stroke".to_string(),
+        points: vec![
+            StrokePoint {
+                x: 0.0,
+                y: 0.0,
+                pressure: 1.0,
+            },
+            StrokePoint {
+                x: 40.0,
+                y: 40.0,
+                pressure: 1.0,
+            },
+        ],
+        color: ColorData::from(Color32::RED),
+        width: 2.0,
+        is_highlighter: false,
+    };
+    state.object_clipboard = vec![obj];
+
+    // Tempelkan langsung ke halaman 2 pada target posisi (200.0, 300.0)
+    let target = Pos2::new(200.0, 300.0);
+    state.paste_clipboard(&mut page2, Some(target));
+
+    // Pastikan objek tertempel di halaman 2 dan TIDAK masuk ke halaman 1
+    assert_eq!(page1.objects.len(), 0, "Halaman 1 harus tetap kosong!");
+    assert_eq!(
+        page2.objects.len(),
+        1,
+        "Halaman 2 harus berisi 1 objek yang ditempel!"
+    );
+
+    // Pastikan posisi objek di halaman 2 berpusat di sekitar target (200, 300)
+    let b = crate::geometry::object_bounds(&page2.objects[0]);
+    assert!((b.center().x - 200.0).abs() < 1.0);
+    assert!((b.center().y - 300.0).abs() < 1.0);
+}

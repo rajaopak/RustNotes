@@ -3468,6 +3468,14 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
             .unwrap_or(rect.center()),
     );
 
+    if response.hovered() {
+        state.hovered_page_id = Some(page.id.clone());
+        state.hovered_page_pos = Some(click_page_p);
+    }
+    if response.clicked() || response.secondary_clicked() || response.drag_started() {
+        state.last_interacted_page_id = Some(page.id.clone());
+    }
+
     response.context_menu(|ui| {
         if has_selection_on_this_page {
             let count = page
@@ -3526,12 +3534,14 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
             if !state.object_clipboard.is_empty() {
                 if ui.button("📋 Tempel Objek (Ctrl+V)").clicked() {
                     state.paste_clipboard(page, Some(click_page_p));
+                    state.last_interacted_page_id = Some(page.id.clone());
                     ui.close_menu();
                 }
                 ui.separator();
             }
             if ui.button("🖼 Tempel Gambar dari Clipboard").clicked() {
-                state.request_paste_image = Some(click_page_p);
+                state.request_paste_image = Some((page.id.clone(), click_page_p));
+                state.last_interacted_page_id = Some(page.id.clone());
                 ui.close_menu();
             }
             ui.separator();

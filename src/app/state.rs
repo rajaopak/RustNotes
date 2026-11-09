@@ -117,6 +117,8 @@ pub struct RustNotesApp {
     // Windows Clipboard Sequence & Timestamp Tracking
     pub(crate) win_clipboard_seq: u32,
     pub(crate) win_clipboard_timestamp: Instant,
+    pub(crate) last_v_key_down: bool,
+    pub(crate) app_clipboard_win_seq: u32,
 }
 
 impl Default for RustNotesApp {
@@ -285,6 +287,8 @@ impl Default for RustNotesApp {
             dragged_thumb_page: None,
             win_clipboard_seq: get_windows_clipboard_sequence(),
             win_clipboard_timestamp: Instant::now(),
+            last_v_key_down: false,
+            app_clipboard_win_seq: 0,
         }
     }
 }

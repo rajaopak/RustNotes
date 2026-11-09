@@ -3,6 +3,10 @@ use eframe::egui::Color32;
 #[cfg(target_os = "windows")]
 unsafe extern "system" {
     fn GetClipboardSequenceNumber() -> u32;
+    fn GetAsyncKeyState(vKey: i32) -> i16;
+    fn GetForegroundWindow() -> *mut std::ffi::c_void;
+    fn GetCurrentProcessId() -> u32;
+    fn GetWindowThreadProcessId(hWnd: *mut std::ffi::c_void, lpdwProcessId: *mut u32) -> u32;
 }
 
 pub fn get_windows_clipboard_sequence() -> u32 {
@@ -12,6 +16,25 @@ pub fn get_windows_clipboard_sequence() -> u32 {
     }
     #[cfg(not(target_os = "windows"))]
     0
+}
+
+pub fn is_v_key_physically_pressed() -> bool {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.is_null() {
+            return false;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(fg, &mut pid);
+        if pid != GetCurrentProcessId() {
+            return false;
+        }
+        const VK_V: i32 = 0x56;
+        (GetAsyncKeyState(VK_V) as u16 & 0x8000) != 0
+    }
+    #[cfg(not(target_os = "windows"))]
+    false
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
