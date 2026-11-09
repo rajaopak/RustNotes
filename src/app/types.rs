@@ -41,6 +41,13 @@ pub enum NavView {
     Trash,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ShortcutModalTab {
+    #[default]
+    Customize,
+    CheatSheet,
+}
+
 pub const COVER_PALETTE: [Color32; 8] = [
     Color32::from_rgb(189, 173, 150), // Sand/Tan
     Color32::from_rgb(49, 85, 119),   // Classic Navy

@@ -1012,10 +1012,22 @@ impl RustNotesApp {
                     });
 
                     ui.add_space(6.0);
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("Selesai").clicked() {
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(
+                                lang.tr("⌨ Atur Pintasan Keyboard...", "⌨ Customize Shortcuts..."),
+                            )
+                            .clicked()
+                        {
                             self.show_tool_popup = false;
+                            self.show_shortcut_modal = true;
                         }
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.button("Selesai").clicked() {
+                                self.show_tool_popup = false;
+                            }
+                        });
                     });
                 });
         }
@@ -1465,7 +1477,11 @@ impl RustNotesApp {
                     if ui
                         .add(
                             Button::new(
-                                RichText::new("⌨ Keyboard Shortcuts (F1)").color(Color32::WHITE),
+                                RichText::new(lang.tr(
+                                    "⌨ Atur Pintasan Keyboard (F1)",
+                                    "⌨ Keyboard Shortcuts & Settings (F1)",
+                                ))
+                                .color(Color32::WHITE),
                             )
                             .fill(Color32::TRANSPARENT)
                             .min_size(Vec2::new(260.0, 24.0)),

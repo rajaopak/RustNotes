@@ -980,6 +980,234 @@ pub struct AppSettings {
     /// Fase G4.4: Opsi otomatis mengonversi bentuk saat pena ditahan (Hold-to-Snap).
     #[serde(default = "default_true")]
     pub auto_shape_enabled: bool,
+    /// Pengaturan pintasan keyboard yang dapat disesuaikan pengguna.
+    #[serde(default)]
+    pub shortcuts: ShortcutSettings,
+}
+
+/// Aksi-aksi yang dapat dikonfigurasi pintasan keyboard-nya.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ShortcutAction {
+    ToolPen,
+    ToolHighlighter,
+    ToolEraser,
+    ToolLasso,
+    ToolText,
+    ToolShape,
+    ToolConnector,
+    ToolStickyNote,
+    Undo,
+    Redo,
+    Save,
+    SelectAll,
+    Copy,
+    Cut,
+    Paste,
+    Duplicate,
+    Delete,
+    Search,
+    ResetZoom,
+    ToggleSidebar,
+    ToggleZoomWindow,
+    ToggleLock,
+    ToggleGrid,
+}
+
+impl ShortcutAction {
+    pub const ALL: [Self; 23] = [
+        Self::ToolPen,
+        Self::ToolHighlighter,
+        Self::ToolEraser,
+        Self::ToolLasso,
+        Self::ToolText,
+        Self::ToolShape,
+        Self::ToolConnector,
+        Self::ToolStickyNote,
+        Self::Undo,
+        Self::Redo,
+        Self::Save,
+        Self::SelectAll,
+        Self::Copy,
+        Self::Cut,
+        Self::Paste,
+        Self::Duplicate,
+        Self::Delete,
+        Self::Search,
+        Self::ResetZoom,
+        Self::ToggleSidebar,
+        Self::ToggleZoomWindow,
+        Self::ToggleLock,
+        Self::ToggleGrid,
+    ];
+
+    pub fn label(self, lang: AppLanguage) -> &'static str {
+        match (self, lang) {
+            (Self::ToolPen, AppLanguage::Indonesian) => "Alat Pena (Pen)",
+            (Self::ToolPen, AppLanguage::English) => "Pen Tool",
+            (Self::ToolHighlighter, AppLanguage::Indonesian) => "Alat Penstabilo (Highlighter)",
+            (Self::ToolHighlighter, AppLanguage::English) => "Highlighter Tool",
+            (Self::ToolEraser, AppLanguage::Indonesian) => "Alat Penghapus (Eraser)",
+            (Self::ToolEraser, AppLanguage::English) => "Eraser Tool",
+            (Self::ToolLasso, AppLanguage::Indonesian) => "Alat Lasso / Seleksi",
+            (Self::ToolLasso, AppLanguage::English) => "Lasso Selection Tool",
+            (Self::ToolText, AppLanguage::Indonesian) => "Alat Teks",
+            (Self::ToolText, AppLanguage::English) => "Text Tool",
+            (Self::ToolShape, AppLanguage::Indonesian) => "Alat Bentuk (Shape)",
+            (Self::ToolShape, AppLanguage::English) => "Shape Tool",
+            (Self::ToolConnector, AppLanguage::Indonesian) => "Alat Konektor Diagram",
+            (Self::ToolConnector, AppLanguage::English) => "Diagram Connector Tool",
+            (Self::ToolStickyNote, AppLanguage::Indonesian) => "Catatan Tempel (Sticky Note)",
+            (Self::ToolStickyNote, AppLanguage::English) => "Sticky Note Tool",
+            (Self::Undo, AppLanguage::Indonesian) => "Batalkan (Undo)",
+            (Self::Undo, AppLanguage::English) => "Undo",
+            (Self::Redo, AppLanguage::Indonesian) => "Ulangi (Redo)",
+            (Self::Redo, AppLanguage::English) => "Redo",
+            (Self::Save, AppLanguage::Indonesian) => "Simpan Dokumen Segera",
+            (Self::Save, AppLanguage::English) => "Save Document",
+            (Self::SelectAll, AppLanguage::Indonesian) => "Pilih Semua Objek",
+            (Self::SelectAll, AppLanguage::English) => "Select All Objects",
+            (Self::Copy, AppLanguage::Indonesian) => "Salin Objek (Copy)",
+            (Self::Copy, AppLanguage::English) => "Copy Objects",
+            (Self::Cut, AppLanguage::Indonesian) => "Potong Objek (Cut)",
+            (Self::Cut, AppLanguage::English) => "Cut Objects",
+            (Self::Paste, AppLanguage::Indonesian) => "Tempel Objek (Paste)",
+            (Self::Paste, AppLanguage::English) => "Paste Objects",
+            (Self::Duplicate, AppLanguage::Indonesian) => "Gandakan Objek (Duplicate)",
+            (Self::Duplicate, AppLanguage::English) => "Duplicate Objects",
+            (Self::Delete, AppLanguage::Indonesian) => "Hapus Objek Terpilih",
+            (Self::Delete, AppLanguage::English) => "Delete Selected Objects",
+            (Self::Search, AppLanguage::Indonesian) => "Cari di Dokumen (Find)",
+            (Self::Search, AppLanguage::English) => "Search In Document",
+            (Self::ResetZoom, AppLanguage::Indonesian) => "Reset Zoom ke 100%",
+            (Self::ResetZoom, AppLanguage::English) => "Reset Zoom to 100%",
+            (Self::ToggleSidebar, AppLanguage::Indonesian) => "Buka/Tutup Panel Halaman",
+            (Self::ToggleSidebar, AppLanguage::English) => "Toggle Page Sidebar",
+            (Self::ToggleZoomWindow, AppLanguage::Indonesian) => "Buka/Tutup Zoom Window",
+            (Self::ToggleZoomWindow, AppLanguage::English) => "Toggle Zoom Window",
+            (Self::ToggleLock, AppLanguage::Indonesian) => "Kunci/Buka Kunci Objek Terpilih",
+            (Self::ToggleLock, AppLanguage::English) => "Lock/Unlock Selected Objects",
+            (Self::ToggleGrid, AppLanguage::Indonesian) => "Nyalakan/Matikan Grid Snapping",
+            (Self::ToggleGrid, AppLanguage::English) => "Toggle Grid Snapping",
+        }
+    }
+
+    pub fn default_binding(self) -> KeyBinding {
+        match self {
+            Self::ToolPen => KeyBinding::plain("P"),
+            Self::ToolHighlighter => KeyBinding::plain("H"),
+            Self::ToolEraser => KeyBinding::plain("E"),
+            Self::ToolLasso => KeyBinding::plain("L"),
+            Self::ToolText => KeyBinding::plain("T"),
+            Self::ToolShape => KeyBinding::plain("S"),
+            Self::ToolConnector => KeyBinding::plain("C"),
+            Self::ToolStickyNote => KeyBinding::plain("N"),
+            Self::Undo => KeyBinding::ctrl("Z"),
+            Self::Redo => KeyBinding::ctrl("Y"),
+            Self::Save => KeyBinding::ctrl("S"),
+            Self::SelectAll => KeyBinding::ctrl("A"),
+            Self::Copy => KeyBinding::ctrl("C"),
+            Self::Cut => KeyBinding::ctrl("X"),
+            Self::Paste => KeyBinding::ctrl("V"),
+            Self::Duplicate => KeyBinding::ctrl("D"),
+            Self::Delete => KeyBinding::plain("Delete"),
+            Self::Search => KeyBinding::ctrl("F"),
+            Self::ResetZoom => KeyBinding::ctrl("0"),
+            Self::ToggleSidebar => KeyBinding::plain("F6"),
+            Self::ToggleZoomWindow => KeyBinding::alt("Z"),
+            Self::ToggleLock => KeyBinding::ctrl("L"),
+            Self::ToggleGrid => KeyBinding::alt("G"),
+        }
+    }
+}
+
+/// Representasi kombinasi tombol pintasan yang dapat dikonfigurasi pengguna.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyBinding {
+    pub key: String,
+    #[serde(default)]
+    pub ctrl: bool,
+    #[serde(default)]
+    pub alt: bool,
+    #[serde(default)]
+    pub shift: bool,
+}
+
+impl KeyBinding {
+    pub fn new(key: impl Into<String>, ctrl: bool, alt: bool, shift: bool) -> Self {
+        Self {
+            key: key.into(),
+            ctrl,
+            alt,
+            shift,
+        }
+    }
+
+    pub fn plain(key: impl Into<String>) -> Self {
+        Self::new(key, false, false, false)
+    }
+
+    pub fn ctrl(key: impl Into<String>) -> Self {
+        Self::new(key, true, false, false)
+    }
+
+    pub fn alt(key: impl Into<String>) -> Self {
+        Self::new(key, false, true, false)
+    }
+
+    pub fn display_string(&self) -> String {
+        let mut parts = Vec::new();
+        if self.ctrl {
+            parts.push("Ctrl");
+        }
+        if self.alt {
+            parts.push("Alt");
+        }
+        if self.shift {
+            parts.push("Shift");
+        }
+        parts.push(&self.key);
+        parts.join(" + ")
+    }
+}
+
+/// Kumpulan pemetaan aksi ke pintasan tombol keyboard.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShortcutSettings {
+    #[serde(default = "default_custom_bindings")]
+    pub bindings: std::collections::HashMap<ShortcutAction, KeyBinding>,
+}
+
+pub fn default_custom_bindings() -> std::collections::HashMap<ShortcutAction, KeyBinding> {
+    let mut map = std::collections::HashMap::new();
+    for action in ShortcutAction::ALL {
+        map.insert(action, action.default_binding());
+    }
+    map
+}
+
+impl Default for ShortcutSettings {
+    fn default() -> Self {
+        Self {
+            bindings: default_custom_bindings(),
+        }
+    }
+}
+
+impl ShortcutSettings {
+    pub fn get(&self, action: ShortcutAction) -> KeyBinding {
+        self.bindings
+            .get(&action)
+            .cloned()
+            .unwrap_or_else(|| action.default_binding())
+    }
+
+    pub fn set(&mut self, action: ShortcutAction, binding: KeyBinding) {
+        self.bindings.insert(action, binding);
+    }
+
+    pub fn reset_all(&mut self) {
+        self.bindings = default_custom_bindings();
+    }
 }
 
 impl Default for AppSettings {
@@ -992,6 +1220,7 @@ impl Default for AppSettings {
             palm_rejection: default_palm_rejection(),
             language: AppLanguage::Indonesian,
             auto_shape_enabled: true,
+            shortcuts: ShortcutSettings::default(),
         }
     }
 }
@@ -1525,5 +1754,47 @@ mod tests {
         let json = serde_json::to_string(&curve_obj).expect("serialize curve");
         let decoded: DrawObject = serde_json::from_str(&json).expect("deserialize curve");
         assert_eq!(curve_obj, decoded);
+    }
+
+    #[test]
+    fn test_shortcut_settings_and_keybindings_roundtrip() {
+        let mut settings = ShortcutSettings::default();
+        assert_eq!(
+            settings.get(ShortcutAction::ToolPen),
+            KeyBinding::plain("P")
+        );
+        assert_eq!(settings.get(ShortcutAction::Undo), KeyBinding::ctrl("Z"));
+        assert_eq!(
+            settings.get(ShortcutAction::ToggleGrid),
+            KeyBinding::alt("G")
+        );
+
+        // Test display_string
+        assert_eq!(KeyBinding::plain("P").display_string(), "P");
+        assert_eq!(KeyBinding::ctrl("S").display_string(), "Ctrl + S");
+        assert_eq!(KeyBinding::alt("G").display_string(), "Alt + G");
+        assert_eq!(
+            KeyBinding::new("Z", true, false, true).display_string(),
+            "Ctrl + Shift + Z"
+        );
+
+        // Test set and persistence
+        settings.set(
+            ShortcutAction::ToolPen,
+            KeyBinding::new("B", true, false, false),
+        );
+        assert_eq!(settings.get(ShortcutAction::ToolPen), KeyBinding::ctrl("B"));
+
+        // Test JSON roundtrip
+        let json = serde_json::to_string(&settings).expect("serialize shortcuts");
+        let decoded: ShortcutSettings = serde_json::from_str(&json).expect("deserialize shortcuts");
+        assert_eq!(settings, decoded);
+
+        // Test reset_all
+        settings.reset_all();
+        assert_eq!(
+            settings.get(ShortcutAction::ToolPen),
+            KeyBinding::plain("P")
+        );
     }
 }

@@ -2,7 +2,7 @@ use super::state::RustNotesApp;
 use super::theme::resolve_theme_mode;
 use super::types::{ViewMode, get_windows_clipboard_sequence};
 use crate::canvas::{ActiveTool, render_page_canvas, render_zoom_window_canvas};
-use crate::model::{ShapeKind, ThemeMode};
+use crate::model::{ShapeKind, ShortcutAction, ThemeMode};
 use crate::storage::{app_storage_dir, save_settings_to_dir};
 use eframe::egui::{
     self, Align, Button, Color32, Layout, Pos2, Rect, RichText, ScrollArea, Stroke, Vec2,
@@ -126,99 +126,79 @@ impl RustNotesApp {
                 self.show_shortcut_modal = !self.show_shortcut_modal;
             }
 
-            // Fase 5: Ctrl+F: In-document search
-            if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
+            // In-document search
+            if ctx.input(|i| {
+                crate::app::is_action_triggered(ShortcutAction::Search, &self.settings.shortcuts, i)
+            }) {
                 self.show_in_doc_search = !self.show_in_doc_search;
                 self.doc_search_current_match = 0;
             }
 
-            // Ctrl+S: Save notebook immediately
-            if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
+            // Save notebook immediately
+            if ctx.input(|i| {
+                crate::app::is_action_triggered(ShortcutAction::Save, &self.settings.shortcuts, i)
+            }) {
                 let nb_id = notebook_id.clone();
                 self.force_save_notebook(&nb_id);
                 self.toast_message = Some("💾 Dokumen berhasil disimpan.".to_string());
             }
 
-            // Ctrl+0: Reset zoom to 100% & center pan
-            if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Num0)) {
+            // Reset zoom to 100% & center pan
+            if ctx.input(|i| {
+                crate::app::is_action_triggered(
+                    ShortcutAction::ResetZoom,
+                    &self.settings.shortcuts,
+                    i,
+                )
+            }) {
                 self.apply_zoom_anchored(nb_idx, 1.0, None);
                 self.canvas_pan_offset = Vec2::ZERO;
                 self.toast_message = Some("🔍 Zoom di-reset ke 100%.".to_string());
             }
 
-            // Ctrl+A: Select all objects on current page
-            if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::A)) {
+            // Select all objects on current page
+            if ctx.input(|i| {
+                crate::app::is_action_triggered(
+                    ShortcutAction::SelectAll,
+                    &self.settings.shortcuts,
+                    i,
+                )
+            }) {
                 let p = &self.library.notebooks[nb_idx].pages[self.current_page_index];
                 self.canvas_state.selected_ids =
                     p.objects.iter().map(|o| o.id().to_string()).collect();
                 self.canvas_state.current_tool = ActiveTool::Lasso;
             }
 
-            // Shortcuts: Ctrl+C (Copy), Ctrl+X (Cut), Ctrl+D (Duplicate), Ctrl+V (Paste)
-            let is_copy = ctx.input_mut(|i| {
+            // Shortcuts: Copy, Cut, Duplicate, Paste
+            let is_copy = ctx.input(|i| {
+                crate::app::is_action_triggered(ShortcutAction::Copy, &self.settings.shortcuts, i)
+            }) || ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::COMMAND, egui::Key::C)
                     || i.events.iter().any(|e| matches!(e, egui::Event::Copy))
-                    || (i.modifiers.command && i.key_pressed(egui::Key::C))
-            }) || ctx.input(|i| {
-                i.raw.events.iter().any(|e| match e {
-                    egui::Event::Copy => true,
-                    egui::Event::Key {
-                        key: egui::Key::C,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } => modifiers.command,
-                    _ => false,
-                })
             });
 
-            let is_cut = ctx.input_mut(|i| {
+            let is_cut = ctx.input(|i| {
+                crate::app::is_action_triggered(ShortcutAction::Cut, &self.settings.shortcuts, i)
+            }) || ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::COMMAND, egui::Key::X)
                     || i.events.iter().any(|e| matches!(e, egui::Event::Cut))
-                    || (i.modifiers.command && i.key_pressed(egui::Key::X))
-            }) || ctx.input(|i| {
-                i.raw.events.iter().any(|e| match e {
-                    egui::Event::Cut => true,
-                    egui::Event::Key {
-                        key: egui::Key::X,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } => modifiers.command,
-                    _ => false,
-                })
             });
 
-            let is_duplicate = ctx.input_mut(|i| {
-                i.consume_key(egui::Modifiers::COMMAND, egui::Key::D)
-                    || (i.modifiers.command && i.key_pressed(egui::Key::D))
-            }) || ctx.input(|i| {
-                i.raw.events.iter().any(|e| match e {
-                    egui::Event::Key {
-                        key: egui::Key::D,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } => modifiers.command,
-                    _ => false,
-                })
-            });
+            let is_duplicate = ctx.input(|i| {
+                crate::app::is_action_triggered(
+                    ShortcutAction::Duplicate,
+                    &self.settings.shortcuts,
+                    i,
+                )
+            }) || ctx
+                .input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::D));
 
-            let is_paste = ctx.input_mut(|i| {
+            let is_paste = ctx.input(|i| {
+                crate::app::is_action_triggered(ShortcutAction::Paste, &self.settings.shortcuts, i)
+            }) || ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::COMMAND, egui::Key::V)
                     || i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)))
-                    || (i.modifiers.command && i.key_pressed(egui::Key::V))
-            }) || ctx.input(|i| {
-                i.raw.events.iter().any(|e| match e {
-                    egui::Event::Paste(_) => true,
-                    egui::Event::Key {
-                        key: egui::Key::V,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } => modifiers.command,
-                    _ => false,
-                })
             });
 
             // Ctrl+C: Copy selected objects across any page of active notebook
@@ -308,7 +288,12 @@ impl RustNotesApp {
             // Delete / Backspace: Delete selected objects
             if ctx.input(|i| {
                 !self.canvas_state.selected_ids.is_empty()
-                    && (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
+                    && (crate::app::is_action_triggered(
+                        ShortcutAction::Delete,
+                        &self.settings.shortcuts,
+                        i,
+                    ) || i.key_pressed(egui::Key::Delete)
+                        || i.key_pressed(egui::Key::Backspace))
             }) {
                 let p = &mut self.library.notebooks[nb_idx].pages[self.current_page_index];
                 self.canvas_state.delete_selected(p);
@@ -316,42 +301,114 @@ impl RustNotesApp {
                 self.toast_message = Some("🗑 Objek dihapus.".to_string());
             }
 
-            // Ctrl+Z: Undo
-            if ctx
-                .input(|i| i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::Z))
-            {
+            // Lock / Unlock selected shape(s) & connector(s)
+            if ctx.input(|i| {
+                crate::app::is_action_triggered(
+                    ShortcutAction::ToggleLock,
+                    &self.settings.shortcuts,
+                    i,
+                )
+            }) {
+                let (toggled, is_locked) = {
+                    let p = &mut self.library.notebooks[nb_idx].pages[self.current_page_index];
+                    let ok = self.canvas_state.toggle_lock_selected(p);
+                    let locked = self.canvas_state.is_selected_locked(p);
+                    (ok, locked)
+                };
+                if toggled {
+                    self.mark_dirty(&notebook_id);
+                    self.toast_message = Some(if is_locked {
+                        "🔒 Objek dikunci (Locked).".to_string()
+                    } else {
+                        "🔓 Objek dibuka kuncinya (Unlocked).".to_string()
+                    });
+                }
+            }
+
+            // Toggle Smart Alignment Guides
+            if ctx.input(|i| {
+                crate::app::is_action_triggered(
+                    ShortcutAction::ToggleGrid,
+                    &self.settings.shortcuts,
+                    i,
+                )
+            }) {
+                self.canvas_state.smart_guides = !self.canvas_state.smart_guides;
+                let active = self.canvas_state.smart_guides;
+                self.toast_message = Some(if active {
+                    "🧲 Smart Alignment Guides: AKTIF".to_string()
+                } else {
+                    "🧲 Smart Alignment Guides: NONAKTIF".to_string()
+                });
+            }
+
+            // Undo
+            if ctx.input(|i| {
+                crate::app::is_action_triggered(ShortcutAction::Undo, &self.settings.shortcuts, i)
+            }) {
                 self.perform_undo(nb_idx);
             }
 
-            // Ctrl+Y or Ctrl+Shift+Z: Redo
+            // Redo
             if ctx.input(|i| {
-                (i.modifiers.command && i.key_pressed(egui::Key::Y))
+                crate::app::is_action_triggered(ShortcutAction::Redo, &self.settings.shortcuts, i)
                     || (i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::Z))
             }) {
                 self.perform_redo(nb_idx);
             }
 
-            // Single key tool shortcuts (only without modifiers!)
-            let no_mods = ctx.input(|i| {
-                !i.modifiers.command && !i.modifiers.ctrl && !i.modifiers.alt && !i.modifiers.shift
-            });
-            if no_mods {
-                if ctx.input(|i| i.key_pressed(egui::Key::P)) {
+            // Tool shortcuts (dapat disesuaikan lewat Settings)
+            ctx.input(|i| {
+                if crate::app::is_action_triggered(
+                    ShortcutAction::ToolPen,
+                    &self.settings.shortcuts,
+                    i,
+                ) {
                     self.canvas_state.current_tool = ActiveTool::Pen;
-                } else if ctx.input(|i| i.key_pressed(egui::Key::H)) {
+                } else if crate::app::is_action_triggered(
+                    ShortcutAction::ToolHighlighter,
+                    &self.settings.shortcuts,
+                    i,
+                ) {
                     self.canvas_state.current_tool = ActiveTool::Highlighter;
-                } else if ctx.input(|i| i.key_pressed(egui::Key::E)) {
+                } else if crate::app::is_action_triggered(
+                    ShortcutAction::ToolEraser,
+                    &self.settings.shortcuts,
+                    i,
+                ) {
                     self.canvas_state.current_tool = ActiveTool::Eraser;
-                } else if ctx.input(|i| i.key_pressed(egui::Key::L)) {
+                } else if crate::app::is_action_triggered(
+                    ShortcutAction::ToolLasso,
+                    &self.settings.shortcuts,
+                    i,
+                ) {
                     self.canvas_state.current_tool = ActiveTool::Lasso;
-                } else if ctx.input(|i| i.key_pressed(egui::Key::T)) {
+                } else if crate::app::is_action_triggered(
+                    ShortcutAction::ToolText,
+                    &self.settings.shortcuts,
+                    i,
+                ) {
                     self.canvas_state.current_tool = ActiveTool::Text;
-                } else if ctx.input(|i| i.key_pressed(egui::Key::S)) {
+                } else if crate::app::is_action_triggered(
+                    ShortcutAction::ToolShape,
+                    &self.settings.shortcuts,
+                    i,
+                ) {
                     self.canvas_state.current_tool = ActiveTool::Shape(ShapeKind::Rectangle);
-                } else if ctx.input(|i| i.key_pressed(egui::Key::N)) {
+                } else if crate::app::is_action_triggered(
+                    ShortcutAction::ToolConnector,
+                    &self.settings.shortcuts,
+                    i,
+                ) {
+                    self.canvas_state.current_tool = ActiveTool::Connector;
+                } else if crate::app::is_action_triggered(
+                    ShortcutAction::ToolStickyNote,
+                    &self.settings.shortcuts,
+                    i,
+                ) {
                     self.canvas_state.current_tool = ActiveTool::StickyNote;
                 }
-            }
+            });
 
             // Menggeser kanvas menggunakan Arrow Keys (ArrowUp, ArrowDown, ArrowLeft, ArrowRight)
             // ketika tidak sedang menekan Alt / Ctrl / Command
@@ -418,11 +475,22 @@ impl RustNotesApp {
                 self.navigate_to_page(nb_idx, page_count - 1);
             }
             if ctx.input(|i| {
-                i.key_pressed(egui::Key::F6) || (i.modifiers.command && i.key_pressed(egui::Key::B))
+                crate::app::is_action_triggered(
+                    ShortcutAction::ToggleSidebar,
+                    &self.settings.shortcuts,
+                    i,
+                ) || i.key_pressed(egui::Key::F6)
+                    || (i.modifiers.command && i.key_pressed(egui::Key::B))
             }) {
                 self.show_thumbnail_sidebar = !self.show_thumbnail_sidebar;
             }
-            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::Z)) {
+            if ctx.input(|i| {
+                crate::app::is_action_triggered(
+                    ShortcutAction::ToggleZoomWindow,
+                    &self.settings.shortcuts,
+                    i,
+                ) || (i.modifiers.alt && i.key_pressed(egui::Key::Z))
+            }) {
                 self.canvas_state.show_zoom_window = !self.canvas_state.show_zoom_window;
             }
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {

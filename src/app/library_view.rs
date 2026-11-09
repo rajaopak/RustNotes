@@ -214,6 +214,19 @@ impl RustNotesApp {
                     });
                     ui.add_space(12.0);
 
+                    // Shortcut Settings Button
+                    if ui
+                        .button(lang.tr("⌨ Pengaturan Pintasan", "⌨ Keyboard Shortcuts"))
+                        .on_hover_text(lang.tr(
+                            "Buka pengaturan untuk menyesuaikan tombol pintasan keyboard",
+                            "Open settings to customize keyboard shortcuts",
+                        ))
+                        .clicked()
+                    {
+                        self.show_shortcut_modal = true;
+                    }
+                    ui.add_space(4.0);
+
                     // Backup buttons
                     if ui.button("📥 Export Library Backup (.json)").clicked()
                         && let Some(path) = rfd::FileDialog::new()
@@ -1313,5 +1326,11 @@ impl RustNotesApp {
                     }
                 });
         }
+
+        if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
+            self.show_shortcut_modal = !self.show_shortcut_modal;
+        }
+
+        self.render_shortcut_modal(ctx);
     }
 }

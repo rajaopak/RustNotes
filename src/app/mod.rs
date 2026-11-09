@@ -5,11 +5,13 @@ pub mod editor_sidebar;
 pub mod editor_view;
 pub mod library_view;
 pub mod modals;
+pub mod shortcuts;
 pub mod state;
 pub mod theme;
 pub mod types;
 
 pub use cover::*;
+pub use shortcuts::*;
 pub use state::*;
 pub use theme::*;
 pub use types::*;

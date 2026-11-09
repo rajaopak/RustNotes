@@ -1,9 +1,12 @@
 use super::state::RustNotesApp;
-use super::types::AddPagePosition;
+use super::types::{AddPagePosition, ShortcutModalTab};
 use crate::model::{
     CustomTemplate, OutlineItem, Page, PageOrientation, PageTemplate, PaperSizePreset,
+    ShortcutAction,
 };
-use crate::storage::{app_storage_dir, save_asset_to_notebook, save_custom_template};
+use crate::storage::{
+    app_storage_dir, save_asset_to_notebook, save_custom_template, save_settings_to_dir,
+};
 use eframe::egui::{self, Align, Button, Color32, Layout, RichText};
 
 impl RustNotesApp {
@@ -749,113 +752,7 @@ impl RustNotesApp {
                 });
         }
 
-        if self.show_shortcut_modal {
-            egui::Window::new("⌨ Pintasan Keyboard & Gestur (Shortcuts)")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.set_width(440.0);
-                    ui.label(
-                        RichText::new("Pintasan Keyboard, Alat & Gestur Kanvas")
-                            .strong()
-                            .size(15.0),
-                    );
-                    ui.add_space(8.0);
-
-                    egui::Grid::new("shortcut_table")
-                        .striped(true)
-                        .spacing([24.0, 6.0])
-                        .show(ui, |ui| {
-                            ui.strong("Pintasan");
-                            ui.strong("Fungsi");
-                            ui.end_row();
-
-                            ui.label("P");
-                            ui.label("Alat Pena (Pen)");
-                            ui.end_row();
-
-                            ui.label("H");
-                            ui.label("Alat Penstabilo (Highlighter)");
-                            ui.end_row();
-
-                            ui.label("E");
-                            ui.label("Alat Penghapus (Eraser)");
-                            ui.end_row();
-
-                            ui.label("L");
-                            ui.label("Alat Lasso / Seleksi");
-                            ui.end_row();
-
-                            ui.label("T");
-                            ui.label("Alat Teks");
-                            ui.end_row();
-
-                            ui.label("S / N");
-                            ui.label("Alat Bentuk (Shape) / Catatan Tempel (Sticky Note)");
-                            ui.end_row();
-
-                            ui.label("Ctrl + S");
-                            ui.label("Simpan Dokumen Segera (Force Save)");
-                            ui.end_row();
-
-                            ui.label("Ctrl + 0");
-                            ui.label("Reset Zoom ke 100%");
-                            ui.end_row();
-
-                            ui.label("Ctrl + Scroll / Pinch");
-                            ui.label("Zoom In / Out Sesuai Posisi Kursor Mouse");
-                            ui.end_row();
-
-                            ui.label("Arrow Keys (↑ ↓ ← →)");
-                            ui.label("Geser / Pan Kanvas ke 4 Arah (Shift + Panah: Cepat)");
-                            ui.end_row();
-
-                            ui.label("Ctrl + A");
-                            ui.label("Pilih Semua Objek Halaman");
-                            ui.end_row();
-
-                            ui.label("Ctrl + C / X / V / D");
-                            ui.label("Salin / Potong / Tempel / Gandakan Objek");
-                            ui.end_row();
-
-                            ui.label("Delete / Backspace");
-                            ui.label("Hapus Objek Terpilih");
-                            ui.end_row();
-
-                            ui.label("Ctrl + Z / Ctrl + Y");
-                            ui.label("Undo / Redo");
-                            ui.end_row();
-
-                            ui.label("Shift + Drag Handle");
-                            ui.label("Skala Proporsional (Kunci Rasio Aspek)");
-                            ui.end_row();
-
-                            ui.label("Drag Handle Atas ⟳");
-                            ui.label("Rotasi Bebas Objek Terpilih (Snap 15° saat dekat)");
-                            ui.end_row();
-
-                            ui.label("PageUp / PageDown");
-                            ui.label("Navigasi Halaman Sebelumnya / Berikutnya");
-                            ui.end_row();
-
-                            ui.label("Ctrl + Home / End");
-                            ui.label("Lompat ke Halaman Pertama / Terakhir");
-                            ui.end_row();
-
-                            ui.label("Esc");
-                            ui.label("Tutup Dialog Pop-up / Batalkan Seleksi");
-                            ui.end_row();
-                        });
-
-                    ui.add_space(10.0);
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("Tutup").clicked() {
-                            self.show_shortcut_modal = false;
-                        }
-                    });
-                });
-        }
+        self.render_shortcut_modal(ctx);
 
         // Fase 8.6: Handwriting OCR Inspector & Search Index Modal
         if self.show_ocr_modal {
@@ -993,5 +890,360 @@ impl RustNotesApp {
                     });
                 });
         }
+    }
+
+    pub fn render_shortcut_modal(&mut self, ctx: &egui::Context) {
+        if !self.show_shortcut_modal {
+            return;
+        }
+
+        let lang = self.settings.language;
+
+        // Logika Penangkapan Rebinding Tombol saat pengguna sedang merekam shortcut baru
+        if let Some(target_action) = self.rebinding_shortcut {
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.rebinding_shortcut = None;
+            } else if let Some(new_binding) =
+                crate::app::capture_rebinding_key(&ctx.input(|i| i.clone()))
+            {
+                self.settings.shortcuts.set(target_action, new_binding);
+                let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
+                self.rebinding_shortcut = None;
+                self.toast_message = Some(
+                    lang.tr(
+                        "✅ Pintasan keyboard berhasil diperbarui!",
+                        "✅ Keyboard shortcut updated successfully!",
+                    )
+                    .to_string(),
+                );
+            }
+        }
+
+        egui::Window::new(lang.tr(
+            "⌨ Pengaturan & Panduan Pintasan Keyboard",
+            "⌨ Keyboard Shortcuts & Settings",
+        ))
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.set_width(520.0);
+
+            // Tab Switcher
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(
+                        self.shortcut_modal_tab == ShortcutModalTab::Customize,
+                        lang.tr("⚙ Atur Pintasan Keyboard", "⚙ Customize Shortcuts"),
+                    )
+                    .clicked()
+                {
+                    self.shortcut_modal_tab = ShortcutModalTab::Customize;
+                }
+                if ui
+                    .selectable_label(
+                        self.shortcut_modal_tab == ShortcutModalTab::CheatSheet,
+                        lang.tr("📖 Panduan Gestur & Kanvas", "📖 Canvas Gestures & Guide"),
+                    )
+                    .clicked()
+                {
+                    self.shortcut_modal_tab = ShortcutModalTab::CheatSheet;
+                }
+            });
+            ui.separator();
+
+            match self.shortcut_modal_tab {
+                ShortcutModalTab::Customize => {
+                    ui.label(
+                        RichText::new(lang.tr(
+                            "Klik pada tombol pintasan untuk merekam kombinasi tombol baru dari keyboard.",
+                            "Click on any shortcut badge to record a new key combination from your keyboard.",
+                        ))
+                        .size(11.5)
+                        .color(Color32::GRAY),
+                    );
+                    ui.add_space(4.0);
+
+                    // Filter Pencarian
+                    ui.horizontal(|ui| {
+                        ui.label("🔍");
+                        ui.text_edit_singleline(&mut self.shortcut_search_query);
+                        if !self.shortcut_search_query.is_empty() && ui.small_button("✕").clicked()
+                        {
+                            self.shortcut_search_query.clear();
+                        }
+                    });
+                    ui.add_space(6.0);
+
+                    // Deteksi Konflik Pintasan
+                    let mut binding_counts: std::collections::HashMap<String, usize> =
+                        std::collections::HashMap::new();
+                    for &act in &ShortcutAction::ALL {
+                        let str_b = self.settings.shortcuts.get(act).display_string();
+                        *binding_counts.entry(str_b).or_insert(0) += 1;
+                    }
+
+                    let search = self.shortcut_search_query.trim().to_lowercase();
+                    let filtered_actions: Vec<ShortcutAction> = ShortcutAction::ALL
+                        .iter()
+                        .copied()
+                        .filter(|&act| {
+                            if search.is_empty() {
+                                return true;
+                            }
+                            let lbl = act.label(lang).to_lowercase();
+                            let b_str = self
+                                .settings
+                                .shortcuts
+                                .get(act)
+                                .display_string()
+                                .to_lowercase();
+                            lbl.contains(&search) || b_str.contains(&search)
+                        })
+                        .collect();
+
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        egui::Grid::new("custom_shortcuts_table")
+                            .striped(true)
+                            .spacing([16.0, 6.0])
+                            .min_col_width(120.0)
+                            .show(ui, |ui| {
+                                ui.strong(lang.tr("Fungsi / Aksi", "Function / Action"));
+                                ui.strong(lang.tr("Kombinasi Tombol", "Key Combination"));
+                                ui.strong(lang.tr("Reset", "Reset"));
+                                ui.end_row();
+
+                                for act in filtered_actions {
+                                    ui.label(act.label(lang));
+
+                                    let current_binding = self.settings.shortcuts.get(act);
+                                    let disp = current_binding.display_string();
+                                    let is_rebinding = self.rebinding_shortcut == Some(act);
+                                    let has_conflict =
+                                        binding_counts.get(&disp).copied().unwrap_or(0) > 1;
+
+                                    ui.horizontal(|ui| {
+                                        let btn_text = if is_rebinding {
+                                            RichText::new(lang.tr(
+                                                "⏳ Tekan tombol... (Esc batal)",
+                                                "⏳ Press key... (Esc cancels)",
+                                            ))
+                                            .color(Color32::from_rgb(255, 215, 0))
+                                            .strong()
+                                        } else {
+                                            RichText::new(&disp).color(Color32::WHITE).strong()
+                                        };
+
+                                        let btn = Button::new(btn_text).fill(if is_rebinding {
+                                            Color32::from_rgb(180, 80, 0)
+                                        } else if has_conflict {
+                                            Color32::from_rgb(140, 40, 40)
+                                        } else {
+                                            Color32::from_rgb(45, 60, 85)
+                                        });
+
+                                        if ui
+                                            .add(btn)
+                                            .on_hover_text(lang.tr(
+                                                "Klik untuk merekam tombol baru",
+                                                "Click to record new key",
+                                            ))
+                                            .clicked()
+                                        {
+                                            self.rebinding_shortcut = if is_rebinding {
+                                                None
+                                            } else {
+                                                Some(act)
+                                            };
+                                        }
+
+                                        if has_conflict && !is_rebinding {
+                                            ui.label(
+                                                RichText::new("⚠")
+                                                    .color(Color32::from_rgb(255, 90, 80))
+                                                    .size(11.0),
+                                            )
+                                            .on_hover_text(lang.tr(
+                                                "Kombinasi tombol ini dipakai oleh lebih dari satu fungsi",
+                                                "This key combination is used by multiple actions",
+                                            ));
+                                        }
+                                    });
+
+                                    // Tombol Reset Individu
+                                    let is_default = current_binding == act.default_binding();
+                                    if !is_default {
+                                        if ui
+                                            .small_button("↺")
+                                            .on_hover_text(lang.tr(
+                                                "Reset aksi ini ke bawaan",
+                                                "Reset this action to default",
+                                            ))
+                                            .clicked()
+                                        {
+                                            self.settings
+                                                .shortcuts
+                                                .set(act, act.default_binding());
+                                            let _ = save_settings_to_dir(
+                                                &app_storage_dir(),
+                                                &self.settings,
+                                            );
+                                        }
+                                    } else {
+                                        ui.label(
+                                            RichText::new("•").size(10.0).color(Color32::DARK_GRAY),
+                                        );
+                                    }
+
+                                    ui.end_row();
+                                }
+                            });
+                    });
+
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(lang.tr(
+                                "↺ Reset Semua ke Bawaan",
+                                "↺ Reset All to Defaults",
+                            ))
+                            .clicked()
+                        {
+                            self.settings.shortcuts.reset_all();
+                            let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
+                            self.rebinding_shortcut = None;
+                            self.toast_message = Some(
+                                lang.tr(
+                                    "↺ Seluruh pintasan dikembalikan ke bawaan.",
+                                    "↺ All shortcuts restored to defaults.",
+                                )
+                                .to_string(),
+                            );
+                        }
+
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.button(lang.tr("Tutup (Esc)", "Close (Esc)")).clicked() {
+                                self.rebinding_shortcut = None;
+                                self.show_shortcut_modal = false;
+                            }
+                            if ui
+                                .add(
+                                    Button::new(
+                                        RichText::new(lang.tr(
+                                            "💾 Simpan Pengaturan",
+                                            "💾 Save Settings",
+                                        ))
+                                        .strong()
+                                        .color(Color32::WHITE),
+                                    )
+                                    .fill(Color32::from_rgb(0, 114, 206)),
+                                )
+                                .clicked()
+                            {
+                                let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
+                                self.rebinding_shortcut = None;
+                                self.show_shortcut_modal = false;
+                                self.toast_message = Some(
+                                    lang.tr(
+                                        "💾 Pengaturan pintasan keyboard disimpan.",
+                                        "💾 Keyboard shortcut settings saved.",
+                                    )
+                                    .to_string(),
+                                );
+                            }
+                        });
+                    });
+                }
+
+                ShortcutModalTab::CheatSheet => {
+                    ui.label(
+                        RichText::new(lang.tr(
+                            "Panduan Lengkap Gestur Mouse, Pintasan Navigasi & Kanvas",
+                            "Full Guide to Mouse Gestures, Navigation & Canvas Shortcuts",
+                        ))
+                        .strong()
+                        .size(13.0),
+                    );
+                    ui.add_space(4.0);
+
+                    egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
+                        egui::Grid::new("shortcut_table")
+                            .striped(true)
+                            .spacing([24.0, 6.0])
+                            .show(ui, |ui| {
+                                ui.strong(lang.tr("Pintasan / Gestur", "Shortcut / Gesture"));
+                                ui.strong(lang.tr("Fungsi", "Function"));
+                                ui.end_row();
+
+                                ui.label("Ctrl + Scroll / Pinch");
+                                ui.label(lang.tr(
+                                    "Zoom In / Out Sesuai Posisi Kursor Mouse",
+                                    "Zoom In / Out Centered at Cursor Position",
+                                ));
+                                ui.end_row();
+
+                                ui.label("Arrow Keys (↑ ↓ ← →)");
+                                ui.label(lang.tr(
+                                    "Geser / Pan Kanvas ke 4 Arah (Shift + Panah: Cepat)",
+                                    "Pan Canvas in 4 Directions (Shift + Arrow: Fast)",
+                                ));
+                                ui.end_row();
+
+                                ui.label("Shift + Drag Handle");
+                                ui.label(lang.tr(
+                                    "Skala Proporsional (Kunci Rasio Aspek)",
+                                    "Proportional Scaling (Lock Aspect Ratio)",
+                                ));
+                                ui.end_row();
+
+                                ui.label("Drag Handle Atas ⟳");
+                                ui.label(lang.tr(
+                                    "Rotasi Bebas Objek Terpilih (Snap 15° saat dekat)",
+                                    "Free Rotation of Selected Objects (15° Snap)",
+                                ));
+                                ui.end_row();
+
+                                ui.label(lang.tr("Klik Kanan Kanvas", "Right Click Canvas"));
+                                ui.label(lang.tr(
+                                    "Menu Konteks (Balik H/V, Depan/Belakang, Kunci Objek)",
+                                    "Context Menu (Flip H/V, Order, Lock Objects)",
+                                ));
+                                ui.end_row();
+
+                                ui.label("PageUp / PageDown");
+                                ui.label(lang.tr(
+                                    "Navigasi Halaman Sebelumnya / Berikutnya",
+                                    "Navigate Previous / Next Page",
+                                ));
+                                ui.end_row();
+
+                                ui.label("Ctrl + Home / End");
+                                ui.label(lang.tr(
+                                    "Lompat ke Halaman Pertama / Terakhir",
+                                    "Jump to First / Last Page",
+                                ));
+                                ui.end_row();
+
+                                ui.label("Esc");
+                                ui.label(lang.tr(
+                                    "Tutup Dialog Pop-up / Batalkan Seleksi Objek",
+                                    "Close Pop-ups / Deselect Objects",
+                                ));
+                                ui.end_row();
+                            });
+                    });
+
+                    ui.add_space(10.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button(lang.tr("Tutup (Esc)", "Close (Esc)")).clicked() {
+                            self.show_shortcut_modal = false;
+                        }
+                    });
+                }
+            }
+        });
     }
 }

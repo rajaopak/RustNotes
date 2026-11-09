@@ -1,5 +1,6 @@
 use super::types::{
-    AddPagePosition, COVER_PALETTE, NavView, SidebarTab, ViewMode, get_windows_clipboard_sequence,
+    AddPagePosition, COVER_PALETTE, NavView, ShortcutModalTab, SidebarTab, ViewMode,
+    get_windows_clipboard_sequence,
 };
 use crate::canvas::CanvasState;
 use crate::model::{
@@ -67,8 +68,11 @@ pub struct RustNotesApp {
     pub(crate) dirty_notebooks: HashSet<String>,
     pub(crate) last_modified: HashMap<String, Instant>,
 
-    // Fase 4: Shortcut cheat sheet modal
+    // Fase 4: Shortcut cheat sheet modal & custom shortcut settings
     pub(crate) show_shortcut_modal: bool,
+    pub(crate) shortcut_modal_tab: ShortcutModalTab,
+    pub(crate) rebinding_shortcut: Option<crate::model::ShortcutAction>,
+    pub(crate) shortcut_search_query: String,
 
     // Fase 5: Nested Folders, Outline/Bookmarks, Search, Custom Templates
     pub(crate) current_folder_id: Option<String>,
@@ -251,6 +255,9 @@ impl Default for RustNotesApp {
             dirty_notebooks: HashSet::new(),
             last_modified: HashMap::new(),
             show_shortcut_modal: false,
+            shortcut_modal_tab: ShortcutModalTab::default(),
+            rebinding_shortcut: None,
+            shortcut_search_query: String::new(),
             current_folder_id: None,
             show_new_folder_modal: false,
             new_folder_name: String::new(),
