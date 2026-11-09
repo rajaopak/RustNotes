@@ -11,6 +11,48 @@ use eframe::egui::{
     Vec2,
 };
 
+/// Menggambar ikon penghapus (eraser) vektor dengan proporsi seimbang dan detail dua-bagian (rubber & sleeve).
+fn paint_eraser_glyph(painter: &egui::Painter, rect: Rect, color: Color32) {
+    let c = rect.center();
+    // Kemiringan ikon penghapus sudut -40 derajat
+    let cos = 0.7660_f32;
+    let sin = -0.6428_f32;
+    let u = Vec2::new(cos, sin); // sumbu panjang
+    let v = Vec2::new(-sin, cos); // sumbu lebar
+
+    let half_l = 6.4;
+    let half_w = 3.6;
+
+    // Titik sudut: Kiri-bawah (sleeve/selongsong) -> Kanan-atas (karet penghapus)
+    let p_sleeve_back_t = c - u * half_l - v * half_w;
+    let p_rubber_tip_t = c + u * half_l - v * half_w;
+    let p_rubber_tip_b = c + u * half_l + v * half_w;
+    let p_sleeve_back_b = c - u * half_l + v * half_w;
+
+    // Garis batas karet vs gagang (karet 55% depan, gagang 45% belakang)
+    let p_mid_t = c - u * 0.6 - v * half_w;
+    let p_mid_b = c - u * 0.6 + v * half_w;
+
+    // Kepala karet: poligon isi solid
+    painter.add(egui::Shape::convex_polygon(
+        vec![p_mid_t, p_rubber_tip_t, p_rubber_tip_b, p_mid_b],
+        color,
+        Stroke::NONE,
+    ));
+
+    // Selongsong / sleeve: poligon bergaris dengan isi transparan
+    painter.add(egui::Shape::convex_polygon(
+        vec![p_sleeve_back_t, p_mid_t, p_mid_b, p_sleeve_back_b],
+        Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 60),
+        Stroke::new(1.3_f32, color),
+    ));
+
+    // Garis aksen selongsong
+    let p_stripe_t = c - u * 3.5 - v * (half_w * 0.75);
+    let p_stripe_b = c - u * 3.5 + v * (half_w * 0.75);
+    painter.line_segment([p_stripe_t, p_stripe_b], Stroke::new(1.0_f32, color));
+}
+
 impl RustNotesApp {
     /// Render navbar editor (bilah atas Goodnotes navy) beserta pop-up bawaannya.
     /// Mengembalikan alse jika pengguna memilih kembali ke perpustakaan.
@@ -18,26 +60,45 @@ impl RustNotesApp {
         let notebook_id = self.library.notebooks[nb_idx].id.clone();
         let lang = self.settings.language;
 
-        // Authentic GoodNotes Single Navy Top Navbar (#284872) + Pop-ups for Specific & Advanced Features
+        // Modern Floating GoodNotes Navy Navbar (#223e62) hovering above the workspace
         let mut return_to_library = false;
+        let outer_panel_bg = ctx.style().visuals.panel_fill;
+
         egui::TopBottomPanel::top("editor_navbar")
-            .min_height(44.0)
+            .frame(
+                egui::Frame::NONE
+                    .fill(outer_panel_bg)
+                    .inner_margin(egui::Margin {
+                        left: 12,
+                        right: 12,
+                        top: 6,
+                        bottom: 6,
+                    }),
+            )
             .show(ctx, |ui| {
-                ui.painter().rect_filled(
-                    ui.max_rect(),
-                    0.0,
-                    Color32::from_rgb(40, 72, 114), // #284872 GoodNotes Navy
-                );
+                let floating_frame = egui::Frame::NONE
+                    .fill(Color32::from_rgb(34, 62, 98)) // Authentic GoodNotes Navy #223e62
+                    .stroke(Stroke::new(
+                        1.0_f32,
+                        Color32::from_rgba_unmultiplied(75, 120, 175, 180),
+                    )) // Crisp subtle border
+                    .corner_radius(10.0) // Noticeably rounded, modern
+                    .shadow(egui::epaint::Shadow {
+                        offset: [0, 4],
+                        blur: 14,
+                        spread: 0,
+                        color: Color32::from_rgba_unmultiplied(0, 0, 0, 75), // Smooth elevation shadow
+                    })
+                    .inner_margin(egui::Margin::symmetric(10, 5));
 
-                ui.add_space(5.0);
-                let total_w = ui.available_width();
-                let is_wide = total_w >= 1020.0;
+                floating_frame.show(ui, |ui| {
+                    let total_w = ui.available_width();
+                    let is_wide = total_w >= 1020.0;
 
-                // Helper closures/blocks via macro-free scoped methods on ui:
-                // Baris Utama: Kiri (Navigasi & Judul), Tengah (Tools Center pada layar lebar), Paling Kanan (Settings & Page Actions)
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    ui.add_space(6.0);
+                    // Baris Utama: Kiri (Navigasi & Judul), Tengah (Tools Center pada layar lebar), Paling Kanan (Settings & Page Actions)
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        ui.add_space(2.0);
 
                     // --- 1. LEFT GROUP: Back, Document Title ▾, Sidebar, Search, Zoom Win, Bookmark ---
                     if ui
@@ -183,18 +244,29 @@ impl RustNotesApp {
                         self.mark_dirty(&notebook_id);
                     }
 
+                    let div_top = ui.cursor().top() + 4.0;
+                    let div_bot = ui.cursor().bottom().max(div_top + 24.0) - 4.0;
+                    let div_left_x = ui.cursor().min.x + 3.0;
+                    ui.painter().line_segment(
+                        [Pos2::new(div_left_x, div_top), Pos2::new(div_left_x, div_bot)],
+                        Stroke::new(
+                            1.0_f32,
+                            Color32::from_rgba_unmultiplied(255, 255, 255, 45),
+                        ),
+                    );
+                    ui.add_space(8.0);
                     let left_end_x = ui.cursor().min.x;
 
-                    // --- 3. FAR RIGHT GROUP: Settings (`⋯`), Export (`📤`), Add Page (`📄+`), Paper Size (`📐`), Scroll Mode (`📜`) ---
+                    // --- 3. FAR RIGHT GROUP: Settings (`⚙`), Export (`📤`), Add Page (`📄+`), Paper Size (`📐`), Scroll Mode (`📜`) ---
                     let mut right_start_x = ui.max_rect().right();
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.add_space(8.0);
+                        ui.add_space(4.0);
                         ui.spacing_mut().item_spacing.x = 6.0;
 
-                        // GoodNotes Circular More Menu / Settings Button (`⋯`) — Paling Kanan
+                        // GoodNotes Circular More Menu / Settings Button (`⚙`) — Paling Kanan
                         let more_btn = Button::new(
-                            RichText::new("⋯")
-                                .size(16.0)
+                            RichText::new("⚙")
+                                .size(15.0)
                                 .strong()
                                 .color(if self.show_more_menu_popup {
                                     Color32::from_rgb(30, 58, 95)
@@ -212,7 +284,7 @@ impl RustNotesApp {
                         if ui
                             .add(more_btn)
                             .on_hover_text(lang.tr(
-                                "Pengaturan & Fitur Lanjutan (GoodNotes More Menu)",
+                                "Pengaturan & Fitur Lanjutan (Settings)",
                                 "Settings & Advanced Features Pop-up",
                             ))
                             .clicked()
@@ -454,16 +526,21 @@ impl RustNotesApp {
                                     (ActiveTool::Shape(_), ActiveTool::Shape(_)) => true,
                                     (a, b) => a == b,
                                 };
-                                let btn = Button::new(
-                                    RichText::new(icon)
-                                        .size(14.0)
-                                        .strong()
-                                        .color(if is_sel {
-                                            Color32::from_rgb(30, 58, 95)
-                                        } else {
-                                            Color32::WHITE
-                                        }),
-                                )
+                                let icon_col = if is_sel {
+                                    Color32::from_rgb(30, 58, 95)
+                                } else {
+                                    Color32::WHITE
+                                };
+                                let btn = if tool_var == ActiveTool::Eraser {
+                                    Button::new(" ")
+                                } else {
+                                    Button::new(
+                                        RichText::new(icon)
+                                            .size(14.0)
+                                            .strong()
+                                            .color(icon_col),
+                                    )
+                                }
                                 .fill(if is_sel {
                                     Color32::from_rgb(214, 232, 255)
                                 } else {
@@ -472,7 +549,12 @@ impl RustNotesApp {
                                 .corner_radius(7.0)
                                 .min_size(Vec2::new(28.0, 28.0));
 
-                                if center_ui.add(btn).on_hover_text(tooltip).clicked() {
+                                let resp = center_ui.add(btn).on_hover_text(tooltip);
+                                if tool_var == ActiveTool::Eraser {
+                                    paint_eraser_glyph(center_ui.painter(), resp.rect, icon_col);
+                                }
+
+                                if resp.clicked() {
                                     if is_sel {
                                         self.show_tool_popup = !self.show_tool_popup;
                                         self.show_more_menu_popup = false;
@@ -606,16 +688,21 @@ impl RustNotesApp {
                                     (ActiveTool::Shape(_), ActiveTool::Shape(_)) => true,
                                     (a, b) => a == b,
                                 };
-                                let btn = Button::new(
-                                    RichText::new(icon)
-                                        .size(14.0)
-                                        .strong()
-                                        .color(if is_sel {
-                                            Color32::from_rgb(30, 58, 95)
-                                        } else {
-                                            Color32::WHITE
-                                        }),
-                                )
+                                let icon_col = if is_sel {
+                                    Color32::from_rgb(30, 58, 95)
+                                } else {
+                                    Color32::WHITE
+                                };
+                                let btn = if tool_var == ActiveTool::Eraser {
+                                    Button::new(" ")
+                                } else {
+                                    Button::new(
+                                        RichText::new(icon)
+                                            .size(14.0)
+                                            .strong()
+                                            .color(icon_col),
+                                    )
+                                }
                                 .fill(if is_sel {
                                     Color32::from_rgb(214, 232, 255)
                                 } else {
@@ -624,7 +711,12 @@ impl RustNotesApp {
                                 .corner_radius(7.0)
                                 .min_size(Vec2::new(28.0, 28.0));
 
-                                if ui.add(btn).on_hover_text(tooltip).clicked() {
+                                let resp = ui.add(btn).on_hover_text(tooltip);
+                                if tool_var == ActiveTool::Eraser {
+                                    paint_eraser_glyph(ui.painter(), resp.rect, icon_col);
+                                }
+
+                                if resp.clicked() {
                                     if is_sel {
                                         self.show_tool_popup = !self.show_tool_popup;
                                         self.show_more_menu_popup = false;
@@ -703,8 +795,8 @@ impl RustNotesApp {
                         });
                     });
                 }
-                ui.add_space(4.0);
             });
+        });
 
         if return_to_library {
             let nb_id = notebook_id.clone();
@@ -720,7 +812,7 @@ impl RustNotesApp {
             egui::Window::new("📄 Info & Judul Dokumen")
                 .collapsible(false)
                 .resizable(false)
-                .anchor(egui::Align2::LEFT_TOP, [44.0, 50.0])
+                .anchor(egui::Align2::LEFT_TOP, [44.0, 56.0])
                 .show(ctx, |ui| {
                     ui.set_width(290.0);
                     ui.label(
@@ -769,7 +861,7 @@ impl RustNotesApp {
             egui::Window::new("🎨 Pengaturan Alat & Palet")
                 .collapsible(false)
                 .resizable(false)
-                .anchor(egui::Align2::CENTER_TOP, [0.0, 50.0])
+                .anchor(egui::Align2::CENTER_TOP, [0.0, 56.0])
                 .show(ctx, |ui| {
                     ui.set_width(360.0);
 
@@ -1053,7 +1145,7 @@ impl RustNotesApp {
                 .id(egui::Id::new("goodnotes_more_menu_popup"))
                 .collapsible(false)
                 .resizable(false)
-                .anchor(egui::Align2::RIGHT_TOP, [-12.0, 50.0])
+                .anchor(egui::Align2::RIGHT_TOP, [-12.0, 56.0])
                 .frame(
                     egui::Frame::window(&ctx.style())
                         .fill(Color32::from_rgb(26, 26, 28))

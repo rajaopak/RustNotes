@@ -1752,8 +1752,8 @@ fn test_shape_text_bounds_and_auto_fit() {
 
     // 3. Ellipse: batas dalam elips ~0.7071
     let (w_ell, h_ell) = calculate_shape_text_bounds(ShapeKind::Ellipse, 200.0, 100.0, 0.0, 2.0);
-    assert!((w_ell - (200.0 * 0.7071 - 10.0)).abs() < 0.1);
-    assert!((h_ell - (100.0 * 0.7071 - 10.0)).abs() < 0.1);
+    assert!((w_ell - (200.0 * std::f32::consts::FRAC_1_SQRT_2 - 10.0)).abs() < 0.1);
+    assert!((h_ell - (100.0 * std::f32::consts::FRAC_1_SQRT_2 - 10.0)).abs() < 0.1);
 
     // 4. Diamond: batas dalam belah ketupat ~0.5
     let (w_dia, h_dia) = calculate_shape_text_bounds(ShapeKind::Diamond, 200.0, 100.0, 0.0, 2.0);

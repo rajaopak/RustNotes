@@ -27,6 +27,87 @@ use eframe::egui::{
 use std::time::Instant;
 use uuid::Uuid;
 
+/// Tema visual dinamis untuk bilah alat mengambang (Floating Toolbars: Connector, Shape).
+/// Menyesuaikan warna latar belakang, teks, border, dan tombol dengan tema aktif aplikasi (Dark / Light).
+#[derive(Clone, Copy, Debug)]
+pub struct FloatingToolbarStyle {
+    pub bg_color: Color32,
+    pub border_color: Color32,
+    pub border_stroke: Stroke,
+    pub primary_text_color: Color32,
+    pub secondary_text_color: Color32,
+    pub inactive_btn_bg: Color32,
+    pub hovered_btn_bg: Color32,
+    pub active_btn_bg: Color32,
+    pub divider_color: Color32,
+    pub divider_stroke: Stroke,
+    pub shadow: egui::epaint::Shadow,
+    pub is_dark: bool,
+}
+
+impl FloatingToolbarStyle {
+    pub fn from_ui(ui: &egui::Ui) -> Self {
+        let is_dark = ui.visuals().dark_mode;
+        if is_dark {
+            let bg_color = Color32::from_rgba_unmultiplied(36, 34, 36, 250);
+            let border_color = Color32::from_rgb(68, 65, 68);
+            let primary_text_color = Color32::from_rgb(240, 240, 242);
+            let secondary_text_color = Color32::from_rgb(168, 166, 172);
+            let inactive_btn_bg = Color32::from_rgb(48, 45, 48);
+            let hovered_btn_bg = Color32::from_rgb(64, 60, 64);
+            let active_btn_bg = Color32::from_rgb(0, 114, 206);
+            let divider_color = Color32::from_rgb(65, 62, 65);
+            Self {
+                bg_color,
+                border_color,
+                border_stroke: Stroke::new(1.0_f32, border_color),
+                primary_text_color,
+                secondary_text_color,
+                inactive_btn_bg,
+                hovered_btn_bg,
+                active_btn_bg,
+                divider_color,
+                divider_stroke: Stroke::new(1.0_f32, divider_color),
+                shadow: egui::epaint::Shadow {
+                    offset: [0, 4],
+                    blur: 16,
+                    spread: 1,
+                    color: Color32::from_rgba_unmultiplied(0, 0, 0, 110),
+                },
+                is_dark: true,
+            }
+        } else {
+            let bg_color = Color32::from_rgba_unmultiplied(252, 251, 249, 250);
+            let border_color = Color32::from_rgb(205, 218, 232);
+            let primary_text_color = Color32::from_rgb(33, 37, 41);
+            let secondary_text_color = Color32::from_rgb(108, 117, 125);
+            let inactive_btn_bg = Color32::from_rgb(238, 236, 232);
+            let hovered_btn_bg = Color32::from_rgb(222, 228, 238);
+            let active_btn_bg = Color32::from_rgb(0, 114, 206);
+            let divider_color = Color32::from_rgb(215, 212, 206);
+            Self {
+                bg_color,
+                border_color,
+                border_stroke: Stroke::new(1.0_f32, border_color),
+                primary_text_color,
+                secondary_text_color,
+                inactive_btn_bg,
+                hovered_btn_bg,
+                active_btn_bg,
+                divider_color,
+                divider_stroke: Stroke::new(1.0_f32, divider_color),
+                shadow: egui::epaint::Shadow {
+                    offset: [0, 3],
+                    blur: 12,
+                    spread: 0,
+                    color: Color32::from_rgba_unmultiplied(0, 0, 0, 40),
+                },
+                is_dark: false,
+            }
+        }
+    }
+}
+
 pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState) -> Response {
     let desired_size = Vec2::new(page.width * state.zoom, page.height * state.zoom);
     let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click_and_drag());
@@ -2041,23 +2122,26 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 (s_mid.y - 28.0).max(rect.top() + 8.0),
             );
 
+            let tb_style = FloatingToolbarStyle::from_ui(ui);
             let area_id = egui::Id::new("floating_connector_toolbar");
             egui::Area::new(area_id)
                 .fixed_pos(panel_pos)
                 .pivot(egui::Align2::CENTER_BOTTOM)
                 .show(ui.ctx(), |ui| {
                     egui::Frame::popup(ui.style())
-                        .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 250))
-                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(205, 218, 232)))
+                        .fill(tb_style.bg_color)
+                        .stroke(tb_style.border_stroke)
                         .corner_radius(8.0)
-                        .shadow(egui::epaint::Shadow {
-                            offset: [0, 3],
-                            blur: 10,
-                            spread: 0,
-                            color: Color32::from_rgba_unmultiplied(0, 0, 0, 35),
-                        })
+                        .shadow(tb_style.shadow)
                         .inner_margin(egui::Margin::symmetric(8, 4))
                         .show(ui, |ui| {
+                            let visuals = ui.visuals_mut();
+                            visuals.override_text_color = Some(tb_style.primary_text_color);
+                            visuals.widgets.inactive.bg_fill = tb_style.inactive_btn_bg;
+                            visuals.widgets.hovered.bg_fill = tb_style.hovered_btn_bg;
+                            visuals.widgets.active.bg_fill = tb_style.active_btn_bg;
+                            visuals.widgets.noninteractive.bg_stroke = tb_style.divider_stroke;
+
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
 
@@ -2158,6 +2242,14 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                 ui.separator();
 
                                 // 3. Warna Garis
+                                let cur_col: Option<Color32> = page.objects.iter().find_map(|o| {
+                                    if o.id() == conn_id && let DrawObject::Connector { style, .. } = o {
+                                        Some(style.stroke_color.to_color32())
+                                    } else {
+                                        None
+                                    }
+                                });
+
                                 for &col in &[
                                     Color32::from_rgb(33, 37, 41),
                                     Color32::from_rgb(0, 114, 206),
@@ -2166,16 +2258,30 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                     Color32::from_rgb(253, 126, 20),
                                     Color32::from_rgb(111, 66, 193),
                                 ] {
+                                    let is_selected = cur_col == Some(col);
                                     let (c_rect, resp) = ui.allocate_exact_size(
-                                        Vec2::splat(16.0),
+                                        Vec2::splat(18.0),
                                         egui::Sense::click(),
                                     );
                                     ui.painter().circle_filled(c_rect.center(), 7.0, col);
-                                    if resp.hovered() {
+                                    if tb_style.is_dark && col == Color32::from_rgb(33, 37, 41) {
                                         ui.painter().circle_stroke(
                                             c_rect.center(),
-                                            8.0,
-                                            Stroke::new(1.5_f32, Color32::from_rgb(0, 114, 206)),
+                                            7.0,
+                                            Stroke::new(1.0_f32, Color32::from_rgb(90, 88, 92)),
+                                        );
+                                    }
+                                    if is_selected {
+                                        ui.painter().circle_stroke(
+                                            c_rect.center(),
+                                            9.0,
+                                            Stroke::new(1.5_f32, tb_style.active_btn_bg),
+                                        );
+                                    } else if resp.hovered() {
+                                        ui.painter().circle_stroke(
+                                            c_rect.center(),
+                                            8.5,
+                                            Stroke::new(1.2_f32, tb_style.secondary_text_color),
                                         );
                                     }
                                     if resp.clicked() {
@@ -2193,9 +2299,18 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                 ui.separator();
 
                                 // 4. Ketebalan Garis
+                                let cur_w = page.objects.iter().find_map(|o| {
+                                    if o.id() == conn_id && let DrawObject::Connector { style, .. } = o {
+                                        Some(style.stroke_width)
+                                    } else {
+                                        None
+                                    }
+                                }).unwrap_or(2.5);
+
                                 for &w in &[1.5_f32, 2.5_f32, 4.0_f32, 6.0_f32] {
+                                    let is_active = (cur_w - w).abs() < 0.2;
                                     let label = format!("{:.0}px", w);
-                                    if ui.selectable_label(false, label).clicked() {
+                                    if ui.selectable_label(is_active, label).clicked() {
                                         state.push_undo(&page.id, &page.objects);
                                         for obj in &mut page.objects {
                                             if obj.id() == conn_id
@@ -2470,23 +2585,26 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 (min_screen_y - 24.0).max(rect.top() + 8.0),
             );
 
+            let tb_style = FloatingToolbarStyle::from_ui(ui);
             let area_id = egui::Id::new("floating_shape_toolbar");
             egui::Area::new(area_id)
                 .fixed_pos(panel_pos)
                 .pivot(egui::Align2::CENTER_BOTTOM)
                 .show(ui.ctx(), |ui| {
                     egui::Frame::popup(ui.style())
-                        .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 250))
-                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(205, 218, 232)))
+                        .fill(tb_style.bg_color)
+                        .stroke(tb_style.border_stroke)
                         .corner_radius(8.0)
-                        .shadow(egui::epaint::Shadow {
-                            offset: [0, 3],
-                            blur: 10,
-                            spread: 0,
-                            color: Color32::from_rgba_unmultiplied(0, 0, 0, 35),
-                        })
+                        .shadow(tb_style.shadow)
                         .inner_margin(egui::Margin::symmetric(8, 4))
                         .show(ui, |ui| {
+                            let visuals = ui.visuals_mut();
+                            visuals.override_text_color = Some(tb_style.primary_text_color);
+                            visuals.widgets.inactive.bg_fill = tb_style.inactive_btn_bg;
+                            visuals.widgets.hovered.bg_fill = tb_style.hovered_btn_bg;
+                            visuals.widgets.active.bg_fill = tb_style.active_btn_bg;
+                            visuals.widgets.noninteractive.bg_stroke = tb_style.divider_stroke;
+
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
 

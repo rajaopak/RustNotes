@@ -1020,7 +1020,7 @@ fn test_context_menu_paste_image_target_page_resolution() {
         id: "page-2-uuid".to_string(),
         ..Page::new(PageTemplate::Blank)
     };
-    let pages = vec![page1, page2];
+    let pages = [page1, page2];
 
     // Ambil permintaan paste image dan pastikan target page teridentifikasi tepat pada page 2 (index 1)
     let (target_id, target_pos) = state
@@ -1092,4 +1092,45 @@ fn test_paste_clipboard_with_target_pos_on_specific_page() {
     let b = crate::geometry::object_bounds(&page2.objects[0]);
     assert!((b.center().x - 200.0).abs() < 1.0);
     assert!((b.center().y - 300.0).abs() < 1.0);
+}
+
+#[test]
+fn test_floating_toolbar_theme_dark_and_light_adaptation() {
+    use super::render::FloatingToolbarStyle;
+
+    let ctx = egui::Context::default();
+
+    // 1. Uji Dark Theme
+    ctx.set_visuals(egui::Visuals::dark());
+    let _ = ctx.run(Default::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let style = FloatingToolbarStyle::from_ui(ui);
+            assert!(style.is_dark, "Harus mendeteksi mode gelap (Dark Mode)");
+            assert!(
+                style.bg_color.r() < 50 && style.bg_color.g() < 50 && style.bg_color.b() < 50,
+                "Latar belakang toolbar harus berupa permukaan gelap!"
+            );
+            assert!(
+                style.primary_text_color.r() > 200,
+                "Warna teks utama harus terang untuk kontras tinggi di mode gelap!"
+            );
+        });
+    });
+
+    // 2. Uji Light Theme
+    ctx.set_visuals(egui::Visuals::light());
+    let _ = ctx.run(Default::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let style = FloatingToolbarStyle::from_ui(ui);
+            assert!(!style.is_dark, "Harus mendeteksi mode terang (Light Mode)");
+            assert!(
+                style.bg_color.r() > 240 && style.bg_color.g() > 240,
+                "Latar belakang toolbar harus berupa permukaan terang!"
+            );
+            assert!(
+                style.primary_text_color.r() < 50,
+                "Warna teks utama harus gelap untuk kontras tinggi di mode terang!"
+            );
+        });
+    });
 }
