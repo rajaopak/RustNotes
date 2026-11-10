@@ -549,8 +549,16 @@ pub struct CustomTemplate {
     pub height: f32,
 }
 
+pub const CURRENT_NOTEBOOK_SCHEMA_VERSION: u32 = 2;
+
+fn default_notebook_schema_version() -> u32 {
+    1
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Notebook {
+    #[serde(default = "default_notebook_schema_version")]
+    pub schema_version: u32,
     pub id: String,
     pub title: String,
     pub cover_color: ColorData,
@@ -580,6 +588,7 @@ impl Notebook {
     ) -> Self {
         let now = chrono::Utc::now().timestamp_millis();
         Self {
+            schema_version: CURRENT_NOTEBOOK_SCHEMA_VERSION,
             id: Uuid::new_v4().to_string(),
             title: title.to_string(),
             cover_color: cover_color.into(),
@@ -1397,6 +1406,27 @@ mod tests {
         let lib_v1: Library =
             serde_json::from_str(legacy_v1).expect("parse legacy with version: 1");
         assert_eq!(lib_v1.schema_version, 1);
+    }
+
+    #[test]
+    fn test_legacy_notebook_schema_version_compatibility() {
+        // Legacy JSON without schema_version field defaults to 1
+        let legacy_nb_json = r#"{
+            "id": "legacy-nb-1",
+            "title": "Legacy Notebook",
+            "cover_color": {"r": 255, "g": 255, "b": 255, "a": 255},
+            "pages": [],
+            "created_at": 1000,
+            "updated_at": 1000
+        }"#;
+
+        let nb: Notebook = serde_json::from_str(legacy_nb_json)
+            .expect("parse legacy notebook without schema_version");
+        assert_eq!(nb.schema_version, 1);
+
+        // Current created notebook uses CURRENT_NOTEBOOK_SCHEMA_VERSION (2)
+        let new_nb = Notebook::new("Current NB", PageTemplate::Blank, Color32::WHITE);
+        assert_eq!(new_nb.schema_version, CURRENT_NOTEBOOK_SCHEMA_VERSION);
     }
 
     #[test]
