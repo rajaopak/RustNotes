@@ -2,13 +2,63 @@ use eframe::egui::{Color32, Pos2};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PageTemplate {
     Blank,
     Ruled,
+    RuledNarrow,
+    RuledWide,
     Grid,
+    GridFine,
     Dotted,
+    DottedFine,
     Cornell,
+    Isometric,
+}
+
+impl PageTemplate {
+    pub const ALL: [PageTemplate; 10] = [
+        PageTemplate::Blank,
+        PageTemplate::Ruled,
+        PageTemplate::RuledNarrow,
+        PageTemplate::RuledWide,
+        PageTemplate::Grid,
+        PageTemplate::GridFine,
+        PageTemplate::Dotted,
+        PageTemplate::DottedFine,
+        PageTemplate::Cornell,
+        PageTemplate::Isometric,
+    ];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Blank => "Blank (Polos)",
+            Self::Ruled => "Ruled Standard",
+            Self::RuledNarrow => "Ruled Narrow",
+            Self::RuledWide => "Ruled Wide",
+            Self::Grid => "Grid Standard",
+            Self::GridFine => "Grid Fine (5mm)",
+            Self::Dotted => "Dotted Standard",
+            Self::DottedFine => "Dotted Fine",
+            Self::Cornell => "Cornell Notes",
+            Self::Isometric => "Isometric 3D",
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::Blank => "Kertas polos bersih serbaguna",
+            Self::Ruled => "Garis horizontal standar (30 pt)",
+            Self::RuledNarrow => "Garis rapat untuk tulisan padat (20 pt)",
+            Self::RuledWide => "Garis lebar untuk tulisan besar (40 pt)",
+            Self::Grid => "Kotak-kotak simetris standar (30 pt)",
+            Self::GridFine => "Kotak mikro presisi (15 pt / ~5 mm)",
+            Self::Dotted => "Titik-titik simetris (30 pt)",
+            Self::DottedFine => "Titik-titik halus (15 pt)",
+            Self::Cornell => "Metode Cornell dengan kolom petunjuk & ringkasan",
+            Self::Isometric => "Grid titik isometrik 60° untuk gambar teknik & 3D",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -397,13 +447,19 @@ pub enum PaperSizePreset {
     Letter,
     A5,
     Legacy,
+    Slide16x9,
+    Standard4x3,
+    Square,
 }
 
 impl PaperSizePreset {
-    pub const ALL: [PaperSizePreset; 4] = [
+    pub const ALL: [PaperSizePreset; 7] = [
         PaperSizePreset::A4,
         PaperSizePreset::Letter,
         PaperSizePreset::A5,
+        PaperSizePreset::Slide16x9,
+        PaperSizePreset::Standard4x3,
+        PaperSizePreset::Square,
         PaperSizePreset::Legacy,
     ];
 
@@ -413,6 +469,21 @@ impl PaperSizePreset {
             Self::Letter => "US Letter (612 × 792)",
             Self::A5 => "A5 (420 × 595)",
             Self::Legacy => "Legacy (800 × 1100)",
+            Self::Slide16x9 => "16:9 Slide (1280 × 720)",
+            Self::Standard4x3 => "4:3 Standard (1024 × 768)",
+            Self::Square => "Square (800 × 800)",
+        }
+    }
+
+    pub fn short_name(&self) -> &'static str {
+        match self {
+            Self::A4 => "A4",
+            Self::Letter => "Letter",
+            Self::A5 => "A5",
+            Self::Legacy => "Legacy",
+            Self::Slide16x9 => "16:9 Slide",
+            Self::Standard4x3 => "4:3 Standard",
+            Self::Square => "Square",
         }
     }
 
@@ -422,11 +493,26 @@ impl PaperSizePreset {
             Self::Letter => (612.0, 792.0),
             Self::A5 => (420.0, 595.0),
             Self::Legacy => (800.0, 1100.0),
+            Self::Slide16x9 => (720.0, 1280.0),
+            Self::Standard4x3 => (768.0, 1024.0),
+            Self::Square => (800.0, 800.0),
         };
         match orientation {
             PageOrientation::Portrait => (w, h),
             PageOrientation::Landscape => (h, w),
         }
+    }
+
+    pub fn match_dimensions(w: f32, h: f32) -> Option<(Self, PageOrientation)> {
+        for preset in Self::ALL {
+            for orient in [PageOrientation::Portrait, PageOrientation::Landscape] {
+                let (pw, ph) = preset.dimensions(orient);
+                if (w - pw).abs() < 1.0 && (h - ph).abs() < 1.0 {
+                    return Some((preset, orient));
+                }
+            }
+        }
+        None
     }
 }
 
@@ -726,8 +812,26 @@ impl Notebook {
         width: f32,
         height: f32,
     ) -> usize {
+        self.insert_page_with_color(
+            insert_idx,
+            template,
+            width,
+            height,
+            Color32::from_rgb(255, 254, 250),
+        )
+    }
+
+    pub fn insert_page_with_color(
+        &mut self,
+        insert_idx: usize,
+        template: PageTemplate,
+        width: f32,
+        height: f32,
+        paper_color: Color32,
+    ) -> usize {
         let clamped_idx = insert_idx.min(self.pages.len());
-        let new_page = Page::with_size(template, width, height);
+        let mut new_page = Page::with_size(template, width, height);
+        new_page.paper_color = paper_color.into();
         self.pages.insert(clamped_idx, new_page);
         self.updated_at = chrono::Utc::now().timestamp_millis();
         clamped_idx
@@ -1499,6 +1603,48 @@ mod tests {
             PaperSizePreset::Legacy.dimensions(PageOrientation::Portrait),
             (800.0, 1100.0)
         );
+        assert_eq!(
+            PaperSizePreset::Slide16x9.dimensions(PageOrientation::Landscape),
+            (1280.0, 720.0)
+        );
+        assert_eq!(
+            PaperSizePreset::Slide16x9.dimensions(PageOrientation::Portrait),
+            (720.0, 1280.0)
+        );
+        assert_eq!(
+            PaperSizePreset::Standard4x3.dimensions(PageOrientation::Landscape),
+            (1024.0, 768.0)
+        );
+        assert_eq!(
+            PaperSizePreset::Square.dimensions(PageOrientation::Portrait),
+            (800.0, 800.0)
+        );
+
+        // Test match_dimensions
+        assert_eq!(
+            PaperSizePreset::match_dimensions(1280.0, 720.0),
+            Some((PaperSizePreset::Slide16x9, PageOrientation::Landscape))
+        );
+        assert_eq!(
+            PaperSizePreset::match_dimensions(720.0, 1280.0),
+            Some((PaperSizePreset::Slide16x9, PageOrientation::Portrait))
+        );
+        assert_eq!(
+            PaperSizePreset::match_dimensions(595.0, 842.0),
+            Some((PaperSizePreset::A4, PageOrientation::Portrait))
+        );
+        assert_eq!(
+            PaperSizePreset::match_dimensions(842.0, 595.0),
+            Some((PaperSizePreset::A4, PageOrientation::Landscape))
+        );
+        assert_eq!(PaperSizePreset::match_dimensions(999.0, 123.0), None);
+
+        // Test PageTemplate ALL and descriptions
+        assert_eq!(PageTemplate::ALL.len(), 10);
+        for tmpl in PageTemplate::ALL {
+            assert!(!tmpl.name().is_empty());
+            assert!(!tmpl.description().is_empty());
+        }
 
         let p_a4 = Page::new_preset(
             PageTemplate::Grid,
@@ -1530,10 +1676,20 @@ mod tests {
         assert_eq!(nb.pages.len(), 2);
         assert_eq!(nb.pages[1].template, PageTemplate::Ruled);
 
+        // Insert page with color and template
+        let test_color = Color32::from_rgb(240, 245, 235);
+        let idx2 = nb.insert_page_with_color(2, PageTemplate::Isometric, 1280.0, 720.0, test_color);
+        assert_eq!(idx2, 2);
+        assert_eq!(nb.pages.len(), 3);
+        assert_eq!(nb.pages[2].template, PageTemplate::Isometric);
+        assert_eq!(nb.pages[2].width, 1280.0);
+        assert_eq!(nb.pages[2].height, 720.0);
+        assert_eq!(nb.pages[2].paper_color.to_color32(), test_color);
+
         // Duplicate page
         let dup_idx = nb.duplicate_page(1).expect("duplicate page 1");
         assert_eq!(dup_idx, 2);
-        assert_eq!(nb.pages.len(), 3);
+        assert_eq!(nb.pages.len(), 4);
         assert_ne!(nb.pages[1].id, nb.pages[2].id);
 
         // Reorder / move page: move page at index 0 to index 2
@@ -1548,10 +1704,11 @@ mod tests {
 
         // Delete page
         let after_del = nb.delete_page(1).expect("delete page 1");
-        assert_eq!(nb.pages.len(), 2);
+        assert_eq!(nb.pages.len(), 3);
         assert_eq!(after_del, 1);
 
-        // Cannot delete last remaining page
+        // Delete pages down to last remaining
+        let _ = nb.delete_page(0);
         let _ = nb.delete_page(0);
         assert_eq!(nb.pages.len(), 1);
         let err = nb.delete_page(0);

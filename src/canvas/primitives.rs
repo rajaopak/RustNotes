@@ -28,6 +28,28 @@ pub fn draw_paper_pattern(painter: &Painter, rect: Rect, template: PageTemplate,
                 y += spacing;
             }
         }
+        PageTemplate::RuledNarrow => {
+            let sp = 20.0 * zoom;
+            let mut y = rect.top() + sp;
+            while y < rect.bottom() {
+                painter.line_segment(
+                    [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
+                    Stroke::new(0.7_f32, line_color),
+                );
+                y += sp;
+            }
+        }
+        PageTemplate::RuledWide => {
+            let sp = 40.0 * zoom;
+            let mut y = rect.top() + sp;
+            while y < rect.bottom() {
+                painter.line_segment(
+                    [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
+                    Stroke::new(0.85_f32, line_color),
+                );
+                y += sp;
+            }
+        }
         PageTemplate::Grid => {
             let mut y = rect.top() + spacing;
             while y < rect.bottom() {
@@ -46,6 +68,25 @@ pub fn draw_paper_pattern(painter: &Painter, rect: Rect, template: PageTemplate,
                 x += spacing;
             }
         }
+        PageTemplate::GridFine => {
+            let sp = 15.0 * zoom;
+            let mut y = rect.top() + sp;
+            while y < rect.bottom() {
+                painter.line_segment(
+                    [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
+                    Stroke::new(0.6_f32, line_color),
+                );
+                y += sp;
+            }
+            let mut x = rect.left() + sp;
+            while x < rect.right() {
+                painter.line_segment(
+                    [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+                    Stroke::new(0.6_f32, line_color),
+                );
+                x += sp;
+            }
+        }
         PageTemplate::Dotted => {
             let mut y = rect.top() + spacing;
             while y < rect.bottom() {
@@ -55,6 +96,35 @@ pub fn draw_paper_pattern(painter: &Painter, rect: Rect, template: PageTemplate,
                     x += spacing;
                 }
                 y += spacing;
+            }
+        }
+        PageTemplate::DottedFine => {
+            let sp = 15.0 * zoom;
+            let mut y = rect.top() + sp;
+            while y < rect.bottom() {
+                let mut x = rect.left() + sp;
+                while x < rect.right() {
+                    painter.circle_filled(Pos2::new(x, y), 0.75, Color32::from_rgb(204, 211, 218));
+                    x += sp;
+                }
+                y += sp;
+            }
+        }
+        PageTemplate::Isometric => {
+            let dx = 30.0 * zoom;
+            let dy = 30.0 * 0.8660254 * zoom;
+            let dot_col = Color32::from_rgb(204, 211, 218);
+            let mut row = 0usize;
+            let mut y = rect.top() + dy;
+            while y < rect.bottom() {
+                let x_offset = if row % 2 == 1 { dx * 0.5 } else { 0.0 };
+                let mut x = rect.left() + x_offset + dx;
+                while x < rect.right() {
+                    painter.circle_filled(Pos2::new(x, y), 0.9, dot_col);
+                    x += dx;
+                }
+                y += dy;
+                row += 1;
             }
         }
         PageTemplate::Cornell => {

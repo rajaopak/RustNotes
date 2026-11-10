@@ -317,7 +317,10 @@ impl RustNotesApp {
                                                     let line_col = Color32::from_rgb(220, 226, 231);
                                                     match tmpl {
                                                         PageTemplate::Blank => {}
-                                                        PageTemplate::Ruled | PageTemplate::Cornell => {
+                                                        PageTemplate::Ruled
+                                                        | PageTemplate::RuledNarrow
+                                                        | PageTemplate::RuledWide
+                                                        | PageTemplate::Cornell => {
                                                             let mut y = rect.top() + spacing;
                                                             while y < rect.bottom() {
                                                                 painter.line_segment(
@@ -330,7 +333,7 @@ impl RustNotesApp {
                                                                 y += spacing;
                                                             }
                                                         }
-                                                        PageTemplate::Grid => {
+                                                        PageTemplate::Grid | PageTemplate::GridFine => {
                                                             let mut y = rect.top() + spacing;
                                                             while y < rect.bottom() {
                                                                 painter.line_segment(
@@ -354,7 +357,9 @@ impl RustNotesApp {
                                                                 x += spacing;
                                                             }
                                                         }
-                                                        PageTemplate::Dotted => {
+                                                        PageTemplate::Dotted
+                                                        | PageTemplate::DottedFine
+                                                        | PageTemplate::Isometric => {
                                                             let mut y = rect.top() + spacing;
                                                             while y < rect.bottom() {
                                                                 let mut x = rect.left() + spacing;

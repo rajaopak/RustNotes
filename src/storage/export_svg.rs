@@ -66,6 +66,26 @@ pub fn export_page_to_svg(page: &Page) -> String {
                 y += spacing;
             }
         }
+        crate::model::PageTemplate::RuledNarrow => {
+            let sp = 20.0;
+            let mut y = 30.0;
+            while y < h {
+                out.push_str(&format!(
+                    "<line x1=\"0\" y1=\"{y:.1}\" x2=\"{w:.1}\" y2=\"{y:.1}\" stroke=\"#E6EBF0\" stroke-width=\"0.7\"/>\n"
+                ));
+                y += sp;
+            }
+        }
+        crate::model::PageTemplate::RuledWide => {
+            let sp = 40.0;
+            let mut y = 50.0;
+            while y < h {
+                out.push_str(&format!(
+                    "<line x1=\"0\" y1=\"{y:.1}\" x2=\"{w:.1}\" y2=\"{y:.1}\" stroke=\"#E6EBF0\" stroke-width=\"0.85\"/>\n"
+                ));
+                y += sp;
+            }
+        }
         crate::model::PageTemplate::Grid => {
             let mut y = spacing;
             while y < h {
@@ -82,6 +102,23 @@ pub fn export_page_to_svg(page: &Page) -> String {
                 x += spacing;
             }
         }
+        crate::model::PageTemplate::GridFine => {
+            let sp = 15.0;
+            let mut y = sp;
+            while y < h {
+                out.push_str(&format!(
+                    "<line x1=\"0\" y1=\"{y:.1}\" x2=\"{w:.1}\" y2=\"{y:.1}\" stroke=\"#EDF0F3\" stroke-width=\"0.6\"/>\n"
+                ));
+                y += sp;
+            }
+            let mut x = sp;
+            while x < w {
+                out.push_str(&format!(
+                    "<line x1=\"{x:.1}\" y1=\"0\" x2=\"{x:.1}\" y2=\"{h:.1}\" stroke=\"#EDF0F3\" stroke-width=\"0.6\"/>\n"
+                ));
+                x += sp;
+            }
+        }
         crate::model::PageTemplate::Dotted => {
             let mut y = spacing;
             while y < h {
@@ -93,6 +130,38 @@ pub fn export_page_to_svg(page: &Page) -> String {
                     x += spacing;
                 }
                 y += spacing;
+            }
+        }
+        crate::model::PageTemplate::DottedFine => {
+            let sp = 15.0;
+            let mut y = sp;
+            while y < h {
+                let mut x = sp;
+                while x < w {
+                    out.push_str(&format!(
+                        "<circle cx=\"{x:.1}\" cy=\"{y:.1}\" r=\"0.75\" fill=\"#CCD3DA\"/>\n"
+                    ));
+                    x += sp;
+                }
+                y += sp;
+            }
+        }
+        crate::model::PageTemplate::Isometric => {
+            let dx = 30.0;
+            let dy = 30.0 * 0.8660254;
+            let mut row = 0usize;
+            let mut y = dy;
+            while y < h {
+                let x_offset = if row % 2 == 1 { dx * 0.5 } else { 0.0 };
+                let mut x = x_offset + dx;
+                while x < w {
+                    out.push_str(&format!(
+                        "<circle cx=\"{x:.1}\" cy=\"{y:.1}\" r=\"0.9\" fill=\"#CCD3DA\"/>\n"
+                    ));
+                    x += dx;
+                }
+                y += dy;
+                row += 1;
             }
         }
         crate::model::PageTemplate::Cornell => {

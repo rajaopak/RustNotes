@@ -938,13 +938,11 @@ impl RustNotesApp {
                                 for preset in PaperSizePreset::ALL {
                                     let is_sel = !self.new_notebook_use_custom_size
                                         && self.new_notebook_preset == preset;
-                                    let name = match preset {
-                                        PaperSizePreset::A4 => "A4",
-                                        PaperSizePreset::Letter => "Letter",
-                                        PaperSizePreset::A5 => "A5",
-                                        PaperSizePreset::Legacy => "Legacy",
-                                    };
-                                    if ui.selectable_label(is_sel, name).clicked() {
+                                    if ui
+                                        .selectable_label(is_sel, preset.short_name())
+                                        .on_hover_text(preset.name())
+                                        .clicked()
+                                    {
                                         self.new_notebook_use_custom_size = false;
                                         self.new_notebook_preset = preset;
                                         let (w, h) =
@@ -953,19 +951,12 @@ impl RustNotesApp {
                                         self.new_notebook_custom_height = h;
                                     }
                                 }
-                                let is_slide = self.new_notebook_use_custom_size
-                                    && (self.new_notebook_custom_width - 1280.0).abs() < 1.0
-                                    && (self.new_notebook_custom_height - 720.0).abs() < 1.0;
-                                if ui.selectable_label(is_slide, "16:9 Slide").clicked() {
-                                    self.new_notebook_use_custom_size = true;
-                                    self.new_notebook_custom_width = 1280.0;
-                                    self.new_notebook_custom_height = 720.0;
-                                }
                                 if ui
                                     .selectable_label(
-                                        self.new_notebook_use_custom_size && !is_slide,
+                                        self.new_notebook_use_custom_size,
                                         "Custom Size",
                                     )
+                                    .on_hover_text("Kustomisasi lebar dan tinggi secara bebas")
                                     .clicked()
                                 {
                                     self.new_notebook_use_custom_size = true;
@@ -1068,125 +1059,138 @@ impl RustNotesApp {
                             ui.label(RichText::new("Paper Template").strong());
                             ui.add_space(6.0);
 
-                            let templates = [
-                                (
-                                    PageTemplate::Ruled,
-                                    "Ruled Narrow",
-                                    "Horizontal writing lines",
-                                ),
-                                (
-                                    PageTemplate::Grid,
-                                    "Squared (Grid)",
-                                    "Math & structure grid",
-                                ),
-                                (
-                                    PageTemplate::Dotted,
-                                    "Dotted Paper",
-                                    "Bullet journaling dots",
-                                ),
-                                (
-                                    PageTemplate::Blank,
-                                    "Blank Paper",
-                                    "Plain unlined sketch paper",
-                                ),
-                                (
-                                    PageTemplate::Cornell,
-                                    "Cornell Notes",
-                                    "Summary & cue column template",
-                                ),
+                            egui::ScrollArea::vertical()
+                                .max_height(280.0)
+                                .show(ui, |ui| {
+                                    for tmpl in PageTemplate::ALL {
+                                        let is_selected = self.new_notebook_template == tmpl;
+                                        let (rect, resp) = ui.allocate_exact_size(
+                                            Vec2::new(260.0, 44.0),
+                                            Sense::click(),
+                                        );
+                                        let bg = if is_selected {
+                                            Color32::from_rgb(39, 54, 91)
+                                        } else if resp.hovered() {
+                                            Color32::from_rgb(52, 50, 51)
+                                        } else {
+                                            Color32::from_rgb(38, 36, 37)
+                                        };
+                                        let border_stroke = if is_selected {
+                                            Stroke::new(1.5_f32, Color32::from_rgb(76, 147, 236))
+                                        } else {
+                                            Stroke::new(1.0_f32, Color32::from_rgb(60, 57, 57))
+                                        };
+                                        ui.painter().rect(
+                                            rect,
+                                            6.0,
+                                            bg,
+                                            border_stroke,
+                                            StrokeKind::Outside,
+                                        );
+                                        ui.painter().text(
+                                            rect.left_top() + Vec2::new(10.0, 6.0),
+                                            egui::Align2::LEFT_TOP,
+                                            tmpl.name(),
+                                            FontId::proportional(13.5),
+                                            if is_selected {
+                                                Color32::from_rgb(76, 147, 236)
+                                            } else {
+                                                Color32::WHITE
+                                            },
+                                        );
+                                        ui.painter().text(
+                                            rect.left_top() + Vec2::new(10.0, 24.0),
+                                            egui::Align2::LEFT_TOP,
+                                            tmpl.description(),
+                                            FontId::proportional(10.5),
+                                            Color32::GRAY,
+                                        );
+                                        if resp.clicked() {
+                                            self.new_notebook_template = tmpl;
+                                        }
+                                    }
+
+                                    // Fase 5: Custom Templates section if any exist
+                                    if !self.custom_templates.is_empty() {
+                                        ui.add_space(8.0);
+                                        ui.label(
+                                            RichText::new("⭐ Template Kustom:")
+                                                .strong()
+                                                .size(12.0)
+                                                .color(Color32::from_rgb(255, 204, 0)),
+                                        );
+                                        for ctmpl in &self.custom_templates {
+                                            let is_cur =
+                                                self.new_notebook_template == ctmpl.template;
+                                            let (rect, resp) = ui.allocate_exact_size(
+                                                Vec2::new(260.0, 36.0),
+                                                Sense::click(),
+                                            );
+                                            let bg = if is_cur {
+                                                Color32::from_rgb(39, 54, 91)
+                                            } else if resp.hovered() {
+                                                Color32::from_rgb(52, 50, 51)
+                                            } else {
+                                                Color32::from_rgb(38, 36, 37)
+                                            };
+                                            ui.painter().rect(
+                                                rect,
+                                                6.0,
+                                                bg,
+                                                Stroke::new(1.0_f32, Color32::from_rgb(60, 57, 57)),
+                                                StrokeKind::Outside,
+                                            );
+                                            ui.painter().text(
+                                                rect.left_top() + Vec2::new(10.0, 10.0),
+                                                egui::Align2::LEFT_TOP,
+                                                format!("📄 {}", ctmpl.name),
+                                                FontId::proportional(12.0),
+                                                if is_cur {
+                                                    Color32::from_rgb(76, 147, 236)
+                                                } else {
+                                                    Color32::WHITE
+                                                },
+                                            );
+                                            if resp.clicked() {
+                                                self.new_notebook_template = ctmpl.template;
+                                            }
+                                        }
+                                    }
+                                });
+
+                            ui.add_space(8.0);
+                            ui.label(RichText::new("Warna Kertas").strong());
+                            let paper_colors = [
+                                (Color32::from_rgb(255, 254, 250), "Putih Hangat"),
+                                (Color32::from_rgb(255, 255, 255), "Putih Murni"),
+                                (Color32::from_rgb(245, 240, 225), "Kuning Gading / Vintage"),
+                                (Color32::from_rgb(235, 240, 245), "Biru Muda"),
+                                (Color32::from_rgb(240, 245, 235), "Hijau Sage"),
+                                (Color32::from_rgb(45, 45, 48), "Abu-abu Gelap"),
+                                (Color32::from_rgb(26, 26, 28), "Hitam Pekat"),
                             ];
-
-                            for (tmpl, label, desc) in templates {
-                                let is_selected = self.new_notebook_template == tmpl;
-                                let (rect, resp) =
-                                    ui.allocate_exact_size(Vec2::new(270.0, 48.0), Sense::click());
-                                let bg = if is_selected {
-                                    Color32::from_rgb(39, 54, 91)
-                                } else if resp.hovered() {
-                                    Color32::from_rgb(52, 50, 51)
-                                } else {
-                                    Color32::from_rgb(38, 36, 37)
-                                };
-                                let border_stroke = if is_selected {
-                                    Stroke::new(1.5_f32, Color32::from_rgb(76, 147, 236))
-                                } else {
-                                    Stroke::new(1.0_f32, Color32::from_rgb(60, 57, 57))
-                                };
-                                ui.painter().rect(
-                                    rect,
-                                    6.0,
-                                    bg,
-                                    border_stroke,
-                                    StrokeKind::Outside,
-                                );
-                                ui.painter().text(
-                                    rect.left_top() + Vec2::new(12.0, 10.0),
-                                    egui::Align2::LEFT_TOP,
-                                    label,
-                                    FontId::proportional(14.0),
-                                    if is_selected {
-                                        Color32::from_rgb(76, 147, 236)
+                            ui.horizontal_wrapped(|ui| {
+                                for (col, tip) in paper_colors {
+                                    let is_sel = self.new_notebook_paper_color == col;
+                                    let (rect, resp) = ui
+                                        .allocate_exact_size(Vec2::new(24.0, 24.0), Sense::click());
+                                    let stroke = if is_sel {
+                                        Stroke::new(2.5_f32, Color32::from_rgb(76, 147, 236))
                                     } else {
-                                        Color32::WHITE
-                                    },
-                                );
-                                ui.painter().text(
-                                    rect.left_top() + Vec2::new(12.0, 28.0),
-                                    egui::Align2::LEFT_TOP,
-                                    desc,
-                                    FontId::proportional(11.0),
-                                    Color32::GRAY,
-                                );
-                                if resp.clicked() {
-                                    self.new_notebook_template = tmpl;
-                                }
-                            }
-
-                            // Fase 5: Custom Templates section if any exist
-                            if !self.custom_templates.is_empty() {
-                                ui.add_space(8.0);
-                                ui.label(
-                                    RichText::new("⭐ Template Kustom:")
-                                        .strong()
-                                        .size(12.0)
-                                        .color(Color32::from_rgb(255, 204, 0)),
-                                );
-                                for ctmpl in &self.custom_templates {
-                                    let is_cur = self.new_notebook_template == ctmpl.template;
-                                    let (rect, resp) = ui.allocate_exact_size(
-                                        Vec2::new(270.0, 36.0),
-                                        Sense::click(),
-                                    );
-                                    let bg = if is_cur {
-                                        Color32::from_rgb(39, 54, 91)
-                                    } else if resp.hovered() {
-                                        Color32::from_rgb(52, 50, 51)
-                                    } else {
-                                        Color32::from_rgb(38, 36, 37)
+                                        Stroke::new(1.0_f32, Color32::from_rgb(100, 100, 100))
                                     };
-                                    ui.painter().rect(
+                                    ui.painter_at(rect).rect(
                                         rect,
-                                        6.0,
-                                        bg,
-                                        Stroke::new(1.0_f32, Color32::from_rgb(60, 57, 57)),
+                                        4.0,
+                                        col,
+                                        stroke,
                                         StrokeKind::Outside,
                                     );
-                                    ui.painter().text(
-                                        rect.left_top() + Vec2::new(10.0, 10.0),
-                                        egui::Align2::LEFT_TOP,
-                                        format!("📄 {}", ctmpl.name),
-                                        FontId::proportional(12.0),
-                                        if is_cur {
-                                            Color32::from_rgb(76, 147, 236)
-                                        } else {
-                                            Color32::WHITE
-                                        },
-                                    );
-                                    if resp.clicked() {
-                                        self.new_notebook_template = ctmpl.template;
+                                    if resp.on_hover_text(tip).clicked() {
+                                        self.new_notebook_paper_color = col;
                                     }
                                 }
-                            }
+                            });
                         });
                     });
 
@@ -1211,23 +1215,33 @@ impl RustNotesApp {
                                 } else {
                                     self.new_notebook_title.trim()
                                 };
-                                let mut nb = if self.new_notebook_use_custom_size {
-                                    Notebook::new_with_size(
-                                        title,
-                                        self.new_notebook_template,
-                                        self.new_notebook_cover,
+                                let (w, h) = if self.new_notebook_use_custom_size {
+                                    (
                                         self.new_notebook_custom_width.clamp(200.0, 4000.0),
                                         self.new_notebook_custom_height.clamp(200.0, 4000.0),
                                     )
                                 } else {
-                                    Notebook::new_with_preset(
-                                        title,
-                                        self.new_notebook_template,
-                                        self.new_notebook_cover,
-                                        self.new_notebook_preset,
-                                        self.new_notebook_orientation,
-                                    )
+                                    self.new_notebook_preset
+                                        .dimensions(self.new_notebook_orientation)
                                 };
+                                let mut nb = Notebook::new_with_size(
+                                    title,
+                                    self.new_notebook_template,
+                                    self.new_notebook_cover,
+                                    w,
+                                    h,
+                                );
+                                if let Some(first_page) = nb.pages.first_mut() {
+                                    first_page.paper_color = self.new_notebook_paper_color.into();
+                                }
+                                self.last_created_template = self.new_notebook_template;
+                                self.last_created_preset = self.new_notebook_preset;
+                                self.last_created_orientation = self.new_notebook_orientation;
+                                self.last_created_use_custom = self.new_notebook_use_custom_size;
+                                self.last_created_width = w;
+                                self.last_created_height = h;
+                                self.last_created_paper_color = self.new_notebook_paper_color;
+
                                 nb.folder_id = self.current_folder_id.clone();
                                 let new_id = nb.id.clone();
                                 self.library.notebooks.push(nb);

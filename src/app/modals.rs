@@ -7,7 +7,9 @@ use crate::model::{
 use crate::storage::{
     app_storage_dir, save_asset_to_notebook, save_custom_template, save_settings_to_dir,
 };
-use eframe::egui::{self, Align, Button, Color32, Layout, RichText};
+use eframe::egui::{
+    self, Align, Button, Color32, Layout, RichText, Sense, Stroke, StrokeKind, Vec2,
+};
 
 impl RustNotesApp {
     pub(crate) fn render_add_page_modal(&mut self, ctx: &egui::Context, nb_idx: usize) {
@@ -32,10 +34,10 @@ impl RustNotesApp {
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.set_width(380.0);
+                ui.set_width(450.0);
                 ui.add_space(4.0);
 
-                // Info Template Saat Ini
+                // Info Template & Format Saat Ini
                 ui.group(|ui| {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("📄 Halaman Aktif:").strong());
@@ -44,24 +46,60 @@ impl RustNotesApp {
                             self.current_page_index + 1,
                             self.library.notebooks[nb_idx].pages.len()
                         ));
+
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui
+                                .button("📋 Samakan Format Halaman Aktif")
+                                .on_hover_text(
+                                    "Salin template pola, ukuran kertas, orientasi, dan warna kertas dari halaman saat ini",
+                                )
+                                .clicked()
+                            {
+                                let current_page = self.library.notebooks[nb_idx]
+                                    .pages
+                                    .get(self.current_page_index);
+                                if let Some(p) = current_page {
+                                    self.add_page_template = p.template;
+                                    self.add_page_paper_color = p.paper_color.to_color32();
+                                    self.add_page_custom_width = p.width;
+                                    self.add_page_custom_height = p.height;
+                                    if let Some((preset, orient)) =
+                                        PaperSizePreset::match_dimensions(p.width, p.height)
+                                    {
+                                        self.add_page_preset = preset;
+                                        self.add_page_orientation = orient;
+                                        self.add_page_use_custom_size = false;
+                                    } else {
+                                        self.add_page_use_custom_size = true;
+                                        self.add_page_orientation = if p.width > p.height {
+                                            PageOrientation::Landscape
+                                        } else {
+                                            PageOrientation::Portrait
+                                        };
+                                    }
+                                }
+                            }
+                        });
                     });
                     ui.label(
                         RichText::new(format!(
-                            "Template: {:?}  |  Ukuran: {:.0} × {:.0} pt",
-                            cur_tmpl, cur_w, cur_h
+                            "Template: {}  |  Ukuran: {:.0} × {:.0} pt",
+                            cur_tmpl.name(),
+                            cur_w,
+                            cur_h
                         ))
                         .size(11.5)
                         .color(Color32::from_rgb(130, 195, 255)),
                     );
                 });
 
-                ui.add_space(8.0);
-                ui.separator();
                 ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(4.0);
 
                 // Opsi Penempatan Halaman
-                ui.label(RichText::new("Posisi Penyisipan:").strong());
                 ui.horizontal(|ui| {
+                    ui.label(RichText::new("Posisi:").strong());
                     ui.radio_value(
                         &mut self.add_page_target_pos,
                         AddPagePosition::AfterCurrent,
@@ -79,58 +117,205 @@ impl RustNotesApp {
                     );
                 });
 
-                ui.add_space(8.0);
-                ui.separator();
                 ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(4.0);
 
                 // Opsi Jenis Halaman
                 ui.label(RichText::new("Pilihan Halaman Baru:").strong());
 
-                // 1. Template Standar
+                // 1. Template Standar & Kustom
                 ui.group(|ui| {
-                    ui.label(RichText::new("1. Buat dengan Template Pola Kertas:").strong());
+                    ui.label(RichText::new("1. Template Pola Kertas:").strong());
                     ui.horizontal_wrapped(|ui| {
-                        let tmpls = [
-                            (PageTemplate::Ruled, "Ruled"),
-                            (PageTemplate::Grid, "Grid"),
-                            (PageTemplate::Dotted, "Dotted"),
-                            (PageTemplate::Blank, "Blank"),
-                            (PageTemplate::Cornell, "Cornell"),
-                        ];
-                        for (t, label) in tmpls {
+                        for tmpl in PageTemplate::ALL {
+                            let is_sel = self.add_page_template == tmpl;
                             if ui
-                                .selectable_label(self.add_page_template == t, label)
+                                .selectable_label(is_sel, tmpl.name())
+                                .on_hover_text(tmpl.description())
                                 .clicked()
                             {
-                                self.add_page_template = t;
+                                self.add_page_template = tmpl;
                             }
                         }
                     });
 
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        ui.label("Ukuran:");
-                        for preset in PaperSizePreset::ALL {
-                            let is_sel = self.add_page_preset == preset;
-                            let short_name = preset.name().split(" (").next().unwrap_or("");
-                            if ui.selectable_label(is_sel, short_name).clicked() {
-                                self.add_page_preset = preset;
+                    if !self.custom_templates.is_empty() {
+                        ui.add_space(4.0);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                RichText::new("⭐ Kustom:")
+                                    .size(11.5)
+                                    .color(Color32::from_rgb(255, 215, 0)),
+                            );
+                            for ctmpl in &self.custom_templates {
+                                let is_sel = self.add_page_template == ctmpl.template;
+                                if ui
+                                    .selectable_label(is_sel, format!("⭐ {}", ctmpl.name))
+                                    .clicked()
+                                {
+                                    self.add_page_template = ctmpl.template;
+                                    self.add_page_custom_width = ctmpl.width;
+                                    self.add_page_custom_height = ctmpl.height;
+                                    self.add_page_use_custom_size = true;
+                                    self.add_page_paper_color = ctmpl.paper_color.to_color32();
+                                }
                             }
+                        });
+                    }
+
+                    ui.add_space(6.0);
+                    ui.label(RichText::new("Ukuran & Proporsi Kertas:").strong());
+                    ui.horizontal_wrapped(|ui| {
+                        for preset in PaperSizePreset::ALL {
+                            let is_sel =
+                                !self.add_page_use_custom_size && self.add_page_preset == preset;
+                            if ui
+                                .selectable_label(is_sel, preset.short_name())
+                                .on_hover_text(preset.name())
+                                .clicked()
+                            {
+                                self.add_page_use_custom_size = false;
+                                self.add_page_preset = preset;
+                                let (pw, ph) =
+                                    preset.dimensions(self.add_page_orientation);
+                                self.add_page_custom_width = pw;
+                                self.add_page_custom_height = ph;
+                            }
+                        }
+                        if ui
+                            .selectable_label(self.add_page_use_custom_size, "Custom")
+                            .on_hover_text("Kustomisasi lebar dan tinggi secara bebas")
+                            .clicked()
+                        {
+                            self.add_page_use_custom_size = true;
                         }
                     });
 
                     ui.horizontal(|ui| {
                         ui.label("Orientasi:");
-                        ui.radio_value(
-                            &mut self.add_page_orientation,
-                            PageOrientation::Portrait,
-                            "Portrait",
+                        if ui
+                            .selectable_label(
+                                !self.add_page_use_custom_size
+                                    && self.add_page_orientation == PageOrientation::Portrait,
+                                "Portrait",
+                            )
+                            .clicked()
+                        {
+                            self.add_page_use_custom_size = false;
+                            self.add_page_orientation = PageOrientation::Portrait;
+                            let (pw, ph) =
+                                self.add_page_preset.dimensions(self.add_page_orientation);
+                            self.add_page_custom_width = pw;
+                            self.add_page_custom_height = ph;
+                        }
+                        if ui
+                            .selectable_label(
+                                !self.add_page_use_custom_size
+                                    && self.add_page_orientation == PageOrientation::Landscape,
+                                "Landscape",
+                            )
+                            .clicked()
+                        {
+                            self.add_page_use_custom_size = false;
+                            self.add_page_orientation = PageOrientation::Landscape;
+                            let (pw, ph) =
+                                self.add_page_preset.dimensions(self.add_page_orientation);
+                            self.add_page_custom_width = pw;
+                            self.add_page_custom_height = ph;
+                        }
+                        if ui
+                            .small_button("⇄ Swap W×H")
+                            .on_hover_text("Tukar lebar dan tinggi kertas")
+                            .clicked()
+                        {
+                            self.add_page_use_custom_size = true;
+                            std::mem::swap(
+                                &mut self.add_page_custom_width,
+                                &mut self.add_page_custom_height,
+                            );
+                            self.add_page_orientation =
+                                if self.add_page_custom_width > self.add_page_custom_height {
+                                    PageOrientation::Landscape
+                                } else {
+                                    PageOrientation::Portrait
+                                };
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("W:");
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut self.add_page_custom_width)
+                                    .range(200.0..=4000.0)
+                                    .speed(2.0)
+                                    .suffix(" pt"),
+                            )
+                            .changed()
+                        {
+                            self.add_page_use_custom_size = true;
+                        }
+                        ui.label("× H:");
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut self.add_page_custom_height)
+                                    .range(200.0..=4000.0)
+                                    .speed(2.0)
+                                    .suffix(" pt"),
+                            )
+                            .changed()
+                        {
+                            self.add_page_use_custom_size = true;
+                        }
+
+                        let (calc_w, calc_h) = if self.add_page_use_custom_size {
+                            (self.add_page_custom_width, self.add_page_custom_height)
+                        } else {
+                            self.add_page_preset.dimensions(self.add_page_orientation)
+                        };
+                        ui.label(
+                            RichText::new(format!("({:.0} × {:.0} pt)", calc_w, calc_h))
+                                .size(11.0)
+                                .color(Color32::GRAY),
                         );
-                        ui.radio_value(
-                            &mut self.add_page_orientation,
-                            PageOrientation::Landscape,
-                            "Landscape",
-                        );
+                    });
+
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Warna Kertas:");
+                        let paper_colors = [
+                            (Color32::from_rgb(255, 255, 255), "Putih Bersih"),
+                            (Color32::from_rgb(255, 254, 250), "Cream Ivory"),
+                            (Color32::from_rgb(255, 249, 219), "Pastel Yellow"),
+                            (Color32::from_rgb(235, 251, 238), "Mint Green"),
+                            (Color32::from_rgb(233, 236, 239), "Soft Gray"),
+                            (Color32::from_rgb(26, 35, 50), "Dark Navy"),
+                            (Color32::from_rgb(24, 24, 27), "Charcoal Black"),
+                        ];
+                        for (col, tip) in paper_colors {
+                            let is_sel = self.add_page_paper_color == col;
+                            let (rect, resp) =
+                                ui.allocate_exact_size(Vec2::new(18.0, 18.0), Sense::click());
+                            let resp = resp.on_hover_text(tip);
+                            if resp.clicked() {
+                                self.add_page_paper_color = col;
+                            }
+                            let border = if is_sel {
+                                Stroke::new(2.0_f32, Color32::from_rgb(0, 114, 206))
+                            } else {
+                                Stroke::new(1.0_f32, Color32::from_rgb(100, 100, 100))
+                            };
+                            ui.painter().rect(rect, 3.0, col, border, StrokeKind::Outside);
+                            if is_sel {
+                                let check_col = if col.r() < 100 {
+                                    Color32::WHITE
+                                } else {
+                                    Color32::BLACK
+                                };
+                                ui.painter().circle_filled(rect.center(), 2.5_f32, check_col);
+                            }
+                        }
                     });
                 });
 
@@ -201,7 +386,7 @@ impl RustNotesApp {
                     });
                 });
 
-                ui.add_space(10.0);
+                ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(6.0);
 
@@ -216,7 +401,15 @@ impl RustNotesApp {
                         .fill(Color32::from_rgb(0, 114, 206));
 
                         if ui.add(add_btn).clicked() {
-                            let (w, h) = self.add_page_preset.dimensions(self.add_page_orientation);
+                            let (w, h) = if self.add_page_use_custom_size {
+                                (
+                                    self.add_page_custom_width.clamp(200.0, 4000.0),
+                                    self.add_page_custom_height.clamp(200.0, 4000.0),
+                                )
+                            } else {
+                                self.add_page_preset.dimensions(self.add_page_orientation)
+                            };
+
                             self.push_doc_undo(nb_idx);
                             let target_idx = match self.add_page_target_pos {
                                 AddPagePosition::BeforeCurrent => self.current_page_index,
@@ -225,15 +418,26 @@ impl RustNotesApp {
                                     self.library.notebooks[nb_idx].pages.len()
                                 }
                             };
-                            let new_idx = self.library.notebooks[nb_idx].insert_page(
+                            let new_idx = self.library.notebooks[nb_idx].insert_page_with_color(
                                 target_idx,
                                 self.add_page_template,
                                 w,
                                 h,
+                                self.add_page_paper_color,
                             );
                             self.navigate_to_page(nb_idx, new_idx);
                             let nb_id = self.library.notebooks[nb_idx].id.clone();
                             self.mark_dirty(&nb_id);
+
+                            // Simpan ke memori template terakhir
+                            self.last_created_template = self.add_page_template;
+                            self.last_created_preset = self.add_page_preset;
+                            self.last_created_orientation = self.add_page_orientation;
+                            self.last_created_use_custom = self.add_page_use_custom_size;
+                            self.last_created_width = w;
+                            self.last_created_height = h;
+                            self.last_created_paper_color = self.add_page_paper_color;
+
                             close_modal = true;
                         }
 
@@ -337,7 +541,7 @@ impl RustNotesApp {
                         for preset in PaperSizePreset::ALL {
                             let is_sel = !self.resize_use_custom_size
                                 && self.resize_target_preset == preset;
-                            if ui.selectable_label(is_sel, preset.name()).clicked() {
+                            if ui.selectable_label(is_sel, preset.short_name()).on_hover_text(preset.name()).clicked() {
                                 self.resize_use_custom_size = false;
                                 self.resize_target_preset = preset;
                                 let (pw, ph) =
@@ -346,33 +550,9 @@ impl RustNotesApp {
                                 self.resize_custom_height = ph;
                             }
                         }
-                        let is_slide = self.resize_use_custom_size
-                            && (self.resize_custom_width - 1280.0).abs() < 1.0
-                            && (self.resize_custom_height - 720.0).abs() < 1.0;
                         if ui
-                            .selectable_label(is_slide, "16:9 Slide (1280×720)")
-                            .clicked()
-                        {
-                            self.resize_use_custom_size = true;
-                            self.resize_custom_width = 1280.0;
-                            self.resize_custom_height = 720.0;
-                        }
-                        let is_square = self.resize_use_custom_size
-                            && (self.resize_custom_width - 800.0).abs() < 1.0
-                            && (self.resize_custom_height - 800.0).abs() < 1.0;
-                        if ui
-                            .selectable_label(is_square, "Square (800×800)")
-                            .clicked()
-                        {
-                            self.resize_use_custom_size = true;
-                            self.resize_custom_width = 800.0;
-                            self.resize_custom_height = 800.0;
-                        }
-                        if ui
-                            .selectable_label(
-                                self.resize_use_custom_size && !is_slide && !is_square,
-                                "✏ Custom Spesifik",
-                            )
+                            .selectable_label(self.resize_use_custom_size, "✏ Custom")
+                            .on_hover_text("Atur lebar dan tinggi secara bebas")
                             .clicked()
                         {
                             self.resize_use_custom_size = true;
@@ -461,19 +641,13 @@ impl RustNotesApp {
                     // 3. Page Template Selector
                     ui.label(RichText::new("Template Pola Kertas:").strong());
                     ui.horizontal_wrapped(|ui| {
-                        let tmpls = [
-                            (PageTemplate::Ruled, "Ruled"),
-                            (PageTemplate::Grid, "Grid"),
-                            (PageTemplate::Dotted, "Dotted"),
-                            (PageTemplate::Blank, "Blank"),
-                            (PageTemplate::Cornell, "Cornell"),
-                        ];
-                        for (t, label) in tmpls {
+                        for tmpl in PageTemplate::ALL {
                             if ui
-                                .selectable_label(self.resize_target_template == t, label)
+                                .selectable_label(self.resize_target_template == tmpl, tmpl.name())
+                                .on_hover_text(tmpl.description())
                                 .clicked()
                             {
-                                self.resize_target_template = t;
+                                self.resize_target_template = tmpl;
                             }
                         }
                     });

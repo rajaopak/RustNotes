@@ -19,25 +19,18 @@ impl RustNotesApp {
             self.resize_custom_height = p.height;
             self.resize_target_template = p.template;
             self.resize_apply_all_pages = false;
-            self.resize_target_orientation = if p.width > p.height {
-                PageOrientation::Landscape
-            } else {
-                PageOrientation::Portrait
-            };
-            // Cek apakah cocok dengan salah satu preset
-            let mut matched_preset = None;
-            for preset in PaperSizePreset::ALL {
-                let (pw, ph) = preset.dimensions(self.resize_target_orientation);
-                if (p.width - pw).abs() < 1.0 && (p.height - ph).abs() < 1.0 {
-                    matched_preset = Some(preset);
-                    break;
-                }
-            }
-            if let Some(preset) = matched_preset {
+            if let Some((preset, orient)) = PaperSizePreset::match_dimensions(p.width, p.height) {
                 self.resize_target_preset = preset;
+                self.resize_target_orientation = orient;
                 self.resize_use_custom_size = false;
             } else {
                 self.resize_use_custom_size = true;
+                self.resize_target_preset = PaperSizePreset::A4;
+                self.resize_target_orientation = if p.width > p.height {
+                    PageOrientation::Landscape
+                } else {
+                    PageOrientation::Portrait
+                };
             }
             self.show_page_resize_modal = true;
         }
@@ -45,16 +38,44 @@ impl RustNotesApp {
 
     /// Buka modal penambahan halaman baru dengan menampilkan template aktif dan opsi kustomisasi.
     pub(crate) fn open_add_page_modal(&mut self, nb_idx: usize) {
-        if let Some(nb) = self.library.notebooks.get(nb_idx)
-            && let Some(p) = nb.pages.get(self.current_page_index)
-        {
-            self.add_page_template = p.template;
-            self.add_page_orientation = if p.width > p.height {
-                PageOrientation::Landscape
+        if let Some(nb) = self.library.notebooks.get(nb_idx) {
+            // Prioritaskan format halaman yang sedang aktif (atau halaman terakhir jika di luar batas)
+            let page_opt = nb
+                .pages
+                .get(self.current_page_index)
+                .or_else(|| nb.pages.last());
+
+            if let Some(p) = page_opt {
+                self.add_page_template = p.template;
+                self.add_page_paper_color = p.paper_color.to_color32();
+                self.add_page_custom_width = p.width;
+                self.add_page_custom_height = p.height;
+
+                if let Some((preset, orient)) = PaperSizePreset::match_dimensions(p.width, p.height)
+                {
+                    self.add_page_preset = preset;
+                    self.add_page_orientation = orient;
+                    self.add_page_use_custom_size = false;
+                } else {
+                    self.add_page_use_custom_size = true;
+                    self.add_page_preset = PaperSizePreset::A4;
+                    self.add_page_orientation = if p.width > p.height {
+                        PageOrientation::Landscape
+                    } else {
+                        PageOrientation::Portrait
+                    };
+                }
             } else {
-                PageOrientation::Portrait
-            };
-            self.add_page_preset = PaperSizePreset::A4;
+                // Fallback ke memori pembuatan halaman / notebook terakhir
+                self.add_page_template = self.last_created_template;
+                self.add_page_preset = self.last_created_preset;
+                self.add_page_orientation = self.last_created_orientation;
+                self.add_page_use_custom_size = self.last_created_use_custom;
+                self.add_page_custom_width = self.last_created_width;
+                self.add_page_custom_height = self.last_created_height;
+                self.add_page_paper_color = self.last_created_paper_color;
+            }
+
             self.add_page_target_pos = AddPagePosition::AfterCurrent;
             self.show_add_page_modal = true;
         }
@@ -721,5 +742,85 @@ mod tests {
             .join("notebook.json");
         assert!(nb_json.exists());
         assert!(nb_json.starts_with(std::env::temp_dir()));
+    }
+
+    #[test]
+    fn test_open_add_page_modal_inherits_slide16x9_and_template() {
+        let mut app = RustNotesApp::default();
+        let (slide_w, slide_h) = PaperSizePreset::Slide16x9.dimensions(PageOrientation::Landscape);
+        let mut nb = Notebook::new_with_size(
+            "Slide Notebook",
+            PageTemplate::Isometric,
+            Color32::DARK_BLUE,
+            slide_w,
+            slide_h,
+        );
+        let custom_color = Color32::from_rgb(240, 245, 235);
+        nb.pages[0].paper_color = custom_color.into();
+
+        let id = nb.id.clone();
+        app.library.notebooks.push(nb);
+        app.active_notebook_id = Some(id);
+        app.current_page_index = 0;
+
+        app.open_add_page_modal(0);
+
+        assert!(app.show_add_page_modal);
+        assert_eq!(app.add_page_template, PageTemplate::Isometric);
+        assert_eq!(app.add_page_preset, PaperSizePreset::Slide16x9);
+        assert_eq!(app.add_page_orientation, PageOrientation::Landscape);
+        assert!(!app.add_page_use_custom_size);
+        assert_eq!(app.add_page_paper_color, custom_color);
+    }
+
+    #[test]
+    fn test_open_add_page_modal_inherits_custom_dimensions() {
+        let mut app = RustNotesApp::default();
+        let mut nb = Notebook::new_with_size(
+            "Custom Size NB",
+            PageTemplate::RuledNarrow,
+            Color32::DARK_GREEN,
+            723.0,
+            945.0,
+        );
+        let custom_color = Color32::from_rgb(45, 45, 48);
+        nb.pages[0].paper_color = custom_color.into();
+
+        let id = nb.id.clone();
+        app.library.notebooks.push(nb);
+        app.active_notebook_id = Some(id);
+        app.current_page_index = 0;
+
+        app.open_add_page_modal(0);
+
+        assert!(app.show_add_page_modal);
+        assert_eq!(app.add_page_template, PageTemplate::RuledNarrow);
+        assert!(app.add_page_use_custom_size);
+        assert_eq!(app.add_page_custom_width, 723.0);
+        assert_eq!(app.add_page_custom_height, 945.0);
+        assert_eq!(app.add_page_paper_color, custom_color);
+    }
+
+    #[test]
+    fn test_open_add_page_modal_fallback_last_created() {
+        let mut app = RustNotesApp::default();
+        let mut nb = Notebook::new("Empty NB", PageTemplate::Blank, Color32::BLACK);
+        nb.pages.clear();
+        let id = nb.id.clone();
+        app.library.notebooks.push(nb);
+        app.active_notebook_id = Some(id);
+        app.last_created_template = PageTemplate::GridFine;
+        app.last_created_preset = PaperSizePreset::Standard4x3;
+        app.last_created_orientation = PageOrientation::Landscape;
+        app.last_created_use_custom = false;
+        app.last_created_paper_color = Color32::from_rgb(26, 26, 28);
+
+        app.open_add_page_modal(0);
+
+        assert!(app.show_add_page_modal);
+        assert_eq!(app.add_page_template, PageTemplate::GridFine);
+        assert_eq!(app.add_page_preset, PaperSizePreset::Standard4x3);
+        assert_eq!(app.add_page_orientation, PageOrientation::Landscape);
+        assert_eq!(app.add_page_paper_color, Color32::from_rgb(26, 26, 28));
     }
 }

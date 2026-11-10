@@ -205,6 +205,34 @@ pub fn export_page_to_png(
                         y += spacing;
                     }
                 }
+                crate::model::PageTemplate::RuledNarrow => {
+                    let sp = 20.0 * scale;
+                    let mut y = sp;
+                    while y < h_f {
+                        draw_capsule_segment(
+                            &mut img,
+                            eframe::egui::Pos2::new(0.0, y),
+                            eframe::egui::Pos2::new(w_f, y),
+                            0.65,
+                            line_col,
+                        );
+                        y += sp;
+                    }
+                }
+                crate::model::PageTemplate::RuledWide => {
+                    let sp = 40.0 * scale;
+                    let mut y = sp;
+                    while y < h_f {
+                        draw_capsule_segment(
+                            &mut img,
+                            eframe::egui::Pos2::new(0.0, y),
+                            eframe::egui::Pos2::new(w_f, y),
+                            0.8,
+                            line_col,
+                        );
+                        y += sp;
+                    }
+                }
                 crate::model::PageTemplate::Grid => {
                     let mut y = spacing;
                     while y < h_f {
@@ -229,6 +257,31 @@ pub fn export_page_to_png(
                         x += spacing;
                     }
                 }
+                crate::model::PageTemplate::GridFine => {
+                    let sp = 15.0 * scale;
+                    let mut y = sp;
+                    while y < h_f {
+                        draw_capsule_segment(
+                            &mut img,
+                            eframe::egui::Pos2::new(0.0, y),
+                            eframe::egui::Pos2::new(w_f, y),
+                            0.55,
+                            line_col,
+                        );
+                        y += sp;
+                    }
+                    let mut x = sp;
+                    while x < w_f {
+                        draw_capsule_segment(
+                            &mut img,
+                            eframe::egui::Pos2::new(x, 0.0),
+                            eframe::egui::Pos2::new(x, h_f),
+                            0.55,
+                            line_col,
+                        );
+                        x += sp;
+                    }
+                }
                 crate::model::PageTemplate::Dotted => {
                     let mut y = spacing;
                     while y < h_f {
@@ -239,6 +292,37 @@ pub fn export_page_to_png(
                             x += spacing;
                         }
                         y += spacing;
+                    }
+                }
+                crate::model::PageTemplate::DottedFine => {
+                    let sp = 15.0 * scale;
+                    let mut y = sp;
+                    while y < h_f {
+                        let mut x = sp;
+                        while x < w_f {
+                            let pt = eframe::egui::Pos2::new(x, y);
+                            draw_capsule_segment(&mut img, pt, pt, 1.0, [204, 211, 218, 255]);
+                            x += sp;
+                        }
+                        y += sp;
+                    }
+                }
+                crate::model::PageTemplate::Isometric => {
+                    let dx = 30.0 * scale;
+                    let dy = 30.0 * 0.8660254 * scale;
+                    let dot_col = [204, 211, 218, 255];
+                    let mut row = 0usize;
+                    let mut y = dy;
+                    while y < h_f {
+                        let x_offset = if row % 2 == 1 { dx * 0.5 } else { 0.0 };
+                        let mut x = x_offset + dx;
+                        while x < w_f {
+                            let pt = eframe::egui::Pos2::new(x, y);
+                            draw_capsule_segment(&mut img, pt, pt, 1.2, dot_col);
+                            x += dx;
+                        }
+                        y += dy;
+                        row += 1;
                     }
                 }
                 crate::model::PageTemplate::Cornell => {
