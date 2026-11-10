@@ -1271,3 +1271,52 @@ fn test_negative_texture_lookup_recorded() {
     state.failed_texture_loads.insert(key.clone());
     assert!(state.failed_texture_loads.contains(&key));
 }
+
+#[test]
+fn test_highlighter_alpha_constant_consistency() {
+    use crate::model::{HIGHLIGHTER_ALPHA, HIGHLIGHTER_OPACITY_F32};
+    assert_eq!(HIGHLIGHTER_ALPHA, 95);
+    assert!((HIGHLIGHTER_OPACITY_F32 - (95.0 / 255.0)).abs() < 1e-5);
+}
+
+#[test]
+fn test_undo_redo_snapshot_allocation_and_determinism() {
+    let mut state = CanvasState::default();
+    let mut page = Page::new(PageTemplate::Blank);
+
+    for i in 0..60 {
+        state.push_undo(&page.id, &page.objects);
+        page.objects.push(DrawObject::Text {
+            id: format!("text_{}", i),
+            x: i as f32,
+            y: i as f32,
+            text: format!("Item {}", i),
+            font_size: 14.0,
+            color: ColorData {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            rotation: 0.0,
+        });
+    }
+
+    assert_eq!(page.objects.len(), 60);
+    // Stack harus dibatasi oleh MAX_UNDO_DEPTH (50)
+    assert!(state.undo_stacks.get(&page.id).unwrap().len() <= CanvasState::MAX_UNDO_DEPTH);
+
+    // Undo 30 kali
+    for _ in 0..30 {
+        state.undo(&mut page);
+    }
+    assert_eq!(page.objects.len(), 30);
+    assert_eq!(page.objects.last().unwrap().id(), "text_29");
+
+    // Redo 30 kali
+    for _ in 0..30 {
+        state.redo(&mut page);
+    }
+    assert_eq!(page.objects.len(), 60);
+    assert_eq!(page.objects.last().unwrap().id(), "text_59");
+}

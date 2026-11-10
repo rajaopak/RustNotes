@@ -386,7 +386,10 @@ impl RustNotesApp {
                                                         if points.len() > 1 {
                                                             let c = if *is_highlighter {
                                                                 Color32::from_rgba_unmultiplied(
-                                                                    color.r, color.g, color.b, 95,
+                                                                    color.r,
+                                                                    color.g,
+                                                                    color.b,
+                                                                    crate::model::HIGHLIGHTER_ALPHA,
                                                                 )
                                                             } else {
                                                                 color.to_color32()

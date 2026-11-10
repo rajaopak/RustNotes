@@ -129,7 +129,7 @@ pub fn export_page_to_svg(page: &Page) -> String {
                     continue;
                 }
                 let c_alpha = if *is_highlighter {
-                    (color.a as f32 / 255.0) * 0.38
+                    (color.a as f32 / 255.0) * crate::model::HIGHLIGHTER_OPACITY_F32
                 } else {
                     color.a as f32 / 255.0
                 };

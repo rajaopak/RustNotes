@@ -289,7 +289,7 @@ pub fn export_page_to_png(
                 }
                 let smoothed = crate::geometry::smooth_stroke_points(points, 3);
                 let rgba = if *is_highlighter {
-                    [color.r, color.g, color.b, 95]
+                    [color.r, color.g, color.b, crate::model::HIGHLIGHTER_ALPHA]
                 } else {
                     [color.r, color.g, color.b, color.a]
                 };

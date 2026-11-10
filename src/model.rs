@@ -593,6 +593,12 @@ pub struct CustomTemplate {
 
 pub const CURRENT_NOTEBOOK_SCHEMA_VERSION: u32 = 2;
 
+/// Nilai alpha standar (0-255) untuk goresan alat Highlighter di seluruh kanvas, sidebar, dan ekspor PNG
+pub const HIGHLIGHTER_ALPHA: u8 = 95;
+
+/// Nilai opacity desimal (0.0 - 1.0) untuk goresan alat Highlighter pada ekspor SVG
+pub const HIGHLIGHTER_OPACITY_F32: f32 = HIGHLIGHTER_ALPHA as f32 / 255.0;
+
 fn default_notebook_schema_version() -> u32 {
     1
 }

@@ -79,7 +79,12 @@ pub fn render_zoom_window_canvas(
                 let smoothed = smooth_stroke_points(points, state.smoothing_steps);
                 let stroke_w = width * scale;
                 let stroke_c = if *is_highlighter {
-                    Color32::from_rgba_unmultiplied(color.r, color.g, color.b, 90)
+                    Color32::from_rgba_unmultiplied(
+                        color.r,
+                        color.g,
+                        color.b,
+                        crate::model::HIGHLIGHTER_ALPHA,
+                    )
                 } else {
                     color.to_color32()
                 };
@@ -176,7 +181,7 @@ pub fn render_zoom_window_canvas(
                         state.stroke_color.r(),
                         state.stroke_color.g(),
                         state.stroke_color.b(),
-                        110,
+                        crate::model::HIGHLIGHTER_ALPHA,
                     )
                 } else {
                     state.stroke_color
@@ -215,7 +220,7 @@ pub fn render_zoom_window_canvas(
                 state.stroke_color.r(),
                 state.stroke_color.g(),
                 state.stroke_color.b(),
-                110,
+                crate::model::HIGHLIGHTER_ALPHA,
             )
         } else {
             state.stroke_color

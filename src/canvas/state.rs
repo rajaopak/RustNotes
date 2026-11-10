@@ -17,9 +17,9 @@ pub struct CanvasState {
     pub pan_offset: Vec2,
     pub smoothing_steps: usize,
 
-    // Undo / Redo stacks: page_id -> Vec<Vec<Arc<DrawObject>>> (Structural sharing)
-    pub undo_stacks: HashMap<String, Vec<Vec<Arc<DrawObject>>>>,
-    pub redo_stacks: HashMap<String, Vec<Vec<Arc<DrawObject>>>>,
+    // Undo / Redo stacks: page_id -> Vec<Arc<Vec<DrawObject>>> (Snapshot structural sharing)
+    pub undo_stacks: HashMap<String, Vec<Arc<Vec<DrawObject>>>>,
+    pub redo_stacks: HashMap<String, Vec<Arc<Vec<DrawObject>>>>,
     pub undo_page_order: Vec<String>,
     pub redo_page_order: Vec<String>,
 
@@ -684,13 +684,12 @@ impl CanvasState {
     pub fn push_undo(&mut self, page_id: &str, objects: &[DrawObject]) {
         let stack = self.undo_stacks.entry(page_id.to_string()).or_default();
         if let Some(top) = stack.last()
-            && top.len() == objects.len()
-            && top.iter().zip(objects.iter()).all(|(a, b)| **a == *b)
+            && top.as_slice() == objects
         {
             return;
         }
-        let arc_list: Vec<Arc<DrawObject>> = objects.iter().cloned().map(Arc::new).collect();
-        stack.push(arc_list);
+        let snapshot = Arc::new(objects.to_vec());
+        stack.push(snapshot);
         if stack.len() > Self::MAX_UNDO_DEPTH {
             stack.remove(0);
         }
@@ -708,8 +707,7 @@ impl CanvasState {
     pub fn clean_redundant_top_undo(&mut self, page_id: &str, objects: &[DrawObject]) {
         if let Some(stack) = self.undo_stacks.get_mut(page_id)
             && let Some(top) = stack.last()
-            && top.len() == objects.len()
-            && top.iter().zip(objects.iter()).all(|(a, b)| **a == *b)
+            && top.as_slice() == objects
         {
             stack.pop();
             if let Some(pos) = self.undo_page_order.iter().rposition(|id| id == page_id) {
@@ -749,9 +747,8 @@ impl CanvasState {
             && let Some(previous) = stack.pop()
         {
             let redo_stack = self.redo_stacks.entry(page.id.clone()).or_default();
-            let current_arcs: Vec<Arc<DrawObject>> =
-                page.objects.iter().cloned().map(Arc::new).collect();
-            redo_stack.push(current_arcs);
+            let current_snapshot = Arc::new(page.objects.clone());
+            redo_stack.push(current_snapshot);
             if redo_stack.len() > Self::MAX_UNDO_DEPTH {
                 redo_stack.remove(0);
             }
@@ -763,7 +760,7 @@ impl CanvasState {
                 self.redo_page_order.remove(0);
             }
 
-            page.objects = previous.into_iter().map(Arc::unwrap_or_clone).collect();
+            page.objects = Arc::unwrap_or_clone(previous);
             self.selected_ids.clear();
             self.mesh_cache.clear();
             self.spatial_grid.rebuild(&page.objects);
@@ -775,9 +772,8 @@ impl CanvasState {
             && let Some(next) = stack.pop()
         {
             let undo_stack = self.undo_stacks.entry(page.id.clone()).or_default();
-            let current_arcs: Vec<Arc<DrawObject>> =
-                page.objects.iter().cloned().map(Arc::new).collect();
-            undo_stack.push(current_arcs);
+            let current_snapshot = Arc::new(page.objects.clone());
+            undo_stack.push(current_snapshot);
             if undo_stack.len() > Self::MAX_UNDO_DEPTH {
                 undo_stack.remove(0);
             }
@@ -789,7 +785,7 @@ impl CanvasState {
                 self.undo_page_order.remove(0);
             }
 
-            page.objects = next.into_iter().map(Arc::unwrap_or_clone).collect();
+            page.objects = Arc::unwrap_or_clone(next);
             self.selected_ids.clear();
             self.mesh_cache.clear();
             self.spatial_grid.rebuild(&page.objects);
