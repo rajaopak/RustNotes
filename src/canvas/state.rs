@@ -4,7 +4,7 @@ use crate::geometry::{
 };
 use crate::model::{DrawObject, Page, StrokePoint};
 use eframe::egui::{self, Color32, Mesh, Pos2, Rect, TextureHandle, Vec2};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 use uuid::Uuid;
@@ -55,6 +55,7 @@ pub struct CanvasState {
 
     // Fase 3: Texture cache & Active notebook ID for asset lookup
     pub texture_cache: HashMap<(String, String), TextureHandle>,
+    pub failed_texture_loads: HashSet<(String, String)>,
     pub active_notebook_id: Option<String>,
 
     // Fase 4: Object clipboard
@@ -134,6 +135,7 @@ impl Default for CanvasState {
             spatial_grid: SpatialGrid::new(100.0),
             spatial_grid_page_id: None,
             texture_cache: HashMap::new(),
+            failed_texture_loads: HashSet::new(),
             active_notebook_id: None,
             object_clipboard: Vec::new(),
             app_clipboard_timestamp: None,
@@ -182,23 +184,59 @@ impl CanvasState {
         asset_id: &str,
     ) -> Option<&TextureHandle> {
         let key = (notebook_id.to_string(), asset_id.to_string());
-        if !self.texture_cache.contains_key(&key)
-            && let Ok(bytes) = crate::storage::load_asset_from_notebook(
+        if self.failed_texture_loads.contains(&key) {
+            return None;
+        }
+
+        if !self.texture_cache.contains_key(&key) {
+            // Cap maximum textures in memory (200 handles) to prevent GPU memory leak
+            const MAX_TEXTURE_CACHE_SIZE: usize = 200;
+            if self.texture_cache.len() >= MAX_TEXTURE_CACHE_SIZE {
+                let active = self.active_notebook_id.as_deref().unwrap_or("");
+                let keys_to_remove: Vec<_> = self
+                    .texture_cache
+                    .keys()
+                    .filter(|(nb, _)| nb != active)
+                    .take(20)
+                    .cloned()
+                    .collect();
+                for k in keys_to_remove {
+                    self.texture_cache.remove(&k);
+                }
+                if self.texture_cache.len() >= MAX_TEXTURE_CACHE_SIZE {
+                    let any_keys: Vec<_> = self.texture_cache.keys().take(10).cloned().collect();
+                    for k in any_keys {
+                        self.texture_cache.remove(&k);
+                    }
+                }
+            }
+
+            match crate::storage::load_asset_from_notebook(
                 &crate::storage::app_storage_dir(),
                 notebook_id,
                 asset_id,
-            )
-            && let Ok(dyn_img) = image::load_from_memory(&bytes)
-        {
-            let rgba = dyn_img.to_rgba8();
-            let size = [rgba.width() as usize, rgba.height() as usize];
-            let color_image = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
-            let handle = ctx.load_texture(
-                format!("{notebook_id}:{asset_id}"),
-                color_image,
-                Default::default(),
-            );
-            self.texture_cache.insert(key.clone(), handle);
+            ) {
+                Ok(bytes) => match image::load_from_memory(&bytes) {
+                    Ok(dyn_img) => {
+                        let rgba = dyn_img.to_rgba8();
+                        let size = [rgba.width() as usize, rgba.height() as usize];
+                        let color_image =
+                            egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+                        let handle = ctx.load_texture(
+                            format!("{notebook_id}:{asset_id}"),
+                            color_image,
+                            Default::default(),
+                        );
+                        self.texture_cache.insert(key.clone(), handle);
+                    }
+                    Err(_) => {
+                        self.failed_texture_loads.insert(key.clone());
+                    }
+                },
+                Err(_) => {
+                    self.failed_texture_loads.insert(key.clone());
+                }
+            }
         }
         self.texture_cache.get(&key)
     }
