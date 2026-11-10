@@ -190,7 +190,11 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     let mesh =
                         tessellate_stroke_ex(&smoothed, *width, stroke_c, *is_highlighter, |p| p);
                     if state.mesh_cache.len() > 1500 {
-                        state.mesh_cache.clear();
+                        let to_remove: Vec<_> =
+                            state.mesh_cache.keys().take(300).cloned().collect();
+                        for k in to_remove {
+                            state.mesh_cache.remove(&k);
+                        }
                     }
                     state.mesh_cache.insert(key, mesh.clone());
                     mesh
@@ -517,8 +521,20 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 // Fase 8.5: Palm Rejection — tolak awal goresan jika multi-touch terdeteksi
                 let multi_touch = ui.input(|i| i.multi_touch().is_some());
                 if !(state.palm_rejection_enabled && multi_touch) {
+                    let pressure = ui.input(|i| {
+                        for event in &i.raw.events {
+                            if let egui::Event::Touch { force: Some(f), .. } = event {
+                                return (*f).clamp(0.05, 1.0);
+                            }
+                        }
+                        1.0
+                    });
                     state.active_stroke_page_id = Some(page.id.clone());
-                    state.draft_stroke = Some(vec![StrokePoint::from(page_p)]);
+                    state.draft_stroke = Some(vec![StrokePoint {
+                        x: page_p.x,
+                        y: page_p.y,
+                        pressure,
+                    }]);
                     state.last_stroke_move_time = Some(Instant::now());
                     state.recognized_draft_shape = None;
                     state.selected_ids.clear();
@@ -1073,7 +1089,19 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                 && let Some(last) = pts.last()
                                 && (page_p - last.to_pos2()).length() >= min_dist
                             {
-                                pts.push(StrokePoint::from(page_p));
+                                let pressure = ui.input(|i| {
+                                    for event in &i.raw.events {
+                                        if let egui::Event::Touch { force: Some(f), .. } = event {
+                                            return (*f).clamp(0.05, 1.0);
+                                        }
+                                    }
+                                    1.0
+                                });
+                                pts.push(StrokePoint {
+                                    x: page_p.x,
+                                    y: page_p.y,
+                                    pressure,
+                                });
                                 state.last_stroke_move_time = Some(Instant::now());
                             }
                         }
@@ -2612,7 +2640,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                                 change_shape_kind(obj, ShapeKind::Rectangle, cr);
                                             }
                                         }
-                                        state.mesh_cache.clear();
+                                        state.invalidate_mesh_for_selection();
                                         state.spatial_grid.rebuild(&page.objects);
                                         ui.close_menu();
                                     }
@@ -2623,7 +2651,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                                 change_shape_kind(obj, ShapeKind::Rectangle, 0.0);
                                             }
                                         }
-                                        state.mesh_cache.clear();
+                                        state.invalidate_mesh_for_selection();
                                         state.spatial_grid.rebuild(&page.objects);
                                         ui.close_menu();
                                     }
@@ -2634,7 +2662,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                                 change_shape_kind(obj, ShapeKind::Ellipse, 0.0);
                                             }
                                         }
-                                        state.mesh_cache.clear();
+                                        state.invalidate_mesh_for_selection();
                                         state.spatial_grid.rebuild(&page.objects);
                                         ui.close_menu();
                                     }
@@ -2645,7 +2673,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                                 change_shape_kind(obj, ShapeKind::Diamond, 0.0);
                                             }
                                         }
-                                        state.mesh_cache.clear();
+                                        state.invalidate_mesh_for_selection();
                                         state.spatial_grid.rebuild(&page.objects);
                                         ui.close_menu();
                                     }
@@ -2656,7 +2684,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                                 change_shape_kind(obj, ShapeKind::Triangle, 0.0);
                                             }
                                         }
-                                        state.mesh_cache.clear();
+                                        state.invalidate_mesh_for_selection();
                                         state.spatial_grid.rebuild(&page.objects);
                                         ui.close_menu();
                                     }
@@ -2671,7 +2699,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                                 );
                                             }
                                         }
-                                        state.mesh_cache.clear();
+                                        state.invalidate_mesh_for_selection();
                                         state.spatial_grid.rebuild(&page.objects);
                                         ui.close_menu();
                                     }
@@ -2682,7 +2710,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                                 change_shape_kind(obj, ShapeKind::Line, 0.0);
                                             }
                                         }
-                                        state.mesh_cache.clear();
+                                        state.invalidate_mesh_for_selection();
                                         state.spatial_grid.rebuild(&page.objects);
                                         ui.close_menu();
                                     }
@@ -2704,7 +2732,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                             change_shape_kind(obj, ShapeKind::Rectangle, cr);
                                         }
                                     }
-                                    state.mesh_cache.clear();
+                                    state.invalidate_mesh_for_selection();
                                     state.spatial_grid.rebuild(&page.objects);
                                 }
 
@@ -2740,7 +2768,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                                 *color = col.into();
                                             }
                                         }
-                                        state.mesh_cache.clear();
+                                        state.invalidate_mesh_for_selection();
                                     }
                                 }
 
@@ -2758,7 +2786,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                                 *stroke_width = w;
                                             }
                                         }
-                                        state.mesh_cache.clear();
+                                        state.invalidate_mesh_for_selection();
                                     }
                                 }
 
@@ -2778,7 +2806,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                             *fill = None;
                                         }
                                     }
-                                    state.mesh_cache.clear();
+                                    state.invalidate_mesh_for_selection();
                                 }
 
                                 for &(f_col, tooltip) in &[
@@ -2832,7 +2860,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                                 *fill = Some(f_col.into());
                                             }
                                         }
-                                        state.mesh_cache.clear();
+                                        state.invalidate_mesh_for_selection();
                                     }
                                 }
 

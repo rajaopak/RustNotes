@@ -1242,3 +1242,32 @@ fn test_large_circle_lifecycle_does_not_shrink_on_drag_or_commit() {
         "Bentuk akhir yang dikomit harus memiliki dimensi konsisten dengan preview!"
     );
 }
+
+#[test]
+fn test_fine_grained_mesh_cache_invalidation() {
+    let mut state = CanvasState::default();
+    let mesh1 = eframe::egui::Mesh::default();
+    let mesh2 = eframe::egui::Mesh::default();
+
+    state.mesh_cache.insert(("obj_1".to_string(), 0), mesh1);
+    state.mesh_cache.insert(("obj_2".to_string(), 0), mesh2);
+    assert_eq!(state.mesh_cache.len(), 2);
+
+    // Pilih hanya obj_1 dan lakukan invalidasi
+    state.selected_ids = vec!["obj_1".to_string()];
+    state.invalidate_mesh_for_selection();
+
+    // obj_1 harus terhapus, obj_2 harus tetap ada di cache
+    assert!(!state.mesh_cache.contains_key(&("obj_1".to_string(), 0)));
+    assert!(state.mesh_cache.contains_key(&("obj_2".to_string(), 0)));
+}
+
+#[test]
+fn test_negative_texture_lookup_recorded() {
+    let mut state = CanvasState::default();
+    let key = ("fake_nb".to_string(), "missing_asset.png".to_string());
+    assert!(!state.failed_texture_loads.contains(&key));
+
+    state.failed_texture_loads.insert(key.clone());
+    assert!(state.failed_texture_loads.contains(&key));
+}

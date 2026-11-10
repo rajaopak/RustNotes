@@ -706,12 +706,22 @@ pub fn resolve_connector_endpoints(
     end: &crate::model::ConnectorEnd,
     all_objects: &[DrawObject],
 ) -> ((Point2D, Direction), (Point2D, Direction)) {
+    let maybe_end_pt = match end {
+        crate::model::ConnectorEnd::Free { x, y } => Some(Point2D::new(*x, *y)),
+        crate::model::ConnectorEnd::Attached { shape_id, site } => all_objects
+            .iter()
+            .find(|o| o.id() == shape_id)
+            .map(|s| shape_connection_point(s, *site, None).0),
+    };
+
     let (start_pt, start_dir) = match start {
         crate::model::ConnectorEnd::Attached { shape_id, site } => {
             if let Some(shape) = all_objects.iter().find(|o| o.id() == shape_id) {
-                shape_connection_point(shape, *site, None)
+                shape_connection_point(shape, *site, maybe_end_pt)
+            } else if let Some(e_pt) = maybe_end_pt {
+                (Point2D::new(e_pt.x - 80.0, e_pt.y), Direction::Right)
             } else {
-                (Point2D::new(50.0, 50.0), Direction::Right)
+                (Point2D::new(100.0, 100.0), Direction::Right)
             }
         }
         crate::model::ConnectorEnd::Free { x, y } => (Point2D::new(*x, *y), Direction::Right),
@@ -722,7 +732,7 @@ pub fn resolve_connector_endpoints(
             if let Some(shape) = all_objects.iter().find(|o| o.id() == shape_id) {
                 shape_connection_point(shape, *site, Some(start_pt))
             } else {
-                (Point2D::new(150.0, 150.0), Direction::Left)
+                (Point2D::new(start_pt.x + 80.0, start_pt.y), Direction::Left)
             }
         }
         crate::model::ConnectorEnd::Free { x, y } => (Point2D::new(*x, *y), Direction::Left),

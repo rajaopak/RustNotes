@@ -511,19 +511,61 @@ impl Page {
             })
             .collect();
 
-        for obj in &mut self.objects {
-            if let DrawObject::Connector { start, end, .. } = obj {
-                if let ConnectorEnd::Attached { shape_id, .. } = start
-                    && !valid_shape_ids.contains(shape_id)
-                {
-                    *start = ConnectorEnd::Free { x: 50.0, y: 50.0 };
-                    fixed += 1;
-                }
-                if let ConnectorEnd::Attached { shape_id, .. } = end
-                    && !valid_shape_ids.contains(shape_id)
-                {
-                    *end = ConnectorEnd::Free { x: 150.0, y: 150.0 };
-                    fixed += 1;
+        for i in 0..self.objects.len() {
+            if let DrawObject::Connector {
+                ref start,
+                ref end,
+                ref control_points,
+                ..
+            } = self.objects[i]
+            {
+                let start_orphan = match start {
+                    ConnectorEnd::Attached { shape_id, .. } => !valid_shape_ids.contains(shape_id),
+                    _ => false,
+                };
+                let end_orphan = match end {
+                    ConnectorEnd::Attached { shape_id, .. } => !valid_shape_ids.contains(shape_id),
+                    _ => false,
+                };
+
+                if start_orphan || end_orphan {
+                    let fallback_start = if let Some(first_cp) = control_points.first() {
+                        (first_cp.x, first_cp.y)
+                    } else if let ConnectorEnd::Free { x, y } = end {
+                        (x - 80.0, *y)
+                    } else {
+                        (100.0, 100.0)
+                    };
+
+                    let fallback_end = if let Some(last_cp) = control_points.last() {
+                        (last_cp.x, last_cp.y)
+                    } else if let ConnectorEnd::Free { x, y } = start {
+                        (x + 80.0, *y)
+                    } else {
+                        (fallback_start.0 + 80.0, fallback_start.1)
+                    };
+
+                    if let DrawObject::Connector {
+                        ref mut start,
+                        ref mut end,
+                        ..
+                    } = self.objects[i]
+                    {
+                        if start_orphan {
+                            *start = ConnectorEnd::Free {
+                                x: fallback_start.0,
+                                y: fallback_start.1,
+                            };
+                            fixed += 1;
+                        }
+                        if end_orphan {
+                            *end = ConnectorEnd::Free {
+                                x: fallback_end.0,
+                                y: fallback_end.1,
+                            };
+                            fixed += 1;
+                        }
+                    }
                 }
             }
         }

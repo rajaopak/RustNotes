@@ -255,6 +255,18 @@ impl CanvasState {
         self.texture_cache.get(&key)
     }
 
+    pub fn invalidate_mesh_for_selection(&mut self) {
+        if self.selected_ids.is_empty() {
+            return;
+        }
+        self.mesh_cache
+            .retain(|(k, _), _| !self.selected_ids.contains(k));
+    }
+
+    pub fn invalidate_mesh_for_id(&mut self, id: &str) {
+        self.mesh_cache.retain(|(k, _), _| k != id);
+    }
+
     // Fase 4: Clipboard & Selection helpers
     pub fn copy_selected(&mut self, objects: &[DrawObject]) {
         self.object_clipboard = objects
