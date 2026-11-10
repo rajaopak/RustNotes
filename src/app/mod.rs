@@ -32,6 +32,11 @@ impl eframe::App for RustNotesApp {
         // Apply Goodnotes theme styling (Dark / Light / System OS Windows)
         setup_goodnotes_theme(ctx, self.settings.theme_mode);
 
+        // Handle window close event to ensure any debounced dirty changes are flushed immediately
+        if ctx.input(|i| i.viewport().close_requested()) {
+            self.flush_all_dirty();
+        }
+
         // Fase 6: Debounced per-notebook save (1.5 detik setelah modifikasi terakhir)
         if !self.dirty_notebooks.is_empty() && !self.is_read_only {
             let debounce = std::time::Duration::from_millis(1500);
@@ -43,28 +48,40 @@ impl eframe::App for RustNotesApp {
                 .filter(|id| {
                     self.last_modified
                         .get(*id)
-                        .map(|t| now.duration_since(*t) >= debounce)
+                        .map(|t| *t <= now && now.duration_since(*t) >= debounce)
                         .unwrap_or(true)
                 })
                 .cloned()
                 .collect();
 
+            let mut any_saved = false;
             for nb_id in &ready_to_save {
                 if let Some(nb) = self.library.notebooks.iter().find(|n| &n.id == nb_id) {
-                    let result = save_notebook_to_dir(&storage_dir, nb);
-                    if result.is_err() {
-                        self.toast_message = Some(format!(
-                            "⚠ Gagal menyimpan notebook '{}'. Coba lagi.",
-                            nb.title
-                        ));
+                    match save_notebook_to_dir(&storage_dir, nb) {
+                        Ok(()) => {
+                            self.dirty_notebooks.remove(nb_id);
+                            self.last_modified.remove(nb_id);
+                            any_saved = true;
+                        }
+                        Err(e) => {
+                            eprintln!("[Storage] Debounced save failed for {nb_id}: {e}");
+                            self.toast_message = Some(format!(
+                                "⚠ Gagal menyimpan notebook '{}'. Akan dicoba lagi.",
+                                nb.title
+                            ));
+                            // Backoff retry by 5 seconds
+                            self.last_modified
+                                .insert(nb_id.clone(), now + std::time::Duration::from_secs(5));
+                        }
                     }
+                } else {
+                    self.dirty_notebooks.remove(nb_id);
+                    self.last_modified.remove(nb_id);
                 }
-                self.dirty_notebooks.remove(nb_id);
-                self.last_modified.remove(nb_id);
             }
 
             // Juga perbarui index jika ada yang berubah
-            if !ready_to_save.is_empty() {
+            if any_saved {
                 self.sync_library_index();
             }
 
@@ -137,5 +154,9 @@ impl eframe::App for RustNotesApp {
         } else {
             self.render_library_view(ctx);
         }
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.flush_all_dirty();
     }
 }

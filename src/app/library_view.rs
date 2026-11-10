@@ -2,7 +2,7 @@ use super::cover::draw_goodnotes_cover;
 use super::state::RustNotesApp;
 use super::types::{COVER_PALETTE, NavView};
 use crate::model::{Library, Notebook, PageOrientation, PageTemplate, PaperSizePreset, ThemeMode};
-use crate::storage::{app_storage_dir, save_notebook_to_dir, save_settings_to_dir};
+use crate::storage::{app_storage_dir, save_settings_to_dir};
 use eframe::egui::{
     self, Align, Button, Color32, CornerRadius, FontId, Layout, Rect, RichText, ScrollArea, Sense,
     Stroke, StrokeKind, Ui, Vec2,
@@ -802,12 +802,8 @@ impl RustNotesApp {
                             let storage_dir = app_storage_dir();
 
                             // 1. Force-save notebook asli jika masih dirty agar data & aset terkini tersimpan ke disk
-                            if self.dirty_notebooks.contains(&orig_id)
-                                && let Some(nb) =
-                                    self.library.notebooks.iter().find(|n| n.id == orig_id)
-                            {
-                                let _ = save_notebook_to_dir(&storage_dir, nb);
-                                self.dirty_notebooks.remove(&orig_id);
+                            if self.dirty_notebooks.contains(&orig_id) {
+                                self.force_save_notebook(&orig_id);
                             }
 
                             let mut clone = self.library.notebooks[idx].clone();
@@ -845,12 +841,8 @@ impl RustNotesApp {
                         if let Some((nb_id, nb_title)) = to_export_zip {
                             let storage_dir = app_storage_dir();
                             // Force-save dulu kalau ada perubahan belum tersimpan
-                            if self.dirty_notebooks.contains(&nb_id)
-                                && let Some(nb) =
-                                    self.library.notebooks.iter().find(|n| n.id == nb_id)
-                            {
-                                let _ = save_notebook_to_dir(&storage_dir, nb);
-                                self.dirty_notebooks.remove(&nb_id);
+                            if self.dirty_notebooks.contains(&nb_id) {
+                                self.force_save_notebook(&nb_id);
                             }
                             let safe_title = nb_title
                                 .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");

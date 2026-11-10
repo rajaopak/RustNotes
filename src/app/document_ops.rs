@@ -194,23 +194,26 @@ impl RustNotesApp {
     }
 
     /// Fase 6: Simpan satu notebook segera (force-save, bypass debounce).
-    pub(crate) fn force_save_notebook(&mut self, notebook_id: &str) {
+    pub(crate) fn force_save_notebook(&mut self, notebook_id: &str) -> bool {
         if self.is_read_only {
-            return;
+            return false;
         }
         let storage_dir = app_storage_dir();
         if let Some(nb) = self.library.notebooks.iter().find(|n| n.id == notebook_id) {
             let result = save_notebook_to_dir(&storage_dir, nb);
-            if result.is_err() {
+            if let Err(e) = result {
+                eprintln!("[Storage] Force-save failed for {notebook_id}: {e}");
                 self.toast_message = Some(format!(
                     "⚠ Gagal menyimpan notebook '{}'. Data mungkin belum tersimpan.",
                     nb.title
                 ));
+                return false;
             }
         }
         self.dirty_notebooks.remove(notebook_id);
         self.last_modified.remove(notebook_id);
         self.sync_library_index();
+        true
     }
 
     /// Fase 6: Force-save semua notebook yang dirty (dipanggil saat tutup/pindah tab).
@@ -668,4 +671,46 @@ fn try_get_clipboard_hdrop_files() -> Vec<std::path::PathBuf> {
         }
     }
     paths
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Notebook, PageTemplate};
+    use eframe::egui::Color32;
+
+    #[test]
+    fn test_mark_notebook_dirty() {
+        let mut app = RustNotesApp::default();
+        let test_id = "test-nb-dirty-1";
+        assert!(!app.dirty_notebooks.contains(test_id));
+        app.mark_dirty(test_id);
+        assert!(app.dirty_notebooks.contains(test_id));
+        assert!(app.last_modified.contains_key(test_id));
+    }
+
+    #[test]
+    fn test_force_save_read_only_preserves_dirty() {
+        let mut app = RustNotesApp::default();
+        let test_id = "test-nb-ro";
+        app.is_read_only = true;
+        app.dirty_notebooks.insert(test_id.to_string());
+        let saved = app.force_save_notebook(test_id);
+        assert!(!saved);
+        assert!(app.dirty_notebooks.contains(test_id));
+    }
+
+    #[test]
+    fn test_flush_all_dirty() {
+        let mut app = RustNotesApp::default();
+        let nb = Notebook::new("Test NB", PageTemplate::Blank, Color32::WHITE);
+        let id = nb.id.clone();
+        app.library.notebooks.push(nb);
+        app.mark_dirty(&id);
+        assert!(app.dirty_notebooks.contains(&id));
+
+        app.flush_all_dirty();
+        // Since saving to app_storage_dir succeeds for a valid notebook, dirty is cleared
+        assert!(!app.dirty_notebooks.contains(&id));
+    }
 }
