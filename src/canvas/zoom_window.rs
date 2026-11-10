@@ -234,3 +234,39 @@ pub fn render_zoom_window_canvas(
 
     modified
 }
+
+/// Render Indikator Kotak Target Zoom Window pada Kanvas Utama
+pub fn render_zoom_target_indicator(
+    painter: &egui::Painter,
+    state: &CanvasState,
+    page_to_screen: impl Fn(Pos2) -> Pos2,
+) {
+    if !state.show_zoom_window {
+        return;
+    }
+    let z_min = page_to_screen(state.zoom_target_rect.min);
+    let z_max = page_to_screen(state.zoom_target_rect.max);
+    let z_screen_rect = Rect::from_min_max(z_min, z_max);
+    painter.rect_filled(
+        z_screen_rect,
+        2.0,
+        Color32::from_rgba_unmultiplied(0, 114, 206, 18),
+    );
+    painter.rect_stroke(
+        z_screen_rect,
+        2.0,
+        Stroke::new(2.0_f32, Color32::from_rgb(0, 114, 206)),
+        egui::StrokeKind::Outside,
+    );
+    // Indikator zona auto-advance (25% sisi kanan)
+    let adv_left = z_screen_rect.right() - z_screen_rect.width() * 0.25;
+    let adv_rect = Rect::from_min_max(
+        Pos2::new(adv_left, z_screen_rect.top()),
+        z_screen_rect.right_bottom(),
+    );
+    painter.rect_filled(
+        adv_rect,
+        0.0,
+        Color32::from_rgba_unmultiplied(0, 114, 206, 35),
+    );
+}

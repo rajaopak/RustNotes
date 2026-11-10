@@ -1,4 +1,5 @@
-use eframe::egui::{Color32, Mesh, Pos2, Vec2};
+use super::state::CanvasState;
+use eframe::egui::{Color32, Mesh, Painter, Pos2, Vec2};
 
 pub fn smooth_laser_points(pts: &[Pos2]) -> Vec<Pos2> {
     if pts.len() <= 2 {
@@ -176,5 +177,71 @@ fn add_round_cap(mesh: &mut Mesh, center: Pos2, radius: f32, color: Color32, seg
 
     for i in 0..segments as u32 {
         mesh.add_triangle(center_idx, start_idx + i, start_idx + i + 1);
+    }
+}
+
+/// Render Efek Laser Pointer (4-layer Neon Glow Ribbon)
+pub fn render_laser_trail(painter: &Painter, state: &CanvasState, laser_alpha: f32) {
+    if laser_alpha <= 0.0
+        || (state.laser_strokes.is_empty() && state.current_laser_stroke.is_empty())
+    {
+        return;
+    }
+
+    let mut all_strokes_to_draw: Vec<&[Pos2]> = Vec::new();
+    for stroke in &state.laser_strokes {
+        if stroke.len() > 1 {
+            all_strokes_to_draw.push(stroke.as_slice());
+        }
+    }
+    if state.current_laser_stroke.len() > 1 {
+        all_strokes_to_draw.push(state.current_laser_stroke.as_slice());
+    }
+
+    let outer_col = Color32::from_rgba_unmultiplied(255, 30, 45, (40.0 * laser_alpha) as u8);
+    let halo_col = Color32::from_rgba_unmultiplied(255, 15, 35, (115.0 * laser_alpha) as u8);
+    let core_col = Color32::from_rgba_unmultiplied(255, 0, 20, (235.0 * laser_alpha) as u8);
+    let beam_col = Color32::from_rgba_unmultiplied(255, 255, 255, (250.0 * laser_alpha) as u8);
+
+    for stroke in &all_strokes_to_draw {
+        let smoothed = smooth_laser_points(stroke);
+        if smoothed.len() > 1 {
+            // Layer 1: Outer Red Neon Aura / Ambient Glow
+            let glow_mesh = tessellate_laser_layer(&smoothed, 20.0, outer_col);
+            painter.add(glow_mesh);
+
+            // Layer 2: Mid Neon Halo
+            let halo_mesh = tessellate_laser_layer(&smoothed, 11.0, halo_col);
+            painter.add(halo_mesh);
+
+            // Layer 3: Solid Vibrant Red Core
+            let core_mesh = tessellate_laser_layer(&smoothed, 5.0, core_col);
+            painter.add(core_mesh);
+
+            // Layer 4: Hotspot White Laser Beam Center
+            let beam_mesh = tessellate_laser_layer(&smoothed, 2.2, beam_col);
+            painter.add(beam_mesh);
+        }
+    }
+
+    // Ujung kepala laser aktif (jika sedang menggambar)
+    if state.laser_is_drawing
+        && let Some(last_p) = state.current_laser_stroke.last()
+    {
+        painter.circle_filled(
+            *last_p,
+            11.0,
+            Color32::from_rgba_unmultiplied(255, 40, 50, (90.0 * laser_alpha) as u8),
+        );
+        painter.circle_filled(
+            *last_p,
+            5.5,
+            Color32::from_rgba_unmultiplied(255, 10, 30, (230.0 * laser_alpha) as u8),
+        );
+        painter.circle_filled(
+            *last_p,
+            2.8,
+            Color32::from_rgba_unmultiplied(255, 255, 255, (255.0 * laser_alpha) as u8),
+        );
     }
 }
