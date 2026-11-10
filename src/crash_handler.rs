@@ -57,6 +57,14 @@ pub fn setup_panic_handler() {
     }));
 }
 
+/// Build unit test menulis log crash ke storage test yang terisolasi agar
+/// panic pada pengujian tidak mengotori folder log milik pengguna.
+#[cfg(test)]
+pub fn get_logs_dir() -> PathBuf {
+    crate::storage::app_storage_dir().join("logs")
+}
+
+#[cfg(not(test))]
 pub fn get_logs_dir() -> PathBuf {
     if let Some(mut base) = dirs::data_dir() {
         base.push("RustNotes");

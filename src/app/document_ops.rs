@@ -710,7 +710,16 @@ mod tests {
         assert!(app.dirty_notebooks.contains(&id));
 
         app.flush_all_dirty();
-        // Since saving to app_storage_dir succeeds for a valid notebook, dirty is cleared
+        // Saving succeeds against the isolated per-test storage root, so dirty is cleared
         assert!(!app.dirty_notebooks.contains(&id));
+
+        // Regression: the saved test notebook must land in the isolated test storage,
+        // never in the user's real library used by the release application.
+        let nb_json = app_storage_dir()
+            .join("notebooks")
+            .join(&id)
+            .join("notebook.json");
+        assert!(nb_json.exists());
+        assert!(nb_json.starts_with(std::env::temp_dir()));
     }
 }

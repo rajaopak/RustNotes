@@ -2,8 +2,24 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-/// Direktori penyimpanan lokal default untuk data RustNotes
+/// Direktori penyimpanan lokal default untuk data RustNotes.
+///
+/// Binary aplikasi (debug maupun release) memakai `%LOCALAPPDATA%\RustNotes`.
+#[cfg(not(test))]
 pub fn app_storage_dir() -> PathBuf {
+    user_storage_dir()
+}
+
+/// Build unit test (`cargo test`) memakai direktori sementara yang terisolasi
+/// per-thread test, sehingga pengujian tidak pernah membaca maupun menulis
+/// library milik pengguna (mis. membuat notebook uji di aplikasi release).
+#[cfg(test)]
+pub fn app_storage_dir() -> PathBuf {
+    test_isolation::thread_storage_dir()
+}
+
+/// Lokasi data pengguna yang sebenarnya di sistem operasi.
+fn user_storage_dir() -> PathBuf {
     dirs::data_local_dir()
         .map(|p| p.join("RustNotes"))
         .unwrap_or_else(|| PathBuf::from("./rustnotes_data"))
@@ -88,4 +104,41 @@ pub fn atomic_write_file(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod test_isolation {
+    use std::path::PathBuf;
+
+    thread_local! {
+        /// Libtest menjalankan setiap test pada thread tersendiri, sehingga setiap
+        /// test memperoleh root storage unik. Direktori dihapus otomatis saat
+        /// thread selesai (drop `TempDir`).
+        static STORAGE_ROOT: tempfile::TempDir = tempfile::Builder::new()
+            .prefix("rustnotes-test-")
+            .tempdir()
+            .expect("failed to create isolated test storage directory");
+    }
+
+    pub(super) fn thread_storage_dir() -> PathBuf {
+        STORAGE_ROOT.with(|root| root.path().to_path_buf())
+    }
+
+    #[test]
+    fn test_storage_dir_is_isolated_from_user_data() {
+        let test_dir = super::app_storage_dir();
+        assert_ne!(test_dir, super::user_storage_dir());
+        assert!(test_dir.starts_with(std::env::temp_dir()));
+        // Stabil dalam satu test (thread) yang sama.
+        assert_eq!(test_dir, super::app_storage_dir());
+    }
+
+    #[test]
+    fn test_storage_dir_is_unique_per_test_thread() {
+        let here = super::app_storage_dir();
+        let other = std::thread::spawn(super::app_storage_dir)
+            .join()
+            .expect("thread panicked");
+        assert_ne!(here, other);
+    }
 }
