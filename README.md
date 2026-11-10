@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/GUI-eframe%20%2F%20egui%200.31-blue" alt="egui 0.31">
   <img src="https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20(x64)-0078D6?logo=windows" alt="Windows 64-bit">
   <img src="https://img.shields.io/badge/Runtime-Zero%20External%20Runtime-success" alt="Zero Runtime">
-  <img src="https://img.shields.io/badge/Tests-76%20Passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-145%20Passing-brightgreen" alt="Tests">
 </p>
 
 ---
@@ -137,7 +137,6 @@ goodnotes-rust/
     ├── main.rs                 # Entry point, subsistem GUI Windows, konfigurasi viewport
     ├── lib.rs                  # Root crate library
     ├── model.rs                # Struktur data: Library, Notebook, Page, DrawObject, Template
-    ├── storage.rs              # Penyimpanan atomik, ekspor PNG/PDF, import zip/rnote
     ├── crash_handler.rs        # Panic handler otomatis menulis log ke %APPDATA%\RustNotes\logs\
     ├── app/                    # Antarmuka Pengguna & Logika State Aplikasi
     │   ├── cover.rs            # Generator sampul buku realistis dengan pola dinamis
@@ -151,6 +150,8 @@ goodnotes-rust/
     │   ├── theme.rs            # Manajemen tema warna Goodnotes
     │   └── types.rs            # Tipe data UI & enum navigasi
     ├── canvas/                 # Mesin Render Kanvas & State Machine Peralatan
+    │   ├── gizmo.rs            # Transform handles, rotation pivot, multi-selection, alignment guides
+    │   ├── widgets.rs          # Floating toolbars (shape, connector, stroke) & inline text editor
     │   ├── laser.rs            # Algoritma pita laser multi-layer bebas artifak
     │   ├── primitives.rs       # Render pola kertas (ruled, grid, dotted), teks, & gambar
     │   ├── render.rs           # Loop interaksi pointer, deteksi drag, dan painter GPU
@@ -158,17 +159,26 @@ goodnotes-rust/
     │   ├── types.rs            # Enum alat (Pen, Pencil, Highlighter, Eraser, Lasso, dll.)
     │   ├── zoom_window.rs      # Jendela zoom interaktif dengan auto-scroll
     │   └── tests.rs            # Pengujian unit kanvas
-    └── geometry/               # Kalkulasi Matematika 2D Murni (Zero UI Dependencies)
-        ├── primitives.rs       # Perhitungan bounding box akurat per objek & gabungan
-        ├── transform.rs        # Rotasi halaman, translasi, rotasi sudut, dan flip objek
-        ├── hit_test.rs         # Deteksi sentuhan kursor & pengujian objek di dalam lasso
-        ├── tessellation.rs     # Tessellator pita segitiga (triangle strip) goresan & stabilo
-        ├── spatial_grid.rs     # Akselerasi spasial grid untuk hit-test cepat di halaman padat
-        ├── shapes.rs           # Algoritma pengenalan bentuk otomatis (Shape Recognition)
-        ├── eraser.rs           # Logika pemotongan goresan sebagian (Stroke Splitter)
-        ├── palm_rejection.rs   # Filter penolakan sentuhan telapak tangan
-        ├── ocr.rs              # Ekstraksi OCR fitur tulisan tangan berbasis topologi goresan
-        └── tests.rs            # Pengujian unit geometri
+    ├── geometry/               # Kalkulasi Matematika 2D Murni (Zero UI Dependencies)
+    │   ├── primitives.rs       # Perhitungan bounding box akurat per objek & gabungan
+    │   ├── transform.rs        # Rotasi halaman, translasi, rotasi sudut, dan flip objek
+    │   ├── hit_test.rs         # Deteksi sentuhan kursor & pengujian objek di dalam lasso
+    │   ├── tessellation.rs     # Tessellator pita segitiga (triangle strip) goresan & stabilo
+    │   ├── spatial_grid.rs     # Akselerasi spasial grid untuk hit-test cepat di halaman padat
+    │   ├── shapes.rs           # Algoritma pengenalan bentuk otomatis (Shape Recognition)
+    │   ├── eraser.rs           # Logika pemotongan goresan sebagian (Stroke Splitter)
+    │   ├── palm_rejection.rs   # Filter penolakan sentuhan telapak tangan
+    │   ├── ocr.rs              # Ekstraksi OCR fitur tulisan tangan berbasis topologi goresan
+    │   └── tests.rs            # Pengujian unit geometri
+    └── storage/                # Subsistem Penyimpanan Modular & Proteksi Integritas Data
+        ├── mod.rs              # Entry point re-export storage API
+        ├── io.rs               # Atomic write aman & retensi rolling backup 3 generasi
+        ├── notebook_store.rs   # Serialisasi notebook JSON, rotasi, & recovery multi-generasi
+        ├── archive.rs          # Ekspor/impor arsip ZIP (.rnote / .zip) aman dari path traversal
+        ├── export_png.rs       # Software PNG rasterizer (capsule blending & anti-aliasing)
+        ├── export_svg.rs       # Generator vector XML SVG
+        ├── export_pdf.rs       # PDFium PDF export & import
+        └── tests.rs            # Pengujian unit storage & migrasi
 ```
 
 ---
@@ -176,7 +186,9 @@ goodnotes-rust/
 ## 🛡️ Keamanan & Privasi Data
 
 - **100% Offline & Lokal:** Semua catatan, buku, folder, dan berkas aset disimpan secara lokal di komputer pengguna (`%APPDATA%\RustNotes\`). Tidak ada data atau telemetri yang dikirimkan ke server eksternal mana pun.
-- **Pencegahan Berkas Korup:** Jika terjadi kegagalan tak terduga saat penulisan file, RustNotes otomatis memulihkan berkas dari `.previous.json` dan mengarantina file yang bermasalah tanpa menghapus data pengguna secara diam-diam.
+- **Penyimpanan Atomik & Retensi Rolling Backup:** Penulisan berkas menggunakan mekanisme atomic temporary replacement dengan retensi 3 generasi berkas cadangan (`.bak.1.json`, `.bak.2.json`, `.bak.3.json`, `.previous.json`). Jika terjadi crash atau kegagalan tak terduga, RustNotes otomatis memulihkan notebook dari cadangan valid terbaru.
+- **Schema Versioning:** Dilengkapi versi skema dokumen eksplisit (`schema_version`) untuk menjamin kompatibilitas maju-mundur dan mencegah korupsi file saat versi aplikasi diperbarui.
+- **Ekstraksi Arsip Aman:** Pemeriksaan ketat terhadap berkas impor arsip ZIP untuk memblokir eksploitasi direktori traversal (`..`) dan membatasi ukuran ekstraksi untuk mencegah *zip bomb*.
 
 ---
 
