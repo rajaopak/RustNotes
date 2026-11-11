@@ -2,7 +2,7 @@ use super::*;
 use crate::geometry::{smooth_stroke_points, tessellate_stroke};
 use crate::model::{
     ColorData, ConnectionSite, ConnectorEnd, ConnectorRoute, ConnectorStyle, DrawObject, Page,
-    PageTemplate, Point2D, ShapeKind, StrokePoint,
+    PageTemplate, Point2D, ShapeKind, StrokePoint, StrokeStyle,
 };
 use eframe::egui::{Color32, Pos2, Vec2};
 
@@ -162,6 +162,7 @@ fn test_canvas_state_partial_eraser_and_undo() {
         color: ColorData::from(Color32::BLACK),
         width: 2.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     });
     state.spatial_grid.rebuild(&page.objects);
 
@@ -265,6 +266,7 @@ fn test_whole_stroke_eraser_precision_on_connected_strokes() {
         color: ColorData::from(Color32::BLACK),
         width: 3.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     });
 
     // Stroke 2: Garis horizontal dari (60, 50) ke (140, 50) yang menyambung di (100, 50), digambar pada sesi 2
@@ -285,6 +287,7 @@ fn test_whole_stroke_eraser_precision_on_connected_strokes() {
         color: ColorData::from(Color32::BLACK),
         width: 3.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     });
     state.spatial_grid.rebuild(&page.objects);
 
@@ -339,6 +342,7 @@ fn test_undo_redo_does_not_affect_existing_text_on_subsequent_actions() {
         color: ColorData::from(Color32::BLACK),
         width: 2.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     });
 
     assert_eq!(page.objects.len(), 2);
@@ -434,6 +438,7 @@ fn test_clean_redundant_top_undo_on_empty_text() {
         color: ColorData::from(Color32::BLACK),
         width: 2.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     });
 
     // 2. User klik Text Tool: snapshot dibuat dan teks kosong dimasukkan
@@ -515,6 +520,7 @@ fn test_undo_redo_after_whole_erase_and_insert_image() {
         color: ColorData::from(Color32::BLACK),
         width: 3.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     };
     let stroke2 = DrawObject::Stroke {
         id: "stroke_2".to_string(),
@@ -533,6 +539,7 @@ fn test_undo_redo_after_whole_erase_and_insert_image() {
         color: ColorData::from(Color32::BLUE),
         width: 3.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     };
 
     state.push_undo(&page.id, &page.objects);
@@ -756,6 +763,7 @@ fn test_hold_to_snap_undo_determinism() {
         color: ColorData::from(Color32::BLACK),
         width: 2.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     };
     page.objects.push(orig_stroke);
 
@@ -936,6 +944,7 @@ fn test_locked_objects_cannot_be_deleted_or_erased() {
         },
         width: 2.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     };
     page.objects.push(locked_shape);
     page.objects.push(free_stroke);
@@ -1071,6 +1080,7 @@ fn test_paste_clipboard_with_target_pos_on_specific_page() {
         color: ColorData::from(Color32::RED),
         width: 2.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     };
     state.object_clipboard = vec![obj];
 

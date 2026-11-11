@@ -2,7 +2,7 @@ use super::*;
 use crate::model::{
     CURRENT_NOTEBOOK_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION, ColorData, CustomTemplate, DrawObject,
     Library, LibraryIndex, Notebook, NotebookMeta, Page, PageBackground, PageTemplate, StrokePoint,
-    ThemeMode,
+    StrokeStyle, ThemeMode,
 };
 use eframe::egui::Color32;
 use std::fs;
@@ -436,6 +436,7 @@ fn test_export_page_to_png() {
         },
         width: 6.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     });
     page.objects.push(DrawObject::Text {
         id: "t-export-1".to_string(),
@@ -591,6 +592,7 @@ fn test_export_page_to_svg_and_file() {
         },
         width: 3.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     });
     page.objects.push(DrawObject::Text {
         id: uuid::Uuid::new_v4().to_string(),

@@ -926,6 +926,48 @@ impl RustNotesApp {
 
                     ui.separator();
 
+                    // Gaya Garis (Stroke Style: Solid, Dashed, DashDot, Dotted)
+                    ui.label(
+                        RichText::new(lang.tr("Gaya Garis (Stroke Style):", "Stroke Style:"))
+                            .strong()
+                            .size(12.0),
+                    );
+                    ui.horizontal_wrapped(|ui| {
+                        for style in crate::model::StrokeStyle::ALL {
+                            let is_sel = self.canvas_state.stroke_style == style;
+                            if ui.selectable_label(is_sel, style.name()).clicked() {
+                                self.canvas_state.stroke_style = style;
+                                if let Some(nb_id) = &self.active_notebook_id
+                                    && let Some(nb) =
+                                        self.library.notebooks.iter_mut().find(|n| &n.id == nb_id)
+                                    && let Some(page) = nb.pages.get_mut(self.current_page_index)
+                                {
+                                    let mut changed = false;
+                                    for obj in &mut page.objects {
+                                        if self
+                                            .canvas_state
+                                            .selected_ids
+                                            .contains(&obj.id().to_string())
+                                            && let crate::model::DrawObject::Stroke {
+                                                style: stroke_st,
+                                                ..
+                                            } = obj
+                                        {
+                                            *stroke_st = style;
+                                            changed = true;
+                                        }
+                                    }
+                                    if changed {
+                                        self.canvas_state.mesh_cache.clear();
+                                        self.canvas_state.push_undo(&page.id, &page.objects);
+                                    }
+                                }
+                            }
+                        }
+                    });
+
+                    ui.separator();
+
                     // Palet Warna (Color Swatches + Color Picker)
                     ui.label(
                         RichText::new(lang.tr("Palet Warna (Color Swatches):", "Color Swatches:"))

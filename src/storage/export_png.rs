@@ -140,6 +140,31 @@ fn draw_egui_text(
     }
 }
 
+fn is_stroke_dash_on(dist: f32, style: crate::model::StrokeStyle, w: f32) -> bool {
+    match style {
+        crate::model::StrokeStyle::Solid => true,
+        crate::model::StrokeStyle::Dashed => {
+            let dash = (w * 3.0).max(8.0);
+            let gap = (w * 2.0).max(5.0);
+            (dist % (dash + gap)) < dash
+        }
+        crate::model::StrokeStyle::DashDot => {
+            let dash = (w * 3.0).max(8.0);
+            let gap1 = (w * 1.5).max(4.0);
+            let dot = (w * 0.8).max(2.5);
+            let gap2 = gap1;
+            let period = dash + gap1 + dot + gap2;
+            let offset = dist % period;
+            offset < dash || (offset >= (dash + gap1) && offset < (dash + gap1 + dot))
+        }
+        crate::model::StrokeStyle::Dotted => {
+            let dot = (w * 0.6).max(2.0);
+            let gap = (w * 1.5).max(4.0);
+            (dist % (dot + gap)) < dot
+        }
+    }
+}
+
 pub fn export_page_to_png(
     dir: &Path,
     notebook_id: &str,
@@ -366,6 +391,7 @@ pub fn export_page_to_png(
                 color,
                 width,
                 is_highlighter,
+                style,
                 ..
             } => {
                 if points.is_empty() {
@@ -379,7 +405,7 @@ pub fn export_page_to_png(
                 };
                 if smoothed.len() == 1 {
                     let p = eframe::egui::Pos2::new(smoothed[0].x * scale, smoothed[0].y * scale);
-                    let r = (width * scale * 0.5).max(1.0);
+                    let r = (width * scale * 0.5 * smoothed[0].pressure).max(1.0);
                     draw_capsule_segment(&mut img, p, p, r, rgba);
                 } else if *is_highlighter {
                     let r = (width * scale * 0.5).max(1.5);
@@ -412,13 +438,39 @@ pub fn export_page_to_png(
                             }
                         }
                     }
-                } else {
+                } else if *style == crate::model::StrokeStyle::Solid {
                     for w in smoothed.windows(2) {
                         let a = eframe::egui::Pos2::new(w[0].x * scale, w[0].y * scale);
                         let b = eframe::egui::Pos2::new(w[1].x * scale, w[1].y * scale);
                         let avg_p = ((w[0].pressure + w[1].pressure) * 0.5).clamp(0.1, 1.0);
                         let r = (width * scale * 0.5 * (0.4 + 0.6 * avg_p)).max(0.8);
                         draw_capsule_segment(&mut img, a, b, r, rgba);
+                    }
+                } else {
+                    let eff_w = width * scale;
+                    let mut cum_dist = 0.0_f32;
+                    for w in smoothed.windows(2) {
+                        let a = eframe::egui::Pos2::new(w[0].x * scale, w[0].y * scale);
+                        let b = eframe::egui::Pos2::new(w[1].x * scale, w[1].y * scale);
+                        let seg_len = (b - a).length();
+                        if seg_len < 0.001 {
+                            continue;
+                        }
+                        let avg_p = ((w[0].pressure + w[1].pressure) * 0.5).clamp(0.1, 1.0);
+                        let r = (eff_w * 0.5 * (0.4 + 0.6 * avg_p)).max(0.8);
+                        let step_size = (r * 0.8).max(1.5);
+                        let mut t = 0.0_f32;
+                        while t < seg_len {
+                            let next_t = (t + step_size).min(seg_len);
+                            let mid = cum_dist + (t + next_t) * 0.5;
+                            if is_stroke_dash_on(mid, *style, eff_w) {
+                                let pa = a + (b - a) * (t / seg_len);
+                                let pb = a + (b - a) * (next_t / seg_len);
+                                draw_capsule_segment(&mut img, pa, pb, r, rgba);
+                            }
+                            t = next_t;
+                        }
+                        cum_dist += seg_len;
                     }
                 }
             }

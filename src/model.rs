@@ -328,6 +328,33 @@ impl ColorData {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum StrokeStyle {
+    #[default]
+    Solid,
+    Dashed,
+    DashDot,
+    Dotted,
+}
+
+impl StrokeStyle {
+    pub const ALL: [StrokeStyle; 4] = [
+        StrokeStyle::Solid,
+        StrokeStyle::Dashed,
+        StrokeStyle::DashDot,
+        StrokeStyle::Dotted,
+    ];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            StrokeStyle::Solid => "Solid",
+            StrokeStyle::Dashed => "Dashed",
+            StrokeStyle::DashDot => "Dash-Dot",
+            StrokeStyle::Dotted => "Dotted",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DrawObject {
@@ -337,6 +364,8 @@ pub enum DrawObject {
         color: ColorData,
         width: f32,
         is_highlighter: bool,
+        #[serde(default)]
+        style: StrokeStyle,
     },
     Shape {
         id: String,
@@ -1123,6 +1152,14 @@ fn default_palm_rejection() -> bool {
     true
 }
 
+fn default_pressure_min() -> f32 {
+    0.1
+}
+
+fn default_pressure_multiplier() -> f32 {
+    1.0
+}
+
 /// Fase 8.3, 8.4, 8.5, 8.7, 8.8: Pengaturan pengguna yang disimpan di `%APPDATA%\RustNotes\settings.json`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -1144,6 +1181,25 @@ pub struct AppSettings {
     /// Pengaturan pintasan keyboard yang dapat disesuaikan pengguna.
     #[serde(default)]
     pub shortcuts: ShortcutSettings,
+    /// Pengaturan sensitivitas tekanan stylus (Stage 1: Inking & Stroke System)
+    #[serde(default = "default_true")]
+    pub pressure_sensitivity_enabled: bool,
+    #[serde(default = "default_pressure_min")]
+    pub pressure_min: f32,
+    #[serde(default = "default_pressure_multiplier")]
+    pub pressure_multiplier: f32,
+}
+
+impl AppSettings {
+    pub fn effective_pressure(&self, raw_pressure: f32) -> f32 {
+        if self.pressure_sensitivity_enabled {
+            let mult = self.pressure_multiplier.clamp(0.1, 5.0);
+            let min_p = self.pressure_min.clamp(0.01, 0.9);
+            (raw_pressure * mult).clamp(min_p, 1.0)
+        } else {
+            1.0
+        }
+    }
 }
 
 /// Aksi-aksi yang dapat dikonfigurasi pintasan keyboard-nya.
@@ -1382,6 +1438,9 @@ impl Default for AppSettings {
             language: AppLanguage::Indonesian,
             auto_shape_enabled: true,
             shortcuts: ShortcutSettings::default(),
+            pressure_sensitivity_enabled: true,
+            pressure_min: 0.1,
+            pressure_multiplier: 1.0,
         }
     }
 }
@@ -1414,11 +1473,45 @@ mod tests {
             },
             width: 3.5,
             is_highlighter: false,
+            style: StrokeStyle::Dashed,
         };
 
         let json = serde_json::to_string(&obj).expect("serialize");
         let decoded: DrawObject = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(obj, decoded);
+
+        // Backward compatibility: verify legacy JSON without `style` defaults to Solid
+        let legacy_json = r#"{
+            "type": "Stroke",
+            "id": "legacy-stroke",
+            "points": [{"x": 0.0, "y": 0.0, "pressure": 1.0}],
+            "color": {"r": 0, "g": 0, "b": 0, "a": 255},
+            "width": 2.0,
+            "is_highlighter": false
+        }"#;
+        let legacy_decoded: DrawObject =
+            serde_json::from_str(legacy_json).expect("deserialize legacy stroke");
+        if let DrawObject::Stroke { style, points, .. } = legacy_decoded {
+            assert_eq!(style, StrokeStyle::Solid);
+            assert_eq!(points.len(), 1);
+        } else {
+            panic!("Expected Stroke object");
+        }
+    }
+
+    #[test]
+    fn test_app_settings_pressure_calculation() {
+        let mut settings = AppSettings::default();
+        assert!(settings.pressure_sensitivity_enabled);
+        assert_eq!(settings.effective_pressure(0.5), 0.5);
+        assert_eq!(settings.effective_pressure(0.02), 0.1); // clamped to min 0.1
+        assert_eq!(settings.effective_pressure(1.0), 1.0);
+
+        settings.pressure_multiplier = 1.5;
+        assert_eq!(settings.effective_pressure(0.4), 0.6);
+
+        settings.pressure_sensitivity_enabled = false;
+        assert_eq!(settings.effective_pressure(0.2), 1.0); // when disabled, always 1.0
     }
 
     #[test]

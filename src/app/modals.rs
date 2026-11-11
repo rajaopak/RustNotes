@@ -8,7 +8,7 @@ use crate::storage::{
     app_storage_dir, save_asset_to_notebook, save_custom_template, save_settings_to_dir,
 };
 use eframe::egui::{
-    self, Align, Button, Color32, Layout, RichText, Sense, Stroke, StrokeKind, Vec2,
+    self, Align, Button, Color32, Layout, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2,
 };
 
 impl RustNotesApp {
@@ -1123,6 +1123,15 @@ impl RustNotesApp {
                 {
                     self.shortcut_modal_tab = ShortcutModalTab::CheatSheet;
                 }
+                if ui
+                    .selectable_label(
+                        self.shortcut_modal_tab == ShortcutModalTab::Inking,
+                        lang.tr("✒️ Input Pena & Stylus", "✒️ Pen & Stylus"),
+                    )
+                    .clicked()
+                {
+                    self.shortcut_modal_tab = ShortcutModalTab::Inking;
+                }
             });
             ui.separator();
 
@@ -1414,6 +1423,163 @@ impl RustNotesApp {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.button(lang.tr("Tutup (Esc)", "Close (Esc)")).clicked() {
                             self.show_shortcut_modal = false;
+                        }
+                    });
+                }
+                ShortcutModalTab::Inking => {
+                    ui.label(
+                        RichText::new(lang.tr(
+                            "Konfigurasi sensitivitas tekanan stylus, toleransi input, dan palm rejection.",
+                            "Configure stylus pressure sensitivity, input thresholds, and palm rejection.",
+                        ))
+                        .size(11.5)
+                        .color(Color32::GRAY),
+                    );
+                    ui.add_space(8.0);
+
+                    let mut settings_changed = false;
+
+                    ui.group(|ui| {
+                        ui.label(
+                            RichText::new(lang.tr(
+                                "Sensitivitas Tekanan (Pressure Sensitivity)",
+                                "Pressure Sensitivity",
+                            ))
+                            .strong()
+                            .size(13.0),
+                        );
+                        ui.add_space(4.0);
+
+                        if ui
+                            .checkbox(
+                                &mut self.settings.pressure_sensitivity_enabled,
+                                lang.tr(
+                                    "Aktifkan Sensitivitas Tekanan",
+                                    "Enable Pressure Sensitivity",
+                                ),
+                            )
+                            .changed()
+                        {
+                            settings_changed = true;
+                        }
+
+                        if self.settings.pressure_sensitivity_enabled {
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                ui.label(lang.tr("Tekanan Minimum:", "Minimum Pressure:"));
+                                if ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut self.settings.pressure_min,
+                                            0.05..=0.8,
+                                        )
+                                        .step_by(0.05),
+                                    )
+                                    .changed()
+                                {
+                                    settings_changed = true;
+                                }
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label(lang.tr("Faktor Sensitivitas:", "Sensitivity Multiplier:"));
+                                if ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut self.settings.pressure_multiplier,
+                                            0.5..=3.0,
+                                        )
+                                        .step_by(0.1),
+                                    )
+                                    .changed()
+                                {
+                                    settings_changed = true;
+                                }
+                            });
+
+                            ui.add_space(6.0);
+                            ui.label(lang.tr(
+                                "Pratinjau Respons Tekanan:",
+                                "Pressure Response Preview:",
+                            ));
+                            let (rect, _) = ui.allocate_exact_size(
+                                Vec2::new(ui.available_width(), 16.0),
+                                Sense::hover(),
+                            );
+                            let painter = ui.painter_at(rect);
+                            painter.rect_filled(rect, 4.0, Color32::from_rgb(40, 44, 52));
+                            let steps = 40;
+                            for s in 0..steps {
+                                let raw = s as f32 / (steps - 1) as f32;
+                                let eff = self.settings.effective_pressure(raw);
+                                let x = rect.left() + (rect.width() * raw);
+                                let bar_h = rect.height() * eff;
+                                let y = rect.bottom() - bar_h;
+                                let col = Color32::from_rgb(76, 147, 236);
+                                painter.rect_filled(
+                                    Rect::from_min_max(
+                                        Pos2::new(x, y),
+                                        Pos2::new(x + (rect.width() / steps as f32), rect.bottom()),
+                                    ),
+                                    0.0,
+                                    col,
+                                );
+                            }
+                        }
+                    });
+
+                    ui.add_space(6.0);
+                    ui.group(|ui| {
+                        ui.label(
+                            RichText::new(lang.tr(
+                                "Palm Rejection & Penolakan Sentuhan",
+                                "Palm Rejection",
+                            ))
+                            .strong()
+                            .size(13.0),
+                        );
+                        ui.add_space(4.0);
+                        if ui
+                            .checkbox(
+                                &mut self.canvas_state.palm_rejection_enabled,
+                                lang.tr(
+                                    "Aktifkan Palm Rejection Otomatis",
+                                    "Enable Automatic Palm Rejection",
+                                ),
+                            )
+                            .changed()
+                        {
+                            self.settings.palm_rejection =
+                                self.canvas_state.palm_rejection_enabled;
+                            settings_changed = true;
+                        }
+                    });
+
+                    if settings_changed {
+                        self.canvas_state.pressure_sensitivity_enabled =
+                            self.settings.pressure_sensitivity_enabled;
+                        self.canvas_state.pressure_min = self.settings.pressure_min;
+                        self.canvas_state.pressure_multiplier =
+                            self.settings.pressure_multiplier;
+                        let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
+                    }
+
+                    ui.add_space(10.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button(lang.tr("Tutup (Esc)", "Close (Esc)")).clicked() {
+                            self.show_shortcut_modal = false;
+                        }
+                        if ui
+                            .button(lang.tr("Reset ke Default", "Reset to Defaults"))
+                            .clicked()
+                        {
+                            self.settings.pressure_sensitivity_enabled = true;
+                            self.settings.pressure_min = 0.2;
+                            self.settings.pressure_multiplier = 1.0;
+                            self.canvas_state.pressure_sensitivity_enabled = true;
+                            self.canvas_state.pressure_min = 0.2;
+                            self.canvas_state.pressure_multiplier = 1.0;
+                            let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
                         }
                     });
                 }

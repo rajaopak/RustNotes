@@ -25,9 +25,12 @@ impl eframe::App for RustNotesApp {
         // Fase 8.9: Aktifkan AccessKit bawaan egui untuk pembaca layar & aksesibilitas
         ctx.enable_accesskit();
 
-        // Fase 8.5 & G4.4: Sinkronkan status Palm Rejection & AutoShape ke CanvasState
+        // Fase 8.5 & G4.4 & Task 1: Sinkronkan status Palm Rejection, AutoShape & Pressure Sensitivity ke CanvasState
         self.canvas_state.palm_rejection_enabled = self.settings.palm_rejection;
         self.canvas_state.auto_shape_enabled = self.settings.auto_shape_enabled;
+        self.canvas_state.pressure_sensitivity_enabled = self.settings.pressure_sensitivity_enabled;
+        self.canvas_state.pressure_min = self.settings.pressure_min;
+        self.canvas_state.pressure_multiplier = self.settings.pressure_multiplier;
 
         // Apply Goodnotes theme styling (Dark / Light / System OS Windows)
         setup_goodnotes_theme(ctx, self.settings.theme_mode);

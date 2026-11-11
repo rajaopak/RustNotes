@@ -2,7 +2,7 @@ use super::types::{ActiveTool, EraserMode, LaserTrailPoint, ResizeCorner};
 use crate::geometry::{
     SpatialGrid, combined_bounds, distance_to_object, hit_test_object, split_stroke_by_eraser,
 };
-use crate::model::{DrawObject, Page, StrokePoint};
+use crate::model::{DrawObject, Page, StrokePoint, StrokeStyle};
 use eframe::egui::{self, Color32, Mesh, Pos2, Rect, TextureHandle, Vec2};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -13,6 +13,7 @@ pub struct CanvasState {
     pub current_tool: ActiveTool,
     pub stroke_color: Color32,
     pub stroke_width: f32,
+    pub stroke_style: StrokeStyle,
     pub zoom: f32,
     pub pan_offset: Vec2,
     pub smoothing_steps: usize,
@@ -80,6 +81,11 @@ pub struct CanvasState {
     // Fase 8.5: Palm Rejection state
     pub palm_rejection_enabled: bool,
 
+    // Task 1 & Settings: Pressure Sensitivity
+    pub pressure_sensitivity_enabled: bool,
+    pub pressure_min: f32,
+    pub pressure_multiplier: f32,
+
     // Inline text editing
     pub editing_text_id: Option<String>,
     pub focus_text_edit: bool,
@@ -105,6 +111,7 @@ impl Default for CanvasState {
             current_tool: ActiveTool::Pen,
             stroke_color: Color32::from_rgb(25, 27, 32),
             stroke_width: 3.0,
+            stroke_style: StrokeStyle::Solid,
             zoom: 1.0,
             pan_offset: Vec2::ZERO,
             smoothing_steps: 3,
@@ -151,6 +158,9 @@ impl Default for CanvasState {
             zoom_draft_stroke: None,
             zoom_wrote_in_advance_zone: false,
             palm_rejection_enabled: true,
+            pressure_sensitivity_enabled: true,
+            pressure_min: 0.2,
+            pressure_multiplier: 1.0,
             editing_text_id: None,
             focus_text_edit: false,
             text_buffer: String::new(),
@@ -167,6 +177,14 @@ impl Default for CanvasState {
 
 impl CanvasState {
     pub const MAX_UNDO_DEPTH: usize = 200;
+
+    pub fn effective_pressure(&self, raw: f32) -> f32 {
+        if !self.pressure_sensitivity_enabled {
+            return 1.0;
+        }
+        (self.pressure_min + (1.0 - self.pressure_min) * (raw * self.pressure_multiplier))
+            .clamp(0.05, 1.0)
+    }
 
     pub fn get_or_load_texture(
         &mut self,
@@ -502,6 +520,7 @@ impl CanvasState {
                                 color,
                                 width,
                                 is_highlighter,
+                                style,
                                 ..
                             },
                         ) = (mod_entry, obj)
@@ -513,6 +532,7 @@ impl CanvasState {
                                     color: color.clone(),
                                     width,
                                     is_highlighter,
+                                    style,
                                 });
                             }
                         }

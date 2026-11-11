@@ -1,5 +1,7 @@
 use super::*;
-use crate::model::{ColorData, ConnectionSite, DrawObject, Point2D, ShapeKind, StrokePoint};
+use crate::model::{
+    ColorData, ConnectionSite, DrawObject, Point2D, ShapeKind, StrokePoint, StrokeStyle,
+};
 use eframe::egui::{Color32, Pos2, Rect};
 
 fn dummy_color() -> ColorData {
@@ -97,6 +99,7 @@ fn test_object_bounds() {
         color: dummy_color(),
         width: 4.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     };
     assert_eq!(object_bounds(&empty_stroke), Rect::NOTHING);
 
@@ -118,6 +121,7 @@ fn test_object_bounds() {
         color: dummy_color(),
         width: 6.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     };
     let b = object_bounds(&stroke);
     // padding = width/2 = 3.0
@@ -207,6 +211,7 @@ fn test_hit_test_object() {
         color: dummy_color(),
         width: 4.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     };
 
     // Hit near the line
@@ -333,6 +338,7 @@ fn test_flip_and_rotate_object() {
         color: dummy_color(),
         width: 2.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     };
 
     // Flip horizontal around center_x = 50.0:
@@ -365,6 +371,7 @@ fn test_flip_and_rotate_object() {
         color: dummy_color(),
         width: 2.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     };
     rotate_object(
         &mut pt_obj,
@@ -403,6 +410,7 @@ fn test_object_in_lasso() {
         color: dummy_color(),
         width: 2.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     };
     assert!(object_in_lasso(&inside_stroke, &poly));
 
@@ -423,6 +431,7 @@ fn test_object_in_lasso() {
         color: dummy_color(),
         width: 2.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     };
     assert!(object_in_lasso(&crossing_stroke, &poly));
 
@@ -443,6 +452,7 @@ fn test_object_in_lasso() {
         color: dummy_color(),
         width: 2.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     };
     assert!(!object_in_lasso(&outside_stroke, &poly));
 }
@@ -511,6 +521,106 @@ fn test_tessellate_stroke() {
     assert!(!mesh.vertices.is_empty());
     assert!(!mesh.indices.is_empty());
     assert_eq!(mesh.indices.len() % 3, 0); // Must be valid triangles
+}
+
+#[test]
+fn test_tessellate_single_point_stroke_dot() {
+    let single_pt = vec![StrokePoint {
+        x: 100.0,
+        y: 150.0,
+        pressure: 0.8,
+    }];
+
+    // Test tessellation with different stroke styles
+    for style in StrokeStyle::ALL {
+        let mesh = tessellate_stroke_styled(&single_pt, 6.0, Color32::BLUE, false, style, |p| p);
+        // Harus menghasilkan mesh dot melingkar
+        assert!(
+            !mesh.vertices.is_empty(),
+            "Mesh vertices should not be empty for {style:?}"
+        );
+        assert!(
+            !mesh.indices.is_empty(),
+            "Mesh indices should not be empty for {style:?}"
+        );
+        assert_eq!(
+            mesh.indices.len() % 3,
+            0,
+            "Indices must form valid triangles for {style:?}"
+        );
+    }
+}
+
+#[test]
+fn test_tessellate_stroke_styles_continuous() {
+    let pts = vec![
+        StrokePoint {
+            x: 0.0,
+            y: 0.0,
+            pressure: 0.5,
+        },
+        StrokePoint {
+            x: 30.0,
+            y: 0.0,
+            pressure: 0.7,
+        },
+        StrokePoint {
+            x: 60.0,
+            y: 20.0,
+            pressure: 0.9,
+        },
+        StrokePoint {
+            x: 100.0,
+            y: 40.0,
+            pressure: 1.0,
+        },
+    ];
+
+    for style in [
+        StrokeStyle::Solid,
+        StrokeStyle::Dashed,
+        StrokeStyle::DashDot,
+        StrokeStyle::Dotted,
+    ] {
+        let mesh = tessellate_stroke_styled(&pts, 4.0, Color32::BLACK, false, style, |p| p);
+        assert!(
+            !mesh.vertices.is_empty(),
+            "Vertices should be generated for {style:?}"
+        );
+        assert!(
+            !mesh.indices.is_empty(),
+            "Indices should be generated for {style:?}"
+        );
+        assert_eq!(mesh.indices.len() % 3, 0);
+    }
+}
+
+#[test]
+fn test_single_point_stroke_bounds_and_hit_test() {
+    let dot_obj = DrawObject::Stroke {
+        id: "dot1".into(),
+        points: vec![StrokePoint {
+            x: 200.0,
+            y: 300.0,
+            pressure: 1.0,
+        }],
+        color: dummy_color(),
+        width: 8.0,
+        is_highlighter: false,
+        style: StrokeStyle::Solid,
+    };
+
+    let b = object_bounds(&dot_obj);
+    assert_ne!(b, Rect::NOTHING);
+    assert_eq!(b.min, Pos2::new(196.0, 296.0));
+    assert_eq!(b.max, Pos2::new(204.0, 304.0));
+
+    // Hit test tepat di titik tengah
+    assert!(hit_test_object(&dot_obj, Pos2::new(200.0, 300.0), 2.0));
+    // Hit test di tepi lingkaran radius
+    assert!(hit_test_object(&dot_obj, Pos2::new(203.0, 300.0), 2.0));
+    // Miss jauh dari titik
+    assert!(!hit_test_object(&dot_obj, Pos2::new(220.0, 300.0), 2.0));
 }
 
 #[test]
@@ -882,6 +992,7 @@ fn test_handwriting_ocr_recognition() {
         color: dummy_color(),
         width: 3.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     };
     let h_right = DrawObject::Stroke {
         id: "h2".into(),
@@ -892,6 +1003,7 @@ fn test_handwriting_ocr_recognition() {
         color: dummy_color(),
         width: 3.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     };
     let h_bar = DrawObject::Stroke {
         id: "h3".into(),
@@ -902,6 +1014,7 @@ fn test_handwriting_ocr_recognition() {
         color: dummy_color(),
         width: 3.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     };
     let i_vert = DrawObject::Stroke {
         id: "i1".into(),
@@ -912,6 +1025,7 @@ fn test_handwriting_ocr_recognition() {
         color: dummy_color(),
         width: 3.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     };
 
     let objects = vec![h_left, h_right, h_bar, i_vert];
@@ -1050,6 +1164,7 @@ fn test_rotate_page_content_90_cw_and_180() {
         color: dummy_color(),
         width: 2.0,
         is_highlighter: false,
+        style: StrokeStyle::Solid,
     });
 
     // Rotate 90 CW: (x, y) -> (old_h - y, x)

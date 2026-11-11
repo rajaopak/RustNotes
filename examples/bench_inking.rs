@@ -1,6 +1,6 @@
 use eframe::egui::{Color32, Pos2};
 use rustnotes::geometry::{SpatialGrid, hit_test_object, smooth_stroke_points, tessellate_stroke};
-use rustnotes::model::{ColorData, DrawObject, StrokePoint};
+use rustnotes::model::{ColorData, DrawObject, StrokePoint, StrokeStyle};
 use std::time::Instant;
 
 fn generate_realistic_stroke(
@@ -33,6 +33,7 @@ fn generate_realistic_stroke(
         },
         width: 3.0,
         is_highlighter: id.is_multiple_of(5),
+        style: StrokeStyle::Solid,
     }
 }
 

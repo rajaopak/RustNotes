@@ -192,6 +192,7 @@ pub fn export_page_to_svg(page: &Page) -> String {
                 color,
                 width: stroke_w,
                 is_highlighter,
+                style,
                 ..
             } => {
                 if points.is_empty() {
@@ -204,6 +205,44 @@ pub fn export_page_to_svg(page: &Page) -> String {
                 };
                 let stroke_color =
                     format!("rgba({},{},{},{:.3})", color.r, color.g, color.b, c_alpha);
+
+                if points.len() == 1 {
+                    let pt = &points[0];
+                    let r = (stroke_w * 0.5 * pt.pressure).max(0.5);
+                    out.push_str(&format!(
+                        "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"{r:.2}\" fill=\"{stroke_color}\"/>\n",
+                        pt.x, pt.y
+                    ));
+                    continue;
+                }
+
+                let dash_attr = match style {
+                    crate::model::StrokeStyle::Solid => String::new(),
+                    crate::model::StrokeStyle::Dashed => {
+                        format!(
+                            " stroke-dasharray=\"{:.1},{:.1}\"",
+                            stroke_w * 3.0,
+                            stroke_w * 2.0
+                        )
+                    }
+                    crate::model::StrokeStyle::DashDot => {
+                        format!(
+                            " stroke-dasharray=\"{:.1},{:.1},{:.1},{:.1}\"",
+                            stroke_w * 3.0,
+                            stroke_w * 1.5,
+                            stroke_w * 0.8,
+                            stroke_w * 1.5
+                        )
+                    }
+                    crate::model::StrokeStyle::Dotted => {
+                        format!(
+                            " stroke-dasharray=\"{:.1},{:.1}\"",
+                            stroke_w * 0.5,
+                            stroke_w * 1.5
+                        )
+                    }
+                };
+
                 let mut d = String::new();
                 for (i, pt) in points.iter().enumerate() {
                     if i == 0 {
@@ -213,7 +252,7 @@ pub fn export_page_to_svg(page: &Page) -> String {
                     }
                 }
                 out.push_str(&format!(
-                    "<path d=\"{d}\" stroke=\"{stroke_color}\" stroke-width=\"{stroke_w:.1}\" stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"/>\n"
+                    "<path d=\"{d}\" stroke=\"{stroke_color}\" stroke-width=\"{stroke_w:.1}\"{dash_attr} stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"/>\n"
                 ));
             }
             crate::model::DrawObject::Shape {

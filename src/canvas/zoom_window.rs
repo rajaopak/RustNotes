@@ -2,7 +2,8 @@ use super::primitives::{draw_non_stroke_object, draw_paper_pattern};
 use super::state::CanvasState;
 use super::types::ActiveTool;
 use crate::geometry::{
-    object_bounds, recognize_handwriting_from_strokes, smooth_stroke_points, tessellate_stroke_ex,
+    object_bounds, recognize_handwriting_from_strokes, smooth_stroke_points,
+    tessellate_stroke_styled,
 };
 use crate::model::{DrawObject, Page, StrokePoint};
 use eframe::egui::{self, Color32, PointerButton, Pos2, Rect, Sense, Stroke, Ui, Vec2};
@@ -74,6 +75,7 @@ pub fn render_zoom_window_canvas(
                 color,
                 width,
                 is_highlighter,
+                style,
                 ..
             } => {
                 let smoothed = smooth_stroke_points(points, state.smoothing_steps);
@@ -88,11 +90,12 @@ pub fn render_zoom_window_canvas(
                 } else {
                     color.to_color32()
                 };
-                let mesh = tessellate_stroke_ex(
+                let mesh = tessellate_stroke_styled(
                     &smoothed,
                     stroke_w,
                     stroke_c,
                     *is_highlighter,
+                    *style,
                     page_to_zw,
                 );
                 painter.add(mesh);
@@ -164,9 +167,19 @@ pub fn render_zoom_window_canvas(
                 if page_p.x >= adv_page_x {
                     state.zoom_wrote_in_advance_zone = true;
                 }
-                pts.push(StrokePoint::from(page_p));
+                let should_append = pts
+                    .last()
+                    .is_none_or(|last| (page_p - last.to_pos2()).length() >= 0.5);
+                if should_append {
+                    let pressure = pts.last().map(|pt| pt.pressure).unwrap_or(1.0);
+                    pts.push(StrokePoint {
+                        x: page_p.x,
+                        y: page_p.y,
+                        pressure,
+                    });
+                }
             }
-            if pts.len() > 1 {
+            if !pts.is_empty() {
                 state.push_undo(&page.id, &page.objects);
                 let is_highlighter = state.current_tool == ActiveTool::Highlighter;
                 let stroke_width = if is_highlighter {
@@ -192,6 +205,7 @@ pub fn render_zoom_window_canvas(
                     color: color.into(),
                     width: stroke_width,
                     is_highlighter,
+                    style: state.stroke_style,
                 });
                 state.spatial_grid.rebuild(&page.objects);
                 // Fase 8.6: Perbarui indeks OCR tulisan tangan otomatis saat menulis di Zoom Window
@@ -226,7 +240,14 @@ pub fn render_zoom_window_canvas(
             state.stroke_color
         };
         let smoothed = smooth_stroke_points(pts, state.smoothing_steps);
-        let mesh = tessellate_stroke_ex(&smoothed, stroke_w, color, is_highlighter, page_to_zw);
+        let mesh = tessellate_stroke_styled(
+            &smoothed,
+            stroke_w,
+            color,
+            is_highlighter,
+            state.stroke_style,
+            page_to_zw,
+        );
         painter.add(mesh);
     }
 

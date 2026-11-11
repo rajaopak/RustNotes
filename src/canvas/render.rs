@@ -18,7 +18,7 @@ use crate::geometry::{
     object_in_lasso, prune_collinear_control_points, prune_invalid_connector_control_points,
     recognize_handwriting_from_strokes, recognize_shape, resolve_connector_endpoints, scale_object,
     shape_connection_point, should_reject_palm_input, smooth_stroke_points, snap_point_to_grid,
-    snap_value_to_grid, tessellate_stroke_ex, translate_object,
+    snap_value_to_grid, tessellate_stroke_styled, translate_object,
 };
 use crate::model::{
     ColorData, ConnectionSite, ConnectorEnd, ConnectorRoute, ConnectorStyle, DrawObject,
@@ -95,6 +95,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 color,
                 width,
                 is_highlighter,
+                style,
             } => {
                 // Simpan mesh di dalam cache menggunakan koordinat lokal kertas (`|p| p`, skala 1.0),
                 // lalu transformasikan ke posisi layar (`origin` + `state.zoom`) setiap frame agar
@@ -114,8 +115,14 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     } else {
                         color.to_color32()
                     };
-                    let mesh =
-                        tessellate_stroke_ex(&smoothed, *width, stroke_c, *is_highlighter, |p| p);
+                    let mesh = tessellate_stroke_styled(
+                        &smoothed,
+                        *width,
+                        stroke_c,
+                        *is_highlighter,
+                        *style,
+                        |p| p,
+                    );
                     if state.mesh_cache.len() > 1500 {
                         let to_remove: Vec<_> =
                             state.mesh_cache.keys().take(300).cloned().collect();
@@ -351,7 +358,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 // Fase 8.5: Palm Rejection — tolak awal goresan jika multi-touch terdeteksi
                 let multi_touch = ui.input(|i| i.multi_touch().is_some());
                 if !(state.palm_rejection_enabled && multi_touch) {
-                    let pressure = ui.input(|i| {
+                    let raw_pressure = ui.input(|i| {
                         for event in &i.raw.events {
                             if let egui::Event::Touch { force: Some(f), .. } = event {
                                 return (*f).clamp(0.05, 1.0);
@@ -359,6 +366,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                         }
                         1.0
                     });
+                    let pressure = state.effective_pressure(raw_pressure);
                     state.active_stroke_page_id = Some(page.id.clone());
                     state.draft_stroke = Some(vec![StrokePoint {
                         x: page_p.x,
@@ -914,12 +922,12 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                             // Fase 8.5: Palm Rejection — abaikan titik yang terindikasi sentuhan telapak tangan
                             let rejected = state.palm_rejection_enabled
                                 && should_reject_palm_input(pts, page_p, dt_secs, multi_touch);
-                            let min_dist = 2.0 / state.zoom;
+                            let min_dist = (1.2 / state.zoom).max(0.5);
                             if !rejected
                                 && let Some(last) = pts.last()
                                 && (page_p - last.to_pos2()).length() >= min_dist
                             {
-                                let pressure = ui.input(|i| {
+                                let raw_pressure = ui.input(|i| {
                                     for event in &i.raw.events {
                                         if let egui::Event::Touch { force: Some(f), .. } = event {
                                             return (*f).clamp(0.05, 1.0);
@@ -927,6 +935,14 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                     }
                                     1.0
                                 });
+                                let pressure = if !state.pressure_sensitivity_enabled {
+                                    1.0
+                                } else {
+                                    (state.pressure_min
+                                        + (1.0 - state.pressure_min)
+                                            * (raw_pressure * state.pressure_multiplier))
+                                        .clamp(0.05, 1.0)
+                                };
                                 pts.push(StrokePoint {
                                     x: page_p.x,
                                     y: page_p.y,
@@ -1301,12 +1317,23 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
             state.last_stroke_move_time = None;
             let recognized_shape = state.recognized_draft_shape.take();
             if let Some(mut pts) = state.draft_stroke.take() {
-                // Ensure exact final point
+                // Ensure exact final point without overwriting genuine pressure
                 if let Some(pos) = pointer_pos {
-                    pts.push(StrokePoint::from(screen_to_page(pos)));
+                    let p = screen_to_page(pos);
+                    let should_append = pts
+                        .last()
+                        .is_none_or(|last| (p - last.to_pos2()).length() >= 0.5);
+                    if should_append {
+                        let pressure = pts.last().map(|pt| pt.pressure).unwrap_or(1.0);
+                        pts.push(StrokePoint {
+                            x: p.x,
+                            y: p.y,
+                            pressure,
+                        });
+                    }
                 }
 
-                if pts.len() > 1 {
+                if !pts.is_empty() {
                     state.push_undo(&page.id, &page.objects);
                     let is_highlighter = state.current_tool == ActiveTool::Highlighter;
                     let stroke_width = if is_highlighter {
@@ -1347,6 +1374,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                             color: color.into(),
                             width: stroke_width,
                             is_highlighter,
+                            style: state.stroke_style,
                         };
                         page.objects.push(orig_stroke);
 
@@ -1380,6 +1408,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                             color: color.into(),
                             width: stroke_width,
                             is_highlighter,
+                            style: state.stroke_style,
                         });
                         state.spatial_grid.rebuild(&page.objects);
                         // Fase 8.6: Perbarui indeks OCR tulisan tangan otomatis
@@ -1580,11 +1609,12 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 state.stroke_color
             };
             let smoothed = smooth_stroke_points(pts, state.smoothing_steps);
-            let mesh = tessellate_stroke_ex(
+            let mesh = tessellate_stroke_styled(
                 &smoothed,
                 stroke_width,
                 color,
                 is_highlighter,
+                state.stroke_style,
                 page_to_screen,
             );
             painter.add(mesh);
@@ -1974,6 +2004,57 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
             }
             state.eraser_undo_pushed = false;
             state.last_whole_erase_pos = None;
+        } else if matches!(
+            state.current_tool,
+            ActiveTool::Pen | ActiveTool::Pencil | ActiveTool::Highlighter
+        ) {
+            // Task 1: Dukung click-only / tap tunggal untuk menghasilkan titik goresan yang valid
+            let raw_pressure = ui.input(|i| {
+                for event in &i.raw.events {
+                    if let egui::Event::Touch { force: Some(f), .. } = event {
+                        return (*f).clamp(0.05, 1.0);
+                    }
+                }
+                1.0
+            });
+            let pressure = state.effective_pressure(raw_pressure);
+            let pts = state.draft_stroke.take().unwrap_or_else(|| {
+                vec![StrokePoint {
+                    x: page_p.x,
+                    y: page_p.y,
+                    pressure,
+                }]
+            });
+            state.push_undo(&page.id, &page.objects);
+            let is_highlighter = state.current_tool == ActiveTool::Highlighter;
+            let stroke_width = if is_highlighter {
+                state.stroke_width * 6.0
+            } else if state.current_tool == ActiveTool::Pencil {
+                (state.stroke_width - 0.5).max(1.0)
+            } else {
+                state.stroke_width
+            };
+            let color = if is_highlighter {
+                Color32::from_rgba_unmultiplied(
+                    state.stroke_color.r(),
+                    state.stroke_color.g(),
+                    state.stroke_color.b(),
+                    crate::model::HIGHLIGHTER_ALPHA,
+                )
+            } else {
+                state.stroke_color
+            };
+            page.objects.push(DrawObject::Stroke {
+                id: Uuid::new_v4().to_string(),
+                points: pts,
+                color: color.into(),
+                width: stroke_width,
+                is_highlighter,
+                style: state.stroke_style,
+            });
+            state.spatial_grid.rebuild(&page.objects);
+            page.ocr_text = recognize_handwriting_from_strokes(&page.objects);
+            ui.ctx().request_repaint();
         } else if matches!(
             state.current_tool,
             ActiveTool::Lasso | ActiveTool::Shape(_) | ActiveTool::Connector

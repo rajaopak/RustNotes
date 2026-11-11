@@ -69,6 +69,7 @@ pub enum ShortcutModalTab {
     #[default]
     Customize,
     CheatSheet,
+    Inking,
 }
 
 pub const COVER_PALETTE: [Color32; 8] = [
