@@ -457,17 +457,43 @@ pub fn draw_non_stroke_object(
             font_size,
             color,
             rotation,
+            font_family,
+            bold,
+            italic,
+            alignment,
             ..
         } => {
             let pos = page_to_screen(Pos2::new(*x, *y));
-            let galley = painter.layout_no_wrap(
-                text.clone(),
-                egui::FontId::proportional(font_size * zoom),
-                color.to_color32(),
+            let egui_family = font_family.to_egui_font_family();
+            let scaled_font = (*font_size * zoom).clamp(4.0, 200.0);
+            let font_id = egui::FontId::new(scaled_font, egui_family);
+            let text_c = color.to_color32();
+
+            let mut job = egui::text::LayoutJob {
+                halign: alignment.to_egui_align(),
+                ..Default::default()
+            };
+            job.append(
+                text,
+                0.0,
+                egui::TextFormat {
+                    font_id,
+                    color: text_c,
+                    italics: *italic,
+                    ..Default::default()
+                },
             );
-            let mut text_shape = egui::epaint::TextShape::new(pos, galley, color.to_color32());
+            let galley = painter.layout_job(job);
+            let mut text_shape = egui::epaint::TextShape::new(pos, galley.clone(), text_c);
             text_shape.angle = *rotation;
             painter.add(text_shape);
+            if *bold {
+                let bold_offset = Vec2::new(0.6 * zoom.clamp(0.5, 2.0), 0.0);
+                let mut bold_shape =
+                    egui::epaint::TextShape::new(pos + bold_offset, galley, text_c);
+                bold_shape.angle = *rotation;
+                painter.add(bold_shape);
+            }
         }
         DrawObject::StickyNote {
             x,
@@ -476,6 +502,12 @@ pub fn draw_non_stroke_object(
             height,
             text,
             color,
+            text_color,
+            font_size,
+            font_family,
+            bold,
+            italic,
+            alignment,
             ..
         } => {
             let p1 = page_to_screen(Pos2::new(*x, *y));
@@ -488,13 +520,40 @@ pub fn draw_non_stroke_object(
                 Stroke::new(1.0_f32, Color32::from_rgb(235, 208, 116)),
                 egui::StrokeKind::Outside,
             );
-            painter.text(
-                r.left_top() + Vec2::new(10.0, 10.0),
-                egui::Align2::LEFT_TOP,
+            let scaled_font = (*font_size * zoom).clamp(6.0, 100.0);
+            let egui_family = font_family.to_egui_font_family();
+            let font_id = egui::FontId::new(scaled_font, egui_family);
+            let t_col = text_color.to_color32();
+
+            let mut job = egui::text::LayoutJob {
+                halign: alignment.to_egui_align(),
+                ..Default::default()
+            };
+            job.wrap.max_width = (r.width() - 20.0).max(10.0);
+            job.append(
                 text,
-                egui::FontId::proportional(14.0 * zoom),
-                Color32::from_rgb(40, 40, 40),
+                0.0,
+                egui::TextFormat {
+                    font_id,
+                    color: t_col,
+                    italics: *italic,
+                    ..Default::default()
+                },
             );
+            let galley = painter.layout_job(job);
+            let text_pos = match alignment {
+                crate::model::TextAlign::Left => r.left_top() + Vec2::new(10.0, 10.0),
+                crate::model::TextAlign::Center => Pos2::new(r.center().x, r.top() + 10.0),
+                crate::model::TextAlign::Right => Pos2::new(r.right() - 10.0, r.top() + 10.0),
+            };
+            let text_shape = egui::epaint::TextShape::new(text_pos, galley.clone(), t_col);
+            painter.add(text_shape);
+            if *bold {
+                let bold_offset = Vec2::new(0.6 * zoom.clamp(0.5, 2.0), 0.0);
+                let bold_shape =
+                    egui::epaint::TextShape::new(text_pos + bold_offset, galley, t_col);
+                painter.add(bold_shape);
+            }
         }
         DrawObject::Image {
             asset_id,

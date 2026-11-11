@@ -69,16 +69,29 @@ fn draw_egui_text(
     color: [u8; 4],
     scale: f32,
     rotation: f32,
+    font_family: crate::model::FontFamilyPreset,
+    bold: bool,
+    italic: bool,
 ) {
     if text.trim().is_empty() {
         return;
     }
-    let font_id = eframe::egui::FontId::proportional(font_size_pt);
-    let galley = fonts.layout_no_wrap(
-        text.to_string(),
-        font_id,
-        eframe::egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]),
+    let font_id =
+        eframe::egui::FontId::new(font_size_pt * scale, font_family.to_egui_font_family());
+    let mut job = eframe::egui::text::LayoutJob::default();
+    job.append(
+        text,
+        0.0,
+        eframe::egui::TextFormat {
+            font_id,
+            color: eframe::egui::Color32::from_rgba_unmultiplied(
+                color[0], color[1], color[2], color[3],
+            ),
+            italics: italic,
+            ..Default::default()
+        },
     );
+    let galley = fonts.layout_job(job);
 
     let font_image = fonts.image();
     let atlas_w = font_image.width();
@@ -133,6 +146,9 @@ fn draw_egui_text(
                             )
                         };
                         blend_pixel(img, px, py, [color[0], color[1], color[2], eff_alpha]);
+                        if bold {
+                            blend_pixel(img, px + 1, py, [color[0], color[1], color[2], eff_alpha]);
+                        }
                     }
                 }
             }
@@ -735,6 +751,9 @@ pub fn export_page_to_png(
                         [lbl.color.r, lbl.color.g, lbl.color.b, lbl.color.a],
                         scale,
                         *rotation,
+                        crate::model::FontFamilyPreset::SansSerif,
+                        false,
+                        false,
                     );
                 }
             }
@@ -780,6 +799,11 @@ pub fn export_page_to_png(
                 height,
                 text,
                 color,
+                text_color,
+                font_size,
+                font_family,
+                bold,
+                italic,
                 ..
             } => {
                 let x0 = (*x * scale).round().max(0.0) as i32;
@@ -807,10 +831,13 @@ pub fn export_page_to_png(
                     *x + 10.0,
                     *y + 10.0,
                     text,
-                    14.0,
-                    [40, 40, 40, 255],
+                    *font_size,
+                    [text_color.r, text_color.g, text_color.b, text_color.a],
                     scale,
                     0.0,
+                    *font_family,
+                    *bold,
+                    *italic,
                 );
             }
             crate::model::DrawObject::Text {
@@ -820,6 +847,9 @@ pub fn export_page_to_png(
                 font_size,
                 color,
                 rotation,
+                font_family,
+                bold,
+                italic,
                 ..
             } => {
                 draw_egui_text(
@@ -832,6 +862,9 @@ pub fn export_page_to_png(
                     [color.r, color.g, color.b, color.a],
                     scale,
                     *rotation,
+                    *font_family,
+                    *bold,
+                    *italic,
                 );
             }
             crate::model::DrawObject::Connector { style, .. } => {

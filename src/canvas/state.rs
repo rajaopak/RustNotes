@@ -96,6 +96,15 @@ pub struct CanvasState {
     #[allow(dead_code)]
     pub text_buffer: String,
 
+    // Task 5: Text & Sticky Note formatting defaults
+    pub text_font_size: f32,
+    pub text_font_family: crate::model::FontFamilyPreset,
+    pub text_bold: bool,
+    pub text_italic: bool,
+    pub text_alignment: crate::model::TextAlign,
+    pub text_color: Color32,
+    pub sticky_bg_color: Color32,
+
     // Fase G7: Connector interactive creation & snapping state
     pub draft_connector_start: Option<crate::model::ConnectorEnd>,
     pub draft_connector_current: Option<crate::model::Point2D>,
@@ -170,6 +179,13 @@ impl Default for CanvasState {
             editing_text_id: None,
             focus_text_edit: false,
             text_buffer: String::new(),
+            text_font_size: 16.0,
+            text_font_family: crate::model::FontFamilyPreset::SansSerif,
+            text_bold: false,
+            text_italic: false,
+            text_alignment: crate::model::TextAlign::Left,
+            text_color: Color32::from_rgb(35, 35, 35),
+            sticky_bg_color: Color32::from_rgb(254, 243, 189),
             draft_connector_start: None,
             draft_connector_current: None,
             connector_snap_candidate: None,

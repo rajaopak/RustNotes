@@ -1,8 +1,8 @@
 use super::*;
 use crate::geometry::{smooth_stroke_points, tessellate_stroke};
 use crate::model::{
-    ColorData, ConnectionSite, ConnectorEnd, ConnectorRoute, ConnectorStyle, DrawObject, Page,
-    PageTemplate, Point2D, ShapeKind, StrokePoint, StrokeStyle,
+    ColorData, ConnectionSite, ConnectorEnd, ConnectorRoute, ConnectorStyle, DrawObject,
+    FontFamilyPreset, Page, PageTemplate, Point2D, ShapeKind, StrokePoint, StrokeStyle, TextAlign,
 };
 use eframe::egui::{Color32, Pos2, Vec2};
 
@@ -33,6 +33,10 @@ fn make_test_page() -> Page {
         font_size: 16.0,
         color: ColorData::from(Color32::BLACK),
         rotation: 0.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
     });
     page
 }
@@ -318,6 +322,10 @@ fn test_undo_redo_does_not_affect_existing_text_on_subsequent_actions() {
         font_size: 16.0,
         color: ColorData::from(Color32::BLACK),
         rotation: 0.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
     });
 
     assert_eq!(page.objects.len(), 1);
@@ -385,6 +393,10 @@ fn test_undo_redo_multi_page_isolation_and_order() {
         font_size: 14.0,
         color: ColorData::from(Color32::BLACK),
         rotation: 0.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
     });
 
     // Di Page 2: Tambahkan sebuah bentuk persegi
@@ -453,6 +465,10 @@ fn test_clean_redundant_top_undo_on_empty_text() {
         font_size: 14.0,
         color: ColorData::from(Color32::BLACK),
         rotation: 0.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
     });
 
     // 3. User batal (klik di luar atau Escape): teks kosong di-remove
@@ -1309,6 +1325,10 @@ fn test_undo_redo_snapshot_allocation_and_determinism() {
                 a: 255,
             },
             rotation: 0.0,
+            font_family: FontFamilyPreset::SansSerif,
+            bold: false,
+            italic: false,
+            alignment: TextAlign::Left,
         });
     }
 
@@ -1329,4 +1349,98 @@ fn test_undo_redo_snapshot_allocation_and_determinism() {
     }
     assert_eq!(page.objects.len(), 60);
     assert_eq!(page.objects.last().unwrap().id(), "text_59");
+}
+
+#[test]
+fn test_text_and_sticky_formatting_and_undo() {
+    let mut state = CanvasState::default();
+    let mut page = Page::new(PageTemplate::Blank);
+
+    // 1. Create text with formatting
+    state.push_undo(&page.id, &page.objects);
+    page.objects.push(DrawObject::Text {
+        id: "fmt_text".to_string(),
+        x: 100.0,
+        y: 100.0,
+        text: "Custom Formatted Text".to_string(),
+        font_size: 20.0,
+        color: ColorData {
+            r: 15,
+            g: 82,
+            b: 186,
+            a: 255,
+        },
+        rotation: 0.0,
+        font_family: FontFamilyPreset::Monospace,
+        bold: true,
+        italic: false,
+        alignment: TextAlign::Center,
+    });
+
+    // 2. Create sticky note with formatting
+    state.push_undo(&page.id, &page.objects);
+    page.objects.push(DrawObject::StickyNote {
+        id: "fmt_sticky".to_string(),
+        x: 200.0,
+        y: 200.0,
+        width: 180.0,
+        height: 140.0,
+        text: "Custom Sticky".to_string(),
+        color: ColorData {
+            r: 252,
+            g: 231,
+            b: 243,
+            a: 255,
+        }, // Pastel Pink
+        text_color: ColorData {
+            r: 220,
+            g: 38,
+            b: 38,
+            a: 255,
+        }, // Red
+        font_size: 16.0,
+        font_family: FontFamilyPreset::Serif,
+        bold: true,
+        italic: true,
+        alignment: TextAlign::Right,
+    });
+
+    assert_eq!(page.objects.len(), 2);
+
+    // 3. Mutate text formatting (e.g. user toggles bold off and changes font size to 24)
+    state.push_undo(&page.id, &page.objects);
+    if let DrawObject::Text {
+        font_size, bold, ..
+    } = &mut page.objects[0]
+    {
+        *font_size = 24.0;
+        *bold = false;
+    }
+    if let DrawObject::Text {
+        font_size, bold, ..
+    } = &page.objects[0]
+    {
+        assert_eq!(*font_size, 24.0);
+        assert!(!*bold);
+    }
+
+    // 4. Undo restores bold: true and font_size: 20.0
+    state.undo(&mut page);
+    if let DrawObject::Text {
+        font_size, bold, ..
+    } = &page.objects[0]
+    {
+        assert_eq!(*font_size, 20.0);
+        assert!(*bold);
+    }
+
+    // 5. Redo re-applies bold: false and font_size: 24.0
+    state.redo(&mut page);
+    if let DrawObject::Text {
+        font_size, bold, ..
+    } = &page.objects[0]
+    {
+        assert_eq!(*font_size, 24.0);
+        assert!(!*bold);
+    }
 }

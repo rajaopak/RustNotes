@@ -1,6 +1,8 @@
 use crate::canvas::state::CanvasState;
 use crate::canvas::types::{ActiveTool, ResizeCorner};
-use crate::canvas::widgets::{render_floating_connector_toolbar, render_floating_shape_toolbar};
+use crate::canvas::widgets::{
+    render_floating_connector_toolbar, render_floating_shape_toolbar, render_floating_text_toolbar,
+};
 use crate::geometry::{
     AlignmentGuide, TransformHandleKind, combined_bounds, compute_transform_handles,
     connector_polyline, hit_test_connector_details, hit_test_connector_midpoint,
@@ -20,6 +22,8 @@ pub struct SelectionData {
     pub single_shape: Option<(f32, f32, f32, f32, f32)>,
     pub single_connector: Option<(String, Option<Vec<Point2D>>)>,
     pub single_shape_quick_dots: Option<(String, Vec<QuickDiagramDot>)>,
+    pub single_text_id: Option<String>,
+    pub single_sticky_id: Option<String>,
     pub is_single_selected: bool,
     pub is_selection_fully_locked: bool,
     pub has_shapes_selected: bool,
@@ -83,6 +87,24 @@ impl SelectionData {
         } else {
             None
         };
+        let single_text_id = if selected.len() == 1 {
+            if let DrawObject::Text { id, .. } = selected[0] {
+                Some(id.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let single_sticky_id = if selected.len() == 1 {
+            if let DrawObject::StickyNote { id, .. } = selected[0] {
+                Some(id.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let is_selection_fully_locked =
             !selected.is_empty() && selected.iter().all(|o| o.is_locked());
         let quick_dots = if selected.len() == 1
@@ -121,6 +143,8 @@ impl SelectionData {
             single_shape,
             single_connector,
             single_shape_quick_dots: quick_dots,
+            single_text_id,
+            single_sticky_id,
             is_single_selected: selected.len() == 1,
             is_selection_fully_locked,
             has_shapes_selected,
@@ -536,6 +560,33 @@ pub fn render_selection_gizmo(
                 canvas_rect,
                 sel.all_locked,
             );
+        }
+
+        // Panel Gaya Melayang untuk Teks & Catatan Tempel
+        if state.editing_text_id.is_none() {
+            if let Some(text_id) = &sel.single_text_id {
+                let s_top_mid = Pos2::new((s_nw.x + s_ne.x) * 0.5, s_nw.y.min(s_ne.y));
+                render_floating_text_toolbar(
+                    ui,
+                    page,
+                    state,
+                    text_id,
+                    s_top_mid,
+                    canvas_rect,
+                    sel.all_locked,
+                );
+            } else if let Some(sticky_id) = &sel.single_sticky_id {
+                let s_top_mid = Pos2::new((s_nw.x + s_ne.x) * 0.5, s_nw.y.min(s_ne.y));
+                render_floating_text_toolbar(
+                    ui,
+                    page,
+                    state,
+                    sticky_id,
+                    s_top_mid,
+                    canvas_rect,
+                    sel.all_locked,
+                );
+            }
         }
 
         // Task 9.1: Visual feedback 4 titik tepi (Quick Diagramming edge dots)

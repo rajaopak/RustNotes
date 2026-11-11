@@ -691,6 +691,343 @@ pub fn render_floating_shape_toolbar(
         });
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn render_floating_text_toolbar(
+    ui: &mut Ui,
+    page: &mut Page,
+    state: &mut CanvasState,
+    target_id: &str,
+    screen_top_center: Pos2,
+    canvas_rect: Rect,
+    all_locked: bool,
+) {
+    let panel_pos = Pos2::new(
+        screen_top_center
+            .x
+            .clamp(canvas_rect.left() + 200.0, canvas_rect.right() - 200.0),
+        (screen_top_center.y - 18.0).max(canvas_rect.top() + 8.0),
+    );
+
+    let tb_style = FloatingToolbarStyle::from_ui(ui);
+    let area_id = egui::Id::new(("floating_text_toolbar", target_id));
+    egui::Area::new(area_id)
+        .fixed_pos(panel_pos)
+        .pivot(egui::Align2::CENTER_BOTTOM)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style())
+                .fill(tb_style.bg_color)
+                .stroke(tb_style.border_stroke)
+                .corner_radius(8.0)
+                .shadow(tb_style.shadow)
+                .inner_margin(egui::Margin::symmetric(8, 4))
+                .show(ui, |ui| {
+                    let visuals = ui.visuals_mut();
+                    visuals.override_text_color = Some(tb_style.primary_text_color);
+                    visuals.widgets.inactive.bg_fill = tb_style.inactive_btn_bg;
+                    visuals.widgets.hovered.bg_fill = tb_style.hovered_btn_bg;
+                    visuals.widgets.active.bg_fill = tb_style.active_btn_bg;
+                    visuals.widgets.noninteractive.bg_stroke = tb_style.divider_stroke;
+
+                    if all_locked {
+                        ui.horizontal(|ui| {
+                            ui.label("🔒 Terkunci");
+                        });
+                        return;
+                    }
+
+                    // Ambil properti objek saat ini
+                    let (
+                        is_sticky,
+                        curr_font_size,
+                        curr_family,
+                        curr_bold,
+                        curr_italic,
+                        curr_align,
+                        curr_text_color,
+                        curr_sticky_color,
+                    ) = if let Some(obj) = page.objects.iter().find(|o| o.id() == target_id) {
+                        match obj {
+                            DrawObject::Text {
+                                font_size,
+                                font_family,
+                                bold,
+                                italic,
+                                alignment,
+                                color,
+                                ..
+                            } => (
+                                false,
+                                *font_size,
+                                *font_family,
+                                *bold,
+                                *italic,
+                                *alignment,
+                                color.to_color32(),
+                                state.sticky_bg_color,
+                            ),
+                            DrawObject::StickyNote {
+                                color,
+                                text_color,
+                                font_size,
+                                font_family,
+                                bold,
+                                italic,
+                                alignment,
+                                ..
+                            } => (
+                                true,
+                                *font_size,
+                                *font_family,
+                                *bold,
+                                *italic,
+                                *alignment,
+                                text_color.to_color32(),
+                                color.to_color32(),
+                            ),
+                            _ => return,
+                        }
+                    } else {
+                        return;
+                    };
+
+                    let mut mutated = false;
+                    let mut new_font_size = curr_font_size;
+                    let mut new_family = curr_family;
+                    let mut new_bold = curr_bold;
+                    let mut new_italic = curr_italic;
+                    let mut new_align = curr_align;
+                    let mut new_text_color = curr_text_color;
+                    let mut new_sticky_color = curr_sticky_color;
+
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
+
+                        // 1. Pilihan Font Family
+                        ui.menu_button(format!("🔤 {}", curr_family.name()), |ui| {
+                            for f in crate::model::FontFamilyPreset::ALL {
+                                if ui.button(f.name()).clicked() {
+                                    new_family = f;
+                                    mutated = true;
+                                    ui.close_menu();
+                                }
+                            }
+                        });
+
+                        ui.separator();
+
+                        // 2. Ukuran Font Stepper & Presets
+                        if ui.button("➖").clicked() && curr_font_size > 10.0 {
+                            new_font_size = (curr_font_size - 2.0).max(8.0);
+                            mutated = true;
+                        }
+                        ui.menu_button(format!("{curr_font_size:.0} pt"), |ui| {
+                            for sz in [
+                                12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0, 40.0, 48.0, 64.0,
+                            ] {
+                                if ui.button(format!("{sz:.0} pt")).clicked() {
+                                    new_font_size = sz;
+                                    mutated = true;
+                                    ui.close_menu();
+                                }
+                            }
+                        });
+                        if ui.button("➕").clicked() && curr_font_size < 96.0 {
+                            new_font_size = (curr_font_size + 2.0).min(96.0);
+                            mutated = true;
+                        }
+
+                        ui.separator();
+
+                        // 3. Gaya Teks: Bold (B) & Italic (I)
+                        let b_label = if curr_bold {
+                            egui::RichText::new("B").strong().color(Color32::WHITE)
+                        } else {
+                            egui::RichText::new("B").strong()
+                        };
+                        let b_btn = if curr_bold {
+                            ui.add(egui::Button::new(b_label).fill(tb_style.active_btn_bg))
+                        } else {
+                            ui.button(b_label)
+                        };
+                        if b_btn.clicked() {
+                            new_bold = !curr_bold;
+                            mutated = true;
+                        }
+
+                        let i_label = if curr_italic {
+                            egui::RichText::new("I").italics().color(Color32::WHITE)
+                        } else {
+                            egui::RichText::new("I").italics()
+                        };
+                        let i_btn = if curr_italic {
+                            ui.add(egui::Button::new(i_label).fill(tb_style.active_btn_bg))
+                        } else {
+                            ui.button(i_label)
+                        };
+                        if i_btn.clicked() {
+                            new_italic = !curr_italic;
+                            mutated = true;
+                        }
+
+                        ui.separator();
+
+                        // 4. Alignment: Left, Center, Right
+                        let aligns = [
+                            (crate::model::TextAlign::Left, "⇤", "Rata Kiri"),
+                            (crate::model::TextAlign::Center, "≡", "Rata Tengah"),
+                            (crate::model::TextAlign::Right, "⇥", "Rata Kanan"),
+                        ];
+                        for (al, icon, tip) in aligns {
+                            let is_curr = curr_align == al;
+                            let btn = if is_curr {
+                                ui.add(
+                                    egui::Button::new(
+                                        egui::RichText::new(icon).color(Color32::WHITE),
+                                    )
+                                    .fill(tb_style.active_btn_bg),
+                                )
+                            } else {
+                                ui.button(icon)
+                            };
+                            if btn.on_hover_text(tip).clicked() {
+                                new_align = al;
+                                mutated = true;
+                            }
+                        }
+
+                        ui.separator();
+
+                        // 5. Palet Warna Teks
+                        ui.menu_button("🎨 Teks", |ui| {
+                            let text_colors = [
+                                (Color32::from_rgb(25, 27, 32), "Hitam"),
+                                (Color32::from_rgb(100, 105, 115), "Abu-abu"),
+                                (Color32::from_rgb(15, 82, 186), "Biru Navy"),
+                                (Color32::from_rgb(2, 132, 199), "Biru Muda"),
+                                (Color32::from_rgb(22, 128, 61), "Hijau"),
+                                (Color32::from_rgb(220, 38, 38), "Merah"),
+                                (Color32::from_rgb(217, 119, 6), "Oranye"),
+                                (Color32::from_rgb(126, 34, 206), "Ungu"),
+                            ];
+                            for (c, label) in text_colors {
+                                ui.horizontal(|ui| {
+                                    let (rect, resp) = ui.allocate_exact_size(
+                                        Vec2::splat(16.0),
+                                        egui::Sense::click(),
+                                    );
+                                    ui.painter().rect_filled(rect, 3.0, c);
+                                    if resp.clicked() || ui.button(label).clicked() {
+                                        new_text_color = c;
+                                        mutated = true;
+                                        ui.close_menu();
+                                    }
+                                });
+                            }
+                        });
+
+                        // 6. Warna Kertas Tempel (Bila StickyNote)
+                        if is_sticky {
+                            ui.separator();
+                            ui.menu_button("📝 Warna Tempel", |ui| {
+                                let sticky_colors = [
+                                    (Color32::from_rgb(254, 243, 189), "Kuning Klasik"),
+                                    (Color32::from_rgb(252, 231, 243), "Pink Pastel"),
+                                    (Color32::from_rgb(220, 252, 231), "Hijau Mint"),
+                                    (Color32::from_rgb(224, 242, 254), "Biru Langit"),
+                                    (Color32::from_rgb(243, 232, 255), "Ungu Lavender"),
+                                    (Color32::from_rgb(254, 215, 170), "Oranye Peach"),
+                                ];
+                                for (c, label) in sticky_colors {
+                                    ui.horizontal(|ui| {
+                                        let (rect, resp) = ui.allocate_exact_size(
+                                            Vec2::splat(16.0),
+                                            egui::Sense::click(),
+                                        );
+                                        ui.painter().rect_filled(rect, 3.0, c);
+                                        if resp.clicked() || ui.button(label).clicked() {
+                                            new_sticky_color = c;
+                                            mutated = true;
+                                            ui.close_menu();
+                                        }
+                                    });
+                                }
+                            });
+                        }
+
+                        // 7. Tombol Sunting (Aktifkan inline editor bila belum aktif)
+                        if state.editing_text_id.as_deref() != Some(target_id) {
+                            ui.separator();
+                            if ui
+                                .button("✏ Sunting")
+                                .on_hover_text("Buka penyunting teks langsung")
+                                .clicked()
+                            {
+                                state.editing_text_id = Some(target_id.to_string());
+                                state.focus_text_edit = true;
+                            }
+                        }
+                    });
+
+                    if mutated {
+                        state.push_undo(&page.id, &page.objects);
+                        state.text_font_size = new_font_size;
+                        state.text_font_family = new_family;
+                        state.text_bold = new_bold;
+                        state.text_italic = new_italic;
+                        state.text_alignment = new_align;
+                        state.text_color = new_text_color;
+                        if is_sticky {
+                            state.sticky_bg_color = new_sticky_color;
+                        }
+
+                        for obj in &mut page.objects {
+                            if obj.id() == target_id {
+                                match obj {
+                                    DrawObject::Text {
+                                        font_size,
+                                        font_family,
+                                        bold,
+                                        italic,
+                                        alignment,
+                                        color,
+                                        ..
+                                    } => {
+                                        *font_size = new_font_size;
+                                        *font_family = new_family;
+                                        *bold = new_bold;
+                                        *italic = new_italic;
+                                        *alignment = new_align;
+                                        *color = new_text_color.into();
+                                    }
+                                    DrawObject::StickyNote {
+                                        color,
+                                        text_color,
+                                        font_size,
+                                        font_family,
+                                        bold,
+                                        italic,
+                                        alignment,
+                                        ..
+                                    } => {
+                                        *font_size = new_font_size;
+                                        *font_family = new_family;
+                                        *bold = new_bold;
+                                        *italic = new_italic;
+                                        *alignment = new_align;
+                                        *text_color = new_text_color.into();
+                                        *color = new_sticky_color.into();
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        state.spatial_grid.rebuild(&page.objects);
+                        ui.ctx().request_repaint();
+                    }
+                });
+        });
+}
+
 /// Merender Inline Text Editor langsung di atas kanvas halaman (Text, StickyNote, Shape Label)
 pub fn render_inline_text_editor(
     ui: &mut Ui,
@@ -709,6 +1046,7 @@ pub fn render_inline_text_editor(
                     text,
                     font_size,
                     color,
+                    font_family,
                     ..
                 } => {
                     let screen_tl = page_to_screen(Pos2::new(*x, *y));
@@ -720,6 +1058,7 @@ pub fn render_inline_text_editor(
                         .unwrap_or(12)
                         .max(12) as f32;
                     let scaled_font = (*font_size * state.zoom).clamp(10.0, 96.0);
+                    let egui_family = font_family.to_egui_font_family();
                     let box_w = (max_chars * scaled_font * 0.62 + 28.0).max(180.0);
                     let box_h = ((lines_cnt + 0.6) * scaled_font * 1.35 + 12.0).max(36.0);
                     let edit_rect = Rect::from_min_size(screen_tl, Vec2::new(box_w, box_h));
@@ -739,7 +1078,7 @@ pub fn render_inline_text_editor(
                     let te_id = egui::Id::new(("canvas_inline_text", &edit_id));
                     let te = egui::TextEdit::multiline(text)
                         .id(te_id)
-                        .font(egui::FontId::proportional(scaled_font))
+                        .font(egui::FontId::new(scaled_font, egui_family))
                         .text_color(color.to_color32())
                         .hint_text("Ketik teks di sini...")
                         .frame(false)
@@ -758,13 +1097,17 @@ pub fn render_inline_text_editor(
                     width,
                     height,
                     text,
+                    text_color,
+                    font_size,
+                    font_family,
                     ..
                 } => {
                     let p1 = page_to_screen(Pos2::new(*x, *y)) + Vec2::new(8.0, 8.0);
                     let p2 =
                         page_to_screen(Pos2::new(*x + *width, *y + *height)) - Vec2::new(8.0, 8.0);
                     let edit_rect = Rect::from_two_pos(p1, p2);
-                    let scaled_font = (14.0 * state.zoom).clamp(10.0, 42.0);
+                    let scaled_font = (*font_size * state.zoom).clamp(10.0, 42.0);
+                    let egui_family = font_family.to_egui_font_family();
 
                     painter.rect_stroke(
                         edit_rect.expand(6.0),
@@ -776,8 +1119,8 @@ pub fn render_inline_text_editor(
                     let te_id = egui::Id::new(("canvas_inline_sticky", &edit_id));
                     let te = egui::TextEdit::multiline(text)
                         .id(te_id)
-                        .font(egui::FontId::proportional(scaled_font))
-                        .text_color(Color32::from_rgb(35, 35, 35))
+                        .font(egui::FontId::new(scaled_font, egui_family))
+                        .text_color(text_color.to_color32())
                         .hint_text("Tulis catatan tempel...")
                         .frame(false)
                         .desired_width(edit_rect.width());

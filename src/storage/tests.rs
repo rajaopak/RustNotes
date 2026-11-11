@@ -1,8 +1,8 @@
 use super::*;
 use crate::model::{
     CURRENT_NOTEBOOK_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION, ColorData, CustomTemplate, DrawObject,
-    Library, LibraryIndex, Notebook, NotebookMeta, Page, PageBackground, PageTemplate, StrokePoint,
-    StrokeStyle, ThemeMode,
+    FontFamilyPreset, Library, LibraryIndex, Notebook, NotebookMeta, Page, PageBackground,
+    PageTemplate, StrokePoint, StrokeStyle, TextAlign, ThemeMode,
 };
 use eframe::egui::Color32;
 use std::fs;
@@ -451,6 +451,10 @@ fn test_export_page_to_png() {
             a: 255,
         },
         rotation: 0.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
     });
 
     let out_png = dir.join("test_page.png");
@@ -607,6 +611,10 @@ fn test_export_page_to_svg_and_file() {
             a: 255,
         },
         rotation: 0.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
     });
 
     let svg = export_page_to_svg(&page);

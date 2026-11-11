@@ -1,6 +1,7 @@
 use super::*;
 use crate::model::{
-    ColorData, ConnectionSite, DrawObject, Point2D, ShapeKind, StrokePoint, StrokeStyle,
+    ColorData, ConnectionSite, DrawObject, FontFamilyPreset, Point2D, ShapeKind, StrokePoint,
+    StrokeStyle, TextAlign,
 };
 use eframe::egui::{Color32, Pos2, Rect};
 
@@ -1305,6 +1306,10 @@ fn test_text_object_rotation_on_page_rotate() {
         font_size: 20.0,
         color: dummy_color(),
         rotation: 0.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
     });
 
     // 1. Rotate 90 CW: (x, y) -> (1100 - y = 900, x = 100), rotation -> FRAC_PI_2 (90 deg)

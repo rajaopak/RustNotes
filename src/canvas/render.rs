@@ -479,9 +479,13 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                         x: page_p.x,
                         y: page_p.y,
                         text: String::new(),
-                        font_size: (state.stroke_width * 4.0 + 14.0).clamp(12.0, 72.0),
-                        color: state.stroke_color.into(),
+                        font_size: state.text_font_size,
+                        color: state.text_color.into(),
                         rotation: 0.0,
+                        font_family: state.text_font_family,
+                        bold: state.text_bold,
+                        italic: state.text_italic,
+                        alignment: state.text_alignment,
                     };
                     page.objects.push(new_text);
                     state.spatial_grid.rebuild(&page.objects);
@@ -500,7 +504,13 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     width: 180.0,
                     height: 140.0,
                     text: String::new(),
-                    color: Color32::from_rgb(254, 243, 189).into(),
+                    color: state.sticky_bg_color.into(),
+                    text_color: state.text_color.into(),
+                    font_size: state.text_font_size.clamp(10.0, 36.0),
+                    font_family: state.text_font_family,
+                    bold: state.text_bold,
+                    italic: state.text_italic,
+                    alignment: state.text_alignment,
                 };
                 page.objects.push(new_note);
                 state.spatial_grid.rebuild(&page.objects);
@@ -1975,9 +1985,13 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     x: page_p.x,
                     y: page_p.y,
                     text: String::new(),
-                    font_size: (state.stroke_width * 4.0 + 14.0).clamp(12.0, 72.0),
-                    color: state.stroke_color.into(),
+                    font_size: state.text_font_size,
+                    color: state.text_color.into(),
                     rotation: 0.0,
+                    font_family: state.text_font_family,
+                    bold: state.text_bold,
+                    italic: state.text_italic,
+                    alignment: state.text_alignment,
                 };
                 page.objects.push(new_text);
                 state.spatial_grid.rebuild(&page.objects);
@@ -1995,7 +2009,13 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 width: 180.0,
                 height: 140.0,
                 text: String::new(),
-                color: Color32::from_rgb(254, 243, 189).into(),
+                color: state.sticky_bg_color.into(),
+                text_color: state.text_color.into(),
+                font_size: state.text_font_size.clamp(10.0, 36.0),
+                font_family: state.text_font_family,
+                bold: state.text_bold,
+                italic: state.text_italic,
+                alignment: state.text_alignment,
             };
             page.objects.push(new_note);
             state.spatial_grid.rebuild(&page.objects);

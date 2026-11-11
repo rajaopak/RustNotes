@@ -592,6 +592,10 @@ pub fn export_page_to_svg(page: &Page) -> String {
                 font_size,
                 color,
                 rotation,
+                font_family,
+                bold,
+                italic,
+                alignment,
                 ..
             } => {
                 let text_col = format!(
@@ -614,8 +618,17 @@ pub fn export_page_to_svg(page: &Page) -> String {
                 let lines: Vec<&str> = text.lines().collect();
                 let line_h = font_size * 1.25;
                 let start_y = *y + font_size * 0.85;
+                let ff = font_family.to_svg_font_family();
+                let weight_attr = if *bold { " font-weight=\"bold\"" } else { "" };
+                let style_attr = if *italic {
+                    " font-style=\"italic\""
+                } else {
+                    ""
+                };
+                let anchor_attr = format!(" text-anchor=\"{}\"", alignment.to_svg_anchor());
+
                 out.push_str(&format!(
-                    "<text x=\"{x:.1}\" y=\"{start_y:.1}\" font-family=\"sans-serif\" font-size=\"{font_size:.1}\" fill=\"{text_col}\"{rot_attr}>"
+                    "<text x=\"{x:.1}\" y=\"{start_y:.1}\" font-family=\"{ff}\" font-size=\"{font_size:.1}\" fill=\"{text_col}\"{weight_attr}{style_attr}{anchor_attr}{rot_attr}>"
                 ));
                 for (i, line) in lines.iter().enumerate() {
                     let dy_str = if i == 0 {
@@ -634,6 +647,12 @@ pub fn export_page_to_svg(page: &Page) -> String {
                 width: sw,
                 height: sh,
                 color,
+                text_color,
+                font_size,
+                font_family,
+                bold,
+                italic,
+                alignment,
                 ..
             } => {
                 let note_col = format!(
@@ -643,16 +662,35 @@ pub fn export_page_to_svg(page: &Page) -> String {
                     color.b,
                     color.a as f32 / 255.0
                 );
+                let text_col = format!(
+                    "rgba({},{},{},{:.3})",
+                    text_color.r,
+                    text_color.g,
+                    text_color.b,
+                    text_color.a as f32 / 255.0
+                );
                 out.push_str(&format!(
                     "<rect x=\"{x:.1}\" y=\"{y:.1}\" width=\"{sw:.1}\" height=\"{sh:.1}\" rx=\"4\" ry=\"4\" fill=\"{note_col}\" filter=\"url(#sticky-shadow)\"/>\n"
                 ));
                 let lines: Vec<&str> = text.lines().collect();
-                let font_size = 13.0;
-                let line_h = 17.0;
-                let start_y = *y + 18.0;
-                let text_x = *x + 10.0;
+                let line_h = font_size * 1.3;
+                let start_y = *y + font_size + 4.0;
+                let text_x = match alignment {
+                    crate::model::TextAlign::Left => *x + 10.0,
+                    crate::model::TextAlign::Center => *x + *sw * 0.5,
+                    crate::model::TextAlign::Right => *x + *sw - 10.0,
+                };
+                let ff = font_family.to_svg_font_family();
+                let weight_attr = if *bold { " font-weight=\"bold\"" } else { "" };
+                let style_attr = if *italic {
+                    " font-style=\"italic\""
+                } else {
+                    ""
+                };
+                let anchor_attr = format!(" text-anchor=\"{}\"", alignment.to_svg_anchor());
+
                 out.push_str(&format!(
-                    "<text x=\"{text_x:.1}\" y=\"{start_y:.1}\" font-family=\"sans-serif\" font-size=\"{font_size:.1}\" fill=\"#2A2A2A\">"
+                    "<text x=\"{text_x:.1}\" y=\"{start_y:.1}\" font-family=\"{ff}\" font-size=\"{font_size:.1}\" fill=\"{text_col}\"{weight_attr}{style_attr}{anchor_attr}>"
                 ));
                 for (i, line) in lines.iter().enumerate() {
                     let dy_str = if i == 0 {

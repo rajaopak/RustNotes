@@ -187,11 +187,68 @@ impl From<Point2D> for Pos2 {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum FontFamilyPreset {
+    #[default]
+    SansSerif,
+    Serif,
+    Monospace,
+}
+
+impl FontFamilyPreset {
+    pub const ALL: [FontFamilyPreset; 3] = [
+        FontFamilyPreset::SansSerif,
+        FontFamilyPreset::Serif,
+        FontFamilyPreset::Monospace,
+    ];
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::SansSerif => "Sans-Serif",
+            Self::Serif => "Serif",
+            Self::Monospace => "Monospace",
+        }
+    }
+
+    pub fn to_egui_font_family(&self) -> egui::FontFamily {
+        match self {
+            Self::SansSerif | Self::Serif => egui::FontFamily::Proportional,
+            Self::Monospace => egui::FontFamily::Monospace,
+        }
+    }
+
+    pub fn to_svg_font_family(&self) -> &'static str {
+        match self {
+            Self::SansSerif => "sans-serif, Arial, Helvetica",
+            Self::Serif => "serif, 'Times New Roman', Times",
+            Self::Monospace => "monospace, 'Courier New', Courier",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum TextAlign {
     Left,
     #[default]
     Center,
     Right,
+}
+
+impl TextAlign {
+    pub fn to_egui_align(&self) -> egui::Align {
+        match self {
+            Self::Left => egui::Align::LEFT,
+            Self::Center => egui::Align::Center,
+            Self::Right => egui::Align::RIGHT,
+        }
+    }
+
+    pub fn to_svg_anchor(&self) -> &'static str {
+        match self {
+            Self::Left => "start",
+            Self::Center => "middle",
+            Self::Right => "end",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -397,6 +454,14 @@ pub enum DrawObject {
         color: ColorData,
         #[serde(default)]
         rotation: f32,
+        #[serde(default)]
+        font_family: FontFamilyPreset,
+        #[serde(default)]
+        bold: bool,
+        #[serde(default)]
+        italic: bool,
+        #[serde(default = "default_text_align_left")]
+        alignment: TextAlign,
     },
     StickyNote {
         id: String,
@@ -406,6 +471,18 @@ pub enum DrawObject {
         height: f32,
         text: String,
         color: ColorData,
+        #[serde(default = "default_sticky_text_color")]
+        text_color: ColorData,
+        #[serde(default = "default_sticky_font_size")]
+        font_size: f32,
+        #[serde(default)]
+        font_family: FontFamilyPreset,
+        #[serde(default)]
+        bold: bool,
+        #[serde(default)]
+        italic: bool,
+        #[serde(default = "default_text_align_left")]
+        alignment: TextAlign,
     },
     Image {
         id: String,
@@ -435,6 +512,23 @@ pub enum DrawObject {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_text_align_left() -> TextAlign {
+    TextAlign::Left
+}
+
+fn default_sticky_text_color() -> ColorData {
+    ColorData {
+        r: 35,
+        g: 35,
+        b: 35,
+        a: 255,
+    }
+}
+
+fn default_sticky_font_size() -> f32 {
+    14.0
 }
 
 impl DrawObject {
@@ -1589,6 +1683,10 @@ mod tests {
                 a: 255,
             },
             rotation: 0.0,
+            font_family: FontFamilyPreset::Monospace,
+            bold: true,
+            italic: true,
+            alignment: TextAlign::Right,
         };
         let json_text = serde_json::to_string(&text_obj).expect("serialize");
         let decoded_text: DrawObject = serde_json::from_str(&json_text).expect("deserialize");
@@ -1607,10 +1705,60 @@ mod tests {
                 b: 189,
                 a: 255,
             },
+            text_color: ColorData {
+                r: 20,
+                g: 20,
+                b: 20,
+                a: 255,
+            },
+            font_size: 16.0,
+            font_family: FontFamilyPreset::Serif,
+            bold: true,
+            italic: false,
+            alignment: TextAlign::Center,
         };
         let json_sticky = serde_json::to_string(&sticky_obj).expect("serialize");
         let decoded_sticky: DrawObject = serde_json::from_str(&json_sticky).expect("deserialize");
         assert_eq!(sticky_obj, decoded_sticky);
+
+        // Backward compatibility test: legacy JSON without formatting fields
+        let legacy_text_json = r#"{"type":"Text","id":"t-old","x":10.0,"y":20.0,"text":"Old Text","font_size":14.0,"color":{"r":0,"g":0,"b":0,"a":255}}"#;
+        let decoded_legacy_text: DrawObject =
+            serde_json::from_str(legacy_text_json).expect("deserialize legacy text");
+        if let DrawObject::Text {
+            font_family,
+            bold,
+            italic,
+            alignment,
+            ..
+        } = decoded_legacy_text
+        {
+            assert_eq!(font_family, FontFamilyPreset::SansSerif);
+            assert!(!bold);
+            assert!(!italic);
+            assert_eq!(alignment, TextAlign::Left);
+        } else {
+            panic!("Expected Text variant");
+        }
+
+        let legacy_sticky_json = r#"{"type":"StickyNote","id":"s-old","x":5.0,"y":5.0,"width":100.0,"height":100.0,"text":"Old Sticky","color":{"r":254,"g":243,"b":189,"a":255}}"#;
+        let decoded_legacy_sticky: DrawObject =
+            serde_json::from_str(legacy_sticky_json).expect("deserialize legacy sticky");
+        if let DrawObject::StickyNote {
+            text_color,
+            font_size,
+            alignment,
+            bold,
+            ..
+        } = decoded_legacy_sticky
+        {
+            assert_eq!(text_color, default_sticky_text_color());
+            assert_eq!(font_size, 14.0);
+            assert_eq!(alignment, TextAlign::Left);
+            assert!(!bold);
+        } else {
+            panic!("Expected StickyNote variant");
+        }
     }
 
     #[test]
@@ -1629,6 +1777,10 @@ mod tests {
                 a: 255,
             },
             rotation: 0.0,
+            font_family: FontFamilyPreset::SansSerif,
+            bold: false,
+            italic: false,
+            alignment: TextAlign::Left,
         });
 
         let mut nb = Notebook::new(

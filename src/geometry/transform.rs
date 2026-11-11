@@ -97,12 +97,14 @@ pub fn scale_object(obj: &mut DrawObject, origin: Pos2, sx: f32, sy: f32) {
             y,
             width,
             height,
+            font_size,
             ..
         } => {
             *x = origin.x + (*x - origin.x) * sx;
             *y = origin.y + (*y - origin.y) * sy;
             *width *= sx;
             *height *= sy;
+            *font_size *= (sx.abs() + sy.abs()) / 2.0;
         }
         DrawObject::Image {
             x,
