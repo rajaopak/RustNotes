@@ -1121,6 +1121,20 @@ impl RustNotesApp {
                         });
                     }
 
+                    // Opsi Spesifik Lasso (Lasso Selection Mode - Task 6)
+                    if self.canvas_state.current_tool == ActiveTool::Lasso {
+                        ui.separator();
+                        ui.label(RichText::new("Mode Seleksi Lasso:").strong().size(12.0));
+                        ui.horizontal(|ui| {
+                            for mode in crate::model::LassoSelectionMode::ALL {
+                                let is_sel = self.canvas_state.lasso_selection_mode == mode;
+                                if ui.selectable_label(is_sel, mode.label()).clicked() {
+                                    self.canvas_state.lasso_selection_mode = mode;
+                                }
+                            }
+                        });
+                    }
+
                     // Fase G4.4: Opsi Otomatis Koreksi Bentuk (Hold-to-Snap)
                     ui.separator();
                     ui.horizontal(|ui| {

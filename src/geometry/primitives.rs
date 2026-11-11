@@ -29,14 +29,30 @@ pub fn object_bounds(obj: &DrawObject) -> Rect {
             width,
             height,
             stroke_width,
+            rotation,
+            shape_type,
             ..
         } => {
             let half = *stroke_width / 2.0;
-            let left = x.min(x + width) - half;
-            let right = x.max(x + width) + half;
-            let top = y.min(y + height) - half;
-            let bottom = y.max(y + height) + half;
-            Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, bottom))
+            if *shape_type == ShapeKind::Line {
+                let p1 = Pos2::new(*x, *y);
+                let p2 = Pos2::new(*x + *width, *y + *height);
+                Rect::from_two_pos(p1, p2).expand(half)
+            } else if rotation.abs() < 1e-3 {
+                let left = x.min(x + width) - half;
+                let right = x.max(x + width) + half;
+                let top = y.min(y + height) - half;
+                let bottom = y.max(y + height) + half;
+                Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, bottom))
+            } else {
+                let cx = *x + *width / 2.0;
+                let cy = *y + *height / 2.0;
+                let cos_a = rotation.cos().abs();
+                let sin_a = rotation.sin().abs();
+                let bb_w = width.abs() * cos_a + height.abs() * sin_a + stroke_width;
+                let bb_h = width.abs() * sin_a + height.abs() * cos_a + stroke_width;
+                Rect::from_center_size(Pos2::new(cx, cy), Vec2::new(bb_w, bb_h))
+            }
         }
         DrawObject::Text {
             x,
@@ -75,8 +91,21 @@ pub fn object_bounds(obj: &DrawObject) -> Rect {
             y,
             width,
             height,
+            rotation,
             ..
-        } => Rect::from_min_size(Pos2::new(*x, *y), Vec2::new(*width, *height)),
+        } => {
+            if rotation.abs() < 1e-3 {
+                Rect::from_min_size(Pos2::new(*x, *y), Vec2::new(*width, *height))
+            } else {
+                let cx = *x + *width / 2.0;
+                let cy = *y + *height / 2.0;
+                let cos_a = rotation.cos().abs();
+                let sin_a = rotation.sin().abs();
+                let bb_w = width.abs() * cos_a + height.abs() * sin_a;
+                let bb_h = width.abs() * sin_a + height.abs() * cos_a;
+                Rect::from_center_size(Pos2::new(cx, cy), Vec2::new(bb_w, bb_h))
+            }
+        }
         DrawObject::Image {
             x,
             y,

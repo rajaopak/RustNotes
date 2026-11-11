@@ -1,7 +1,7 @@
 use super::*;
 use crate::model::{
-    ColorData, ConnectionSite, DrawObject, FontFamilyPreset, Point2D, ShapeKind, StrokePoint,
-    StrokeStyle, TextAlign,
+    ColorData, ConnectionSite, DrawObject, FontFamilyPreset, LassoSelectionMode, Point2D,
+    ShapeKind, StrokePoint, StrokeStyle, TextAlign,
 };
 use eframe::egui::{Color32, Pos2, Rect};
 
@@ -456,6 +456,312 @@ fn test_object_in_lasso() {
         style: StrokeStyle::Solid,
     };
     assert!(!object_in_lasso(&outside_stroke, &poly));
+}
+
+#[test]
+fn test_precise_lasso_containment_mode() {
+    let poly = vec![
+        Pos2::new(0.0, 0.0),
+        Pos2::new(100.0, 0.0),
+        Pos2::new(100.0, 100.0),
+        Pos2::new(0.0, 100.0),
+    ];
+
+    // 1. Fully contained stroke
+    let inside_stroke = DrawObject::Stroke {
+        id: "s_in".into(),
+        points: vec![
+            StrokePoint {
+                x: 20.0,
+                y: 20.0,
+                pressure: 1.0,
+            },
+            StrokePoint {
+                x: 80.0,
+                y: 80.0,
+                pressure: 1.0,
+            },
+        ],
+        color: dummy_color(),
+        width: 2.0,
+        is_highlighter: false,
+        style: StrokeStyle::Solid,
+    };
+    assert!(object_in_lasso_mode(
+        &inside_stroke,
+        &poly,
+        LassoSelectionMode::Containment
+    ));
+    assert!(object_in_lasso_mode(
+        &inside_stroke,
+        &poly,
+        LassoSelectionMode::Intersection
+    ));
+
+    // 2. Stroke that crosses the lasso border (partially outside)
+    let crossing_stroke = DrawObject::Stroke {
+        id: "s_cross".into(),
+        points: vec![
+            StrokePoint {
+                x: -20.0,
+                y: 50.0,
+                pressure: 1.0,
+            },
+            StrokePoint {
+                x: 120.0,
+                y: 50.0,
+                pressure: 1.0,
+            },
+        ],
+        color: dummy_color(),
+        width: 2.0,
+        is_highlighter: false,
+        style: StrokeStyle::Solid,
+    };
+    // In containment mode, crossing stroke must NOT be selected
+    assert!(!object_in_lasso_mode(
+        &crossing_stroke,
+        &poly,
+        LassoSelectionMode::Containment
+    ));
+    // In intersection mode, crossing stroke IS selected
+    assert!(object_in_lasso_mode(
+        &crossing_stroke,
+        &poly,
+        LassoSelectionMode::Intersection
+    ));
+
+    // 3. Single point stroke (dot) inside
+    let dot_stroke = DrawObject::Stroke {
+        id: "s_dot".into(),
+        points: vec![StrokePoint {
+            x: 50.0,
+            y: 50.0,
+            pressure: 1.0,
+        }],
+        color: dummy_color(),
+        width: 2.0,
+        is_highlighter: false,
+        style: StrokeStyle::Solid,
+    };
+    assert!(object_in_lasso_mode(
+        &dot_stroke,
+        &poly,
+        LassoSelectionMode::Containment
+    ));
+
+    // 4. Shape fully inside vs crossing
+    let inside_rect = DrawObject::Shape {
+        id: "rect_in".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 10.0,
+        y: 10.0,
+        width: 40.0,
+        height: 40.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        curve_points: Vec::new(),
+        locked: false,
+        label: None,
+    };
+    assert!(object_in_lasso_mode(
+        &inside_rect,
+        &poly,
+        LassoSelectionMode::Containment
+    ));
+
+    let crossing_rect = DrawObject::Shape {
+        id: "rect_cross".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 80.0,
+        y: 80.0,
+        width: 50.0,
+        height: 50.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        curve_points: Vec::new(),
+        locked: false,
+        label: None,
+    };
+    assert!(!object_in_lasso_mode(
+        &crossing_rect,
+        &poly,
+        LassoSelectionMode::Containment
+    ));
+    assert!(object_in_lasso_mode(
+        &crossing_rect,
+        &poly,
+        LassoSelectionMode::Intersection
+    ));
+
+    // 5. Sticky note fully inside vs partially outside
+    let inside_sticky = DrawObject::StickyNote {
+        id: "sticky_in".into(),
+        x: 15.0,
+        y: 15.0,
+        width: 30.0,
+        height: 30.0,
+        text: "Note".into(),
+        color: dummy_color(),
+        text_color: dummy_color(),
+        font_size: 14.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
+        rotation: 0.0,
+    };
+    assert!(object_in_lasso_mode(
+        &inside_sticky,
+        &poly,
+        LassoSelectionMode::Containment
+    ));
+
+    let crossing_sticky = DrawObject::StickyNote {
+        id: "sticky_cross".into(),
+        x: 90.0,
+        y: 10.0,
+        width: 30.0,
+        height: 30.0,
+        text: "Note".into(),
+        color: dummy_color(),
+        text_color: dummy_color(),
+        font_size: 14.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
+        rotation: 0.0,
+    };
+    assert!(!object_in_lasso_mode(
+        &crossing_sticky,
+        &poly,
+        LassoSelectionMode::Containment
+    ));
+    assert!(object_in_lasso_mode(
+        &crossing_sticky,
+        &poly,
+        LassoSelectionMode::Intersection
+    ));
+}
+
+#[test]
+fn test_selection_frame_rotation_and_handles() {
+    let shape = DrawObject::Shape {
+        id: "rot_shape".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 150.0,
+        y: 100.0,
+        width: 100.0,
+        height: 60.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: std::f32::consts::FRAC_PI_4, // 45 deg
+        corner_radius: 0.0,
+        curve_points: Vec::new(),
+        locked: false,
+        label: None,
+    };
+
+    let frame = SelectionFrame::from_objects(&[&shape], 20.0).expect("selection frame");
+    assert!((frame.pivot.x - 200.0).abs() < 1e-3);
+    assert!((frame.pivot.y - 130.0).abs() < 1e-3);
+    assert!((frame.local_size.x - 100.0).abs() < 1e-3);
+    assert!((frame.local_size.y - 60.0).abs() < 1e-3);
+    assert!((frame.rotation - std::f32::consts::FRAC_PI_4).abs() < 1e-3);
+    assert_eq!(frame.handles.len(), 9);
+
+    // Sticky note selection frame preserves rotation
+    let sticky = DrawObject::StickyNote {
+        id: "rot_sticky".into(),
+        x: 50.0,
+        y: 50.0,
+        width: 80.0,
+        height: 80.0,
+        text: "Hi".into(),
+        color: dummy_color(),
+        text_color: dummy_color(),
+        font_size: 14.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
+        rotation: 0.5,
+    };
+    let s_frame = SelectionFrame::from_objects(&[&sticky], 20.0).expect("sticky frame");
+    assert!((s_frame.pivot.x - 90.0).abs() < 1e-3);
+    assert!((s_frame.pivot.y - 90.0).abs() < 1e-3);
+    assert!((s_frame.rotation - 0.5).abs() < 1e-3);
+
+    // Multi-selection produces unified axis-aligned frame
+    let multi = SelectionFrame::from_objects(&[&shape, &sticky], 20.0).expect("multi frame");
+    assert_eq!(multi.rotation, 0.0);
+    assert!(multi.local_size.x > 100.0);
+}
+
+#[test]
+fn test_sticky_note_rotation_and_page_rotation() {
+    let mut sticky = DrawObject::StickyNote {
+        id: "sn_rot".into(),
+        x: 100.0,
+        y: 100.0,
+        width: 200.0,
+        height: 100.0,
+        text: "Rotated Note".into(),
+        color: dummy_color(),
+        text_color: dummy_color(),
+        font_size: 14.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
+        rotation: 0.0,
+    };
+
+    // Initial bounds
+    let b0 = object_bounds(&sticky);
+    assert_eq!(b0.width(), 200.0);
+    assert_eq!(b0.height(), 100.0);
+
+    // Rotate 90 degrees around center (200.0, 150.0)
+    let center = Pos2::new(200.0, 150.0);
+    rotate_object(&mut sticky, center, std::f32::consts::FRAC_PI_2);
+
+    if let DrawObject::StickyNote {
+        width,
+        height,
+        rotation,
+        ..
+    } = &sticky
+    {
+        assert_eq!(*width, 200.0);
+        assert_eq!(*height, 100.0);
+        assert!((*rotation - std::f32::consts::FRAC_PI_2).abs() < 1e-3);
+    } else {
+        panic!("Expected StickyNote");
+    }
+
+    // Rotated bounds width and height are swapped in world AABB
+    let b1 = object_bounds(&sticky);
+    assert!((b1.width() - 100.0).abs() < 1e-2);
+    assert!((b1.height() - 200.0).abs() < 1e-2);
+
+    // Rotate page 90 degrees clockwise
+    let mut page = crate::model::Page::new(crate::model::PageTemplate::Blank);
+    page.width = 1000.0;
+    page.height = 800.0;
+    page.objects.push(sticky);
+    rotate_page_content(&mut page, 90);
+    if let DrawObject::StickyNote { rotation, .. } = &page.objects[0] {
+        assert!((*rotation - std::f32::consts::PI).abs() < 1e-3);
+    }
 }
 
 #[test]

@@ -1403,6 +1403,7 @@ fn test_text_and_sticky_formatting_and_undo() {
         bold: true,
         italic: true,
         alignment: TextAlign::Right,
+        rotation: 0.0,
     });
 
     assert_eq!(page.objects.len(), 2);

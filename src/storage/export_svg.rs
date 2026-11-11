@@ -653,6 +653,7 @@ pub fn export_page_to_svg(page: &Page) -> String {
                 bold,
                 italic,
                 alignment,
+                rotation,
                 ..
             } => {
                 let note_col = format!(
@@ -669,6 +670,17 @@ pub fn export_page_to_svg(page: &Page) -> String {
                     text_color.b,
                     text_color.a as f32 / 255.0
                 );
+                let has_rot = rotation.abs() > 1e-3;
+                if has_rot {
+                    let cx = *x + *sw * 0.5;
+                    let cy = *y + *sh * 0.5;
+                    out.push_str(&format!(
+                        "<g transform=\"rotate({:.2} {:.1} {:.1})\">\n",
+                        rotation.to_degrees(),
+                        cx,
+                        cy
+                    ));
+                }
                 out.push_str(&format!(
                     "<rect x=\"{x:.1}\" y=\"{y:.1}\" width=\"{sw:.1}\" height=\"{sh:.1}\" rx=\"4\" ry=\"4\" fill=\"{note_col}\" filter=\"url(#sticky-shadow)\"/>\n"
                 ));
@@ -701,6 +713,9 @@ pub fn export_page_to_svg(page: &Page) -> String {
                     out.push_str(&format!("<tspan{dy_str}>{}</tspan>", escape_xml(line)));
                 }
                 out.push_str("</text>\n");
+                if has_rot {
+                    out.push_str("</g>\n");
+                }
             }
             crate::model::DrawObject::Image {
                 asset_id,

@@ -412,6 +412,34 @@ impl StrokeStyle {
     }
 }
 
+/// Mode seleksi untuk Lasso Tool (Task 6)
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum LassoSelectionMode {
+    /// Hanya memilih objek yang seluruh geometrinya tercakup di dalam batas lasso (default)
+    #[default]
+    Containment,
+    /// Memilih objek jika sebagian titik atau garis memotong/menyentuh lasso
+    Intersection,
+}
+
+impl LassoSelectionMode {
+    pub const ALL: [Self; 2] = [Self::Containment, Self::Intersection];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Containment => "Lingkup Penuh (Containment)",
+            Self::Intersection => "Sentuhan / Irisan (Intersection)",
+        }
+    }
+
+    pub fn short_label(&self) -> &'static str {
+        match self {
+            Self::Containment => "⧉ Lingkup",
+            Self::Intersection => "⨅ Irisan",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DrawObject {
@@ -483,6 +511,8 @@ pub enum DrawObject {
         italic: bool,
         #[serde(default = "default_text_align_left")]
         alignment: TextAlign,
+        #[serde(default)]
+        rotation: f32,
     },
     Image {
         id: String,
@@ -1716,6 +1746,7 @@ mod tests {
             bold: true,
             italic: false,
             alignment: TextAlign::Center,
+            rotation: 0.15,
         };
         let json_sticky = serde_json::to_string(&sticky_obj).expect("serialize");
         let decoded_sticky: DrawObject = serde_json::from_str(&json_sticky).expect("deserialize");
@@ -1749,6 +1780,7 @@ mod tests {
             font_size,
             alignment,
             bold,
+            rotation,
             ..
         } = decoded_legacy_sticky
         {
@@ -1756,6 +1788,7 @@ mod tests {
             assert_eq!(font_size, 14.0);
             assert_eq!(alignment, TextAlign::Left);
             assert!(!bold);
+            assert_eq!(rotation, 0.0);
         } else {
             panic!("Expected StickyNote variant");
         }

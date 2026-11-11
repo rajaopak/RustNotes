@@ -2,6 +2,7 @@ use crate::model::{
     ColorData, ConnectionSite, ConnectorEnd, ConnectorRoute, ConnectorStyle, DrawObject,
     MarkerKind, Point2D, ShapeKind, ShapeLabel,
 };
+use eframe::egui::{Pos2, Vec2};
 use uuid::Uuid;
 
 /// Jenis diagram starter siap pakai untuk inisialisasi diagram cepat.
@@ -686,6 +687,165 @@ pub fn hit_test_transform_handles(
     }
 
     best_hit
+}
+
+/// Representasi bingkai seleksi berotasi yang otoritatif (Task 7).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SelectionFrame {
+    /// Titik pusat / poros rotasi dalam koordinat halaman
+    pub pivot: Pos2,
+    /// Dimensi lokal (lebar dan tinggi sebelum rotasi)
+    pub local_size: Vec2,
+    /// Sudut orientasi bingkai dalam radian
+    pub rotation: f32,
+    /// 4 Sudut bingkai terotasi: [NorthWest, NorthEast, SouthEast, SouthWest]
+    pub corners: [Pos2; 4],
+    /// Kumpulan 9 handle transformasi (8 resize + 1 rotasi)
+    pub handles: Vec<TransformHandle>,
+}
+
+impl SelectionFrame {
+    /// Membuat bingkai seleksi berotasi dari objek-objek yang dipilih.
+    pub fn from_objects(selected: &[&crate::model::DrawObject], stem_length: f32) -> Option<Self> {
+        if selected.is_empty() {
+            return None;
+        }
+
+        // Jika hanya 1 objek dipilih
+        if selected.len() == 1 {
+            let obj = selected[0];
+            match obj {
+                crate::model::DrawObject::Shape {
+                    x,
+                    y,
+                    width,
+                    height,
+                    rotation,
+                    shape_type,
+                    ..
+                } => {
+                    if *shape_type == crate::model::ShapeKind::Line {
+                        // Garis memiliki penanganan handle ujung tersendiri (single_line)
+                        return None;
+                    }
+                    let w = width.abs().max(4.0);
+                    let h = height.abs().max(4.0);
+                    let pivot = Pos2::new(*x + *width * 0.5, *y + *height * 0.5);
+                    let rot = *rotation;
+                    return Some(Self::new(pivot, Vec2::new(w, h), rot, stem_length));
+                }
+                crate::model::DrawObject::Image {
+                    x,
+                    y,
+                    width,
+                    height,
+                    rotation,
+                    ..
+                } => {
+                    let w = width.abs().max(4.0);
+                    let h = height.abs().max(4.0);
+                    let pivot = Pos2::new(*x + *width * 0.5, *y + *height * 0.5);
+                    let rot = *rotation;
+                    return Some(Self::new(pivot, Vec2::new(w, h), rot, stem_length));
+                }
+                crate::model::DrawObject::StickyNote {
+                    x,
+                    y,
+                    width,
+                    height,
+                    rotation,
+                    ..
+                } => {
+                    let w = width.abs().max(4.0);
+                    let h = height.abs().max(4.0);
+                    let pivot = Pos2::new(*x + *width * 0.5, *y + *height * 0.5);
+                    let rot = *rotation;
+                    return Some(Self::new(pivot, Vec2::new(w, h), rot, stem_length));
+                }
+                crate::model::DrawObject::Text {
+                    x,
+                    y,
+                    font_size,
+                    text,
+                    rotation,
+                    ..
+                } => {
+                    let lines: Vec<&str> = text.lines().collect();
+                    let line_count = lines.len().max(1) as f32;
+                    let max_line_len =
+                        lines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f32;
+                    let approx_w = (max_line_len * (font_size * 0.58).max(8.0)).max(20.0);
+                    let approx_h = line_count * (font_size * 1.35).max(18.0);
+                    let cos_a = rotation.cos();
+                    let sin_a = rotation.sin();
+                    let rot_v = |lx: f32, ly: f32| {
+                        Vec2::new(lx * cos_a - ly * sin_a, lx * sin_a + ly * cos_a)
+                    };
+                    let p0 = Pos2::new(*x, *y);
+                    let pivot = p0 + rot_v(approx_w * 0.5, approx_h * 0.5);
+                    let rot = *rotation;
+                    return Some(Self::new(
+                        pivot,
+                        Vec2::new(approx_w, approx_h),
+                        rot,
+                        stem_length,
+                    ));
+                }
+                crate::model::DrawObject::Connector { .. } => {
+                    // Connector menggunakan waypoint handles tersendiri
+                    return None;
+                }
+                crate::model::DrawObject::Stroke { .. } => {
+                    let b = crate::geometry::object_bounds(obj);
+                    if !b.is_finite() {
+                        return None;
+                    }
+                    return Some(Self::new(b.center(), b.size(), 0.0, stem_length));
+                }
+            }
+        }
+
+        // Multi-selection:
+        // Gunakan combined bounding box axis-aligned agar stabil dan dapat diprediksi
+        let b = crate::geometry::combined_bounds(selected)?;
+        if !b.is_finite() {
+            return None;
+        }
+        Some(Self::new(b.center(), b.size(), 0.0, stem_length))
+    }
+
+    /// Konstruktor dari poros, dimensi lokal, dan rotasi
+    pub fn new(pivot: Pos2, local_size: Vec2, rotation: f32, stem_length: f32) -> Self {
+        let hw = local_size.x * 0.5;
+        let hh = local_size.y * 0.5;
+        let cos_a = rotation.cos();
+        let sin_a = rotation.sin();
+        let rot_v = |lx: f32, ly: f32| Vec2::new(lx * cos_a - ly * sin_a, lx * sin_a + ly * cos_a);
+
+        let corners = [
+            pivot + rot_v(-hw, -hh), // NW
+            pivot + rot_v(hw, -hh),  // NE
+            pivot + rot_v(hw, hh),   // SE
+            pivot + rot_v(-hw, hh),  // SW
+        ];
+
+        let handles = compute_transform_handles(
+            pivot.x - hw,
+            pivot.y - hh,
+            local_size.x,
+            local_size.y,
+            rotation,
+            stem_length,
+        );
+
+        Self {
+            pivot,
+            local_size,
+            rotation,
+            corners,
+            handles,
+        }
+    }
 }
 
 /// Geometri kotak transformasi bentuk untuk perhitungan skala dan resize.

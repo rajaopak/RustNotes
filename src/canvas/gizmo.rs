@@ -4,9 +4,9 @@ use crate::canvas::widgets::{
     render_floating_connector_toolbar, render_floating_shape_toolbar, render_floating_text_toolbar,
 };
 use crate::geometry::{
-    AlignmentGuide, TransformHandleKind, combined_bounds, compute_transform_handles,
-    connector_polyline, hit_test_connector_details, hit_test_connector_midpoint,
-    hit_test_transform_handles, shape_connection_point,
+    AlignmentGuide, TransformHandleKind, combined_bounds, connector_polyline,
+    hit_test_connector_details, hit_test_connector_midpoint, hit_test_transform_handles,
+    shape_connection_point,
 };
 use crate::model::{ConnectionSite, DrawObject, Page, Point2D, ShapeKind};
 use eframe::egui::{self, Color32, CursorIcon, Painter, Pos2, Rect, Stroke, Ui, Vec2};
@@ -17,6 +17,7 @@ pub type QuickDiagramDot = (ConnectionSite, Pos2, Point2D);
 /// Informasi data seleksi yang aktif pada halaman
 #[derive(Clone, Debug)]
 pub struct SelectionData {
+    pub frame: Option<crate::geometry::SelectionFrame>,
     pub rect: Option<Rect>,
     pub single_line: Option<(Pos2, Pos2)>,
     pub single_shape: Option<(f32, f32, f32, f32, f32)>,
@@ -39,6 +40,7 @@ impl SelectionData {
             .filter(|o| state.selected_ids.contains(&o.id().to_string()))
             .collect();
         let rect = combined_bounds(&selected);
+        let frame = crate::geometry::SelectionFrame::from_objects(&selected, 20.0 / state.zoom);
         let single_line = if selected.len() == 1 {
             if let DrawObject::Shape {
                 shape_type: ShapeKind::Line,
@@ -61,23 +63,15 @@ impl SelectionData {
         } else {
             None
         };
-        let single_shape = if selected.len() == 1 {
-            if let DrawObject::Shape {
-                x,
-                y,
-                width,
-                height,
-                rotation,
-                ..
-            } = selected[0]
-            {
-                Some((*x, *y, *width, *height, *rotation))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let single_shape = frame.as_ref().map(|f| {
+            (
+                f.pivot.x - f.local_size.x * 0.5,
+                f.pivot.y - f.local_size.y * 0.5,
+                f.local_size.x,
+                f.local_size.y,
+                f.rotation,
+            )
+        });
         let single_connector = if selected.len() == 1 {
             if let DrawObject::Connector { id, .. } = selected[0] {
                 Some((id.clone(), connector_polyline(selected[0], &page.objects)))
@@ -138,6 +132,7 @@ impl SelectionData {
         let all_locked = !selected.is_empty() && selected.iter().all(|o| o.is_locked());
 
         Self {
+            frame,
             rect,
             single_line,
             single_shape,
@@ -377,24 +372,16 @@ pub fn render_selection_gizmo(
             egui::FontId::proportional(11.0),
             Color32::from_rgb(0, 114, 206),
         );
-    } else if let Some(b) = sel.rect {
-        let (bx, by, bw, bh, brot) = if let Some(s) = sel.single_shape {
-            s
-        } else {
-            (b.min.x, b.min.y, b.width(), b.height(), 0.0)
-        };
-
-        let transform_handles = compute_transform_handles(bx, by, bw, bh, brot, 20.0 / state.zoom);
-
+    } else if let Some(frame) = &sel.frame {
         let mut handle_screen_map = HashMap::new();
-        for h in &transform_handles {
+        for h in &frame.handles {
             handle_screen_map.insert(h.kind, page_to_screen(h.pos.to_pos2()));
         }
 
-        let s_nw = handle_screen_map[&TransformHandleKind::NorthWest];
-        let s_ne = handle_screen_map[&TransformHandleKind::NorthEast];
-        let s_se = handle_screen_map[&TransformHandleKind::SouthEast];
-        let s_sw = handle_screen_map[&TransformHandleKind::SouthWest];
+        let s_nw = page_to_screen(frame.corners[0]);
+        let s_ne = page_to_screen(frame.corners[1]);
+        let s_se = page_to_screen(frame.corners[2]);
+        let s_sw = page_to_screen(frame.corners[3]);
         let s_n = handle_screen_map[&TransformHandleKind::North];
         let s_e = handle_screen_map[&TransformHandleKind::East];
         let s_s = handle_screen_map[&TransformHandleKind::South];
@@ -507,7 +494,7 @@ pub fn render_selection_gizmo(
             {
                 let handle_dist = 14.0 / state.zoom;
                 if let Some(h_kind) = hit_test_transform_handles(
-                    &transform_handles,
+                    &frame.handles,
                     Point2D::new(page_p.x, page_p.y),
                     handle_dist,
                 ) {
@@ -528,7 +515,7 @@ pub fn render_selection_gizmo(
                             ui.ctx().set_cursor_icon(CursorIcon::ResizeNeSw)
                         }
                     }
-                } else if b.contains(page_p) {
+                } else if sel.rect.map(|r| r.contains(page_p)).unwrap_or(false) {
                     ui.ctx().set_cursor_icon(CursorIcon::Grab);
                 }
             }

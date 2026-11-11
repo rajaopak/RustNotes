@@ -183,8 +183,11 @@ pub fn flip_object_horizontal(obj: &mut DrawObject, center_x: f32) {
             let width = (max_line_len * *font_size * 0.6).max(80.0);
             *x = 2.0 * center_x - (*x + width);
         }
-        DrawObject::StickyNote { x, width, .. } => {
+        DrawObject::StickyNote {
+            x, width, rotation, ..
+        } => {
             *x = 2.0 * center_x - (*x + *width);
+            *rotation = (-*rotation).rem_euclid(std::f32::consts::TAU);
         }
         DrawObject::Image { x, width, .. } => {
             *x = 2.0 * center_x - (*x + *width);
@@ -248,8 +251,14 @@ pub fn flip_object_vertical(obj: &mut DrawObject, center_y: f32) {
             let height = line_count * *font_size * 1.3;
             *y = 2.0 * center_y - (*y + height);
         }
-        DrawObject::StickyNote { y, height, .. } => {
+        DrawObject::StickyNote {
+            y,
+            height,
+            rotation,
+            ..
+        } => {
             *y = 2.0 * center_y - (*y + *height);
+            *rotation = (-*rotation).rem_euclid(std::f32::consts::TAU);
         }
         DrawObject::Image { y, height, .. } => {
             *y = 2.0 * center_y - (*y + *height);
@@ -355,10 +364,18 @@ pub fn rotate_object(obj: &mut DrawObject, origin: Pos2, angle_rad: f32) {
             *y = ny;
             *rotation = (*rotation + angle_rad).rem_euclid(std::f32::consts::TAU);
         }
-        DrawObject::StickyNote { x, y, .. } => {
-            let (nx, ny) = rotate_pt(*x, *y);
-            *x = nx;
-            *y = ny;
+        DrawObject::StickyNote {
+            x,
+            y,
+            width,
+            height,
+            rotation,
+            ..
+        } => {
+            let (nx, ny) = rotate_pt(*x + *width / 2.0, *y + *height / 2.0);
+            *x = nx - *width / 2.0;
+            *y = ny - *height / 2.0;
+            *rotation = (*rotation + angle_rad).rem_euclid(std::f32::consts::TAU);
         }
         DrawObject::Image {
             x,
@@ -513,13 +530,16 @@ fn rotate_object_90_cw(obj: &mut DrawObject, old_h: f32) {
             y,
             width,
             height,
+            rotation,
             ..
         } => {
-            let nx = old_h - (*y + *height);
-            let ny = *x;
-            *x = nx;
-            *y = ny;
-            std::mem::swap(width, height);
+            let cx = *x + *width / 2.0;
+            let cy = *y + *height / 2.0;
+            let ncx = old_h - cy;
+            let ncy = cx;
+            *x = ncx - *width / 2.0;
+            *y = ncy - *height / 2.0;
+            *rotation = (*rotation + std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::TAU);
         }
         DrawObject::Image {
             x,
@@ -654,13 +674,16 @@ fn rotate_object_90_ccw(obj: &mut DrawObject, old_w: f32) {
             y,
             width,
             height,
+            rotation,
             ..
         } => {
-            let nx = *y;
-            let ny = old_w - (*x + *width);
-            *x = nx;
-            *y = ny;
-            std::mem::swap(width, height);
+            let cx = *x + *width / 2.0;
+            let cy = *y + *height / 2.0;
+            let ncx = cy;
+            let ncy = old_w - cx;
+            *x = ncx - *width / 2.0;
+            *y = ncy - *height / 2.0;
+            *rotation = (*rotation - std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::TAU);
         }
         DrawObject::Image {
             x,
@@ -788,10 +811,16 @@ fn rotate_object_180(obj: &mut DrawObject, old_w: f32, old_h: f32) {
             y,
             width,
             height,
+            rotation,
             ..
         } => {
-            *x = old_w - (*x + *width);
-            *y = old_h - (*y + *height);
+            let cx = *x + *width / 2.0;
+            let cy = *y + *height / 2.0;
+            let ncx = old_w - cx;
+            let ncy = old_h - cy;
+            *x = ncx - *width / 2.0;
+            *y = ncy - *height / 2.0;
+            *rotation = (*rotation + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU);
         }
         DrawObject::Image {
             x,

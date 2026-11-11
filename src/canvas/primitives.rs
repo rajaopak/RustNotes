@@ -508,18 +508,39 @@ pub fn draw_non_stroke_object(
             bold,
             italic,
             alignment,
+            rotation,
             ..
         } => {
-            let p1 = page_to_screen(Pos2::new(*x, *y));
-            let p2 = page_to_screen(Pos2::new(x + width, y + height));
-            let r = Rect::from_two_pos(p1, p2);
-            painter.rect_filled(r, 4.0, color.to_color32());
-            painter.rect_stroke(
-                r,
-                4.0,
-                Stroke::new(1.0_f32, Color32::from_rgb(235, 208, 116)),
-                egui::StrokeKind::Outside,
-            );
+            let rot = *rotation;
+            let center = Pos2::new(x + width / 2.0, y + height / 2.0);
+            let s_center = page_to_screen(center);
+            let sw = (width * zoom).max(10.0);
+            let sh = (height * zoom).max(10.0);
+            let hw = sw * 0.5;
+            let hh = sh * 0.5;
+            let bg_col = color.to_color32();
+            let border_stroke = Stroke::new(1.0_f32, Color32::from_rgb(235, 208, 116));
+
+            if rot.abs() < 1e-4 {
+                let r = Rect::from_center_size(s_center, Vec2::new(sw, sh));
+                painter.rect_filled(r, 4.0, bg_col);
+                painter.rect_stroke(r, 4.0, border_stroke, egui::StrokeKind::Outside);
+            } else {
+                let cos_a = rot.cos();
+                let sin_a = rot.sin();
+                let rot_vec =
+                    |lx: f32, ly: f32| Vec2::new(lx * cos_a - ly * sin_a, lx * sin_a + ly * cos_a);
+                let p_nw = s_center + rot_vec(-hw, -hh);
+                let p_ne = s_center + rot_vec(hw, -hh);
+                let p_se = s_center + rot_vec(hw, hh);
+                let p_sw = s_center + rot_vec(-hw, hh);
+                painter.add(egui::Shape::convex_polygon(
+                    vec![p_nw, p_ne, p_se, p_sw],
+                    bg_col,
+                    border_stroke,
+                ));
+            }
+
             let scaled_font = (*font_size * zoom).clamp(6.0, 100.0);
             let egui_family = font_family.to_egui_font_family();
             let font_id = egui::FontId::new(scaled_font, egui_family);
@@ -529,7 +550,7 @@ pub fn draw_non_stroke_object(
                 halign: alignment.to_egui_align(),
                 ..Default::default()
             };
-            job.wrap.max_width = (r.width() - 20.0).max(10.0);
+            job.wrap.max_width = (sw - 20.0 * zoom).max(10.0);
             job.append(
                 text,
                 0.0,
@@ -541,17 +562,38 @@ pub fn draw_non_stroke_object(
                 },
             );
             let galley = painter.layout_job(job);
-            let text_pos = match alignment {
-                crate::model::TextAlign::Left => r.left_top() + Vec2::new(10.0, 10.0),
-                crate::model::TextAlign::Center => Pos2::new(r.center().x, r.top() + 10.0),
-                crate::model::TextAlign::Right => Pos2::new(r.right() - 10.0, r.top() + 10.0),
+
+            let (text_pos, bold_offset) = if rot.abs() < 1e-4 {
+                let r = Rect::from_center_size(s_center, Vec2::new(sw, sh));
+                let tp = match alignment {
+                    crate::model::TextAlign::Left => r.left_top() + Vec2::new(10.0, 10.0),
+                    crate::model::TextAlign::Center => Pos2::new(r.center().x, r.top() + 10.0),
+                    crate::model::TextAlign::Right => Pos2::new(r.right() - 10.0, r.top() + 10.0),
+                };
+                (tp, Vec2::new(0.6 * zoom.clamp(0.5, 2.0), 0.0))
+            } else {
+                let cos_a = rot.cos();
+                let sin_a = rot.sin();
+                let rot_vec =
+                    |lx: f32, ly: f32| Vec2::new(lx * cos_a - ly * sin_a, lx * sin_a + ly * cos_a);
+                let pad = 10.0 * zoom;
+                let local_pos = match alignment {
+                    crate::model::TextAlign::Left => Vec2::new(-hw + pad, -hh + pad),
+                    crate::model::TextAlign::Center => Vec2::new(0.0, -hh + pad),
+                    crate::model::TextAlign::Right => Vec2::new(hw - pad, -hh + pad),
+                };
+                let tp = s_center + rot_vec(local_pos.x, local_pos.y);
+                let bo = rot_vec(0.6 * zoom.clamp(0.5, 2.0), 0.0);
+                (tp, bo)
             };
-            let text_shape = egui::epaint::TextShape::new(text_pos, galley.clone(), t_col);
+
+            let mut text_shape = egui::epaint::TextShape::new(text_pos, galley.clone(), t_col);
+            text_shape.angle = rot;
             painter.add(text_shape);
             if *bold {
-                let bold_offset = Vec2::new(0.6 * zoom.clamp(0.5, 2.0), 0.0);
-                let bold_shape =
+                let mut bold_shape =
                     egui::epaint::TextShape::new(text_pos + bold_offset, galley, t_col);
+                bold_shape.angle = rot;
                 painter.add(bold_shape);
             }
         }

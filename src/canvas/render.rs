@@ -11,14 +11,14 @@ use super::widgets::render_inline_text_editor;
 use super::zoom_window::render_zoom_target_indicator;
 use crate::geometry::{
     ShapeTransformBox, TransformHandleKind, calculate_proportional_scale,
-    calculate_single_axis_resize, combined_bounds, compute_transform_handles,
-    find_alignment_guides, find_connector_snap_site, hit_test_connector_details,
-    hit_test_connector_midpoint, hit_test_connector_with_objects, hit_test_object,
-    hit_test_transform_handles, insert_control_point_at, next_shape_rect, object_bounds,
-    object_in_lasso, prune_collinear_control_points, prune_invalid_connector_control_points,
-    recognize_handwriting_from_strokes, recognize_shape, resolve_connector_endpoints, scale_object,
-    shape_connection_point, should_reject_palm_input, smooth_stroke_points, snap_point_to_grid,
-    snap_value_to_grid, tessellate_stroke_styled, translate_object,
+    calculate_single_axis_resize, combined_bounds, find_alignment_guides, find_connector_snap_site,
+    hit_test_connector_details, hit_test_connector_midpoint, hit_test_connector_with_objects,
+    hit_test_object, hit_test_transform_handles, insert_control_point_at, next_shape_rect,
+    object_bounds, object_in_lasso_mode, point_in_polygon, prune_collinear_control_points,
+    prune_invalid_connector_control_points, recognize_handwriting_from_strokes, recognize_shape,
+    resolve_connector_endpoints, scale_object, shape_connection_point, should_reject_palm_input,
+    smooth_stroke_points, snap_point_to_grid, snap_value_to_grid, tessellate_stroke_styled,
+    translate_object,
 };
 use crate::model::{
     ColorData, ConnectionSite, ConnectorEnd, ConnectorRoute, ConnectorStyle, DrawObject,
@@ -327,20 +327,12 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 }
             }
         } else if matches!(state.current_tool, ActiveTool::Lasso | ActiveTool::Shape(_))
-            && let Some(b) = sel.rect
+            && let Some(frame) = &sel.frame
             && !sel.is_selection_fully_locked
         {
             let handle_dist = 14.0 / state.zoom;
-            let (bx, by, bw, bh, brot) = if let Some(s) = sel.single_shape {
-                s
-            } else {
-                (b.min.x, b.min.y, b.width(), b.height(), 0.0)
-            };
-
-            let transform_handles =
-                compute_transform_handles(bx, by, bw, bh, brot, 20.0 / state.zoom);
             if let Some(h_kind) = hit_test_transform_handles(
-                &transform_handles,
+                &frame.handles,
                 Point2D::new(page_p.x, page_p.y),
                 handle_dist,
             ) {
@@ -362,7 +354,12 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
             }
 
             // Check if clicking inside selection to move
-            if b.contains(page_p) {
+            let inside_selection = if frame.rotation.abs() < 1e-4 {
+                sel.rect.map(|r| r.contains(page_p)).unwrap_or(false)
+            } else {
+                point_in_polygon(page_p, &frame.corners)
+            };
+            if inside_selection {
                 state.is_dragging_selection = true;
                 state.drag_start_pos = Some(page_p);
                 state.push_undo(&page.id, &page.objects);
@@ -511,6 +508,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     bold: state.text_bold,
                     italic: state.text_italic,
                     alignment: state.text_alignment,
+                    rotation: 0.0,
                 };
                 page.objects.push(new_note);
                 state.spatial_grid.rebuild(&page.objects);
@@ -644,8 +642,12 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 } else if corner == ResizeCorner::Rotation {
                     let pivot = if let Some((line_start, _)) = sel.single_line {
                         line_start
-                    } else {
+                    } else if let Some(frame) = &sel.frame {
+                        frame.pivot
+                    } else if let Some(b) = sel.rect {
                         b.center()
+                    } else {
+                        page_p
                     };
                     let v_start = start - pivot;
                     let v_curr = page_p - pivot;
@@ -1547,7 +1549,11 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 if state.lasso_points.len() > 2 {
                     let mut selected = Vec::new();
                     for obj in &page.objects {
-                        if object_in_lasso(obj, &state.lasso_points) {
+                        if object_in_lasso_mode(
+                            obj,
+                            &state.lasso_points,
+                            state.lasso_selection_mode,
+                        ) {
                             selected.push(obj.id().to_string());
                         }
                     }
@@ -2016,6 +2022,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 bold: state.text_bold,
                 italic: state.text_italic,
                 alignment: state.text_alignment,
+                rotation: 0.0,
             };
             page.objects.push(new_note);
             state.spatial_grid.rebuild(&page.objects);

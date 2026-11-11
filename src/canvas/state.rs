@@ -105,6 +105,9 @@ pub struct CanvasState {
     pub text_color: Color32,
     pub sticky_bg_color: Color32,
 
+    // Task 6: Lasso selection mode (Containment vs Intersection)
+    pub lasso_selection_mode: crate::model::LassoSelectionMode,
+
     // Fase G7: Connector interactive creation & snapping state
     pub draft_connector_start: Option<crate::model::ConnectorEnd>,
     pub draft_connector_current: Option<crate::model::Point2D>,
@@ -186,6 +189,7 @@ impl Default for CanvasState {
             text_alignment: crate::model::TextAlign::Left,
             text_color: Color32::from_rgb(35, 35, 35),
             sticky_bg_color: Color32::from_rgb(254, 243, 189),
+            lasso_selection_mode: crate::model::LassoSelectionMode::default(),
             draft_connector_start: None,
             draft_connector_current: None,
             connector_snap_candidate: None,
