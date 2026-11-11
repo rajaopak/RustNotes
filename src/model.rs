@@ -1188,6 +1188,19 @@ pub struct AppSettings {
     pub pressure_min: f32,
     #[serde(default = "default_pressure_multiplier")]
     pub pressure_multiplier: f32,
+    /// Pengaturan transparansi highlighter (0.15 - 0.70, default HIGHLIGHTER_OPACITY_F32)
+    #[serde(default = "default_highlighter_opacity")]
+    pub highlighter_opacity: f32,
+    #[serde(default = "default_false")]
+    pub highlighter_pressure_enabled: bool,
+}
+
+fn default_false() -> bool {
+    false
+}
+
+fn default_highlighter_opacity() -> f32 {
+    HIGHLIGHTER_OPACITY_F32
 }
 
 impl AppSettings {
@@ -1441,6 +1454,8 @@ impl Default for AppSettings {
             pressure_sensitivity_enabled: true,
             pressure_min: 0.1,
             pressure_multiplier: 1.0,
+            highlighter_opacity: HIGHLIGHTER_OPACITY_F32,
+            highlighter_pressure_enabled: false,
         }
     }
 }

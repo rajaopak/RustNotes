@@ -184,25 +184,148 @@ pub fn export_page_to_svg(page: &Page) -> String {
         }
     }
 
-    // 3. DrawObjects
+    // 3. DrawObjects Two-Pass Layering:
+    // Pass 1: Highlighters (Underlay Layer) — sits beneath ink handwriting, text, and diagrams.
+    // Grouped by RGB color with group-level opacity so overlapping strokes within the group do not multiply alpha.
+    let highlighter_strokes: Vec<_> = page
+        .objects
+        .iter()
+        .filter_map(|obj| {
+            if let crate::model::DrawObject::Stroke {
+                points,
+                color,
+                width,
+                is_highlighter: true,
+                style,
+                ..
+            } = obj
+            {
+                if !points.is_empty() {
+                    Some((points, color, *width, *style))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if !highlighter_strokes.is_empty() {
+        struct SvgHighlighterStroke<'a> {
+            points: &'a [crate::model::StrokePoint],
+            stroke_w: f32,
+            style: crate::model::StrokeStyle,
+            opacity: f32,
+        }
+
+        out.push_str("<g id=\"highlighters\">\n");
+        let mut color_groups: std::collections::BTreeMap<(u8, u8, u8), Vec<SvgHighlighterStroke>> =
+            std::collections::BTreeMap::new();
+
+        for (points, color, width, style) in highlighter_strokes {
+            let opacity = if color.a > 0 && color.a != 255 {
+                color.a as f32 / 255.0
+            } else {
+                crate::model::HIGHLIGHTER_OPACITY_F32
+            };
+            color_groups
+                .entry((color.r, color.g, color.b))
+                .or_default()
+                .push(SvgHighlighterStroke {
+                    points,
+                    stroke_w: width,
+                    style,
+                    opacity,
+                });
+        }
+
+        for ((r, g, b), strokes) in color_groups {
+            let avg_opacity = strokes
+                .first()
+                .map(|s| s.opacity)
+                .unwrap_or(crate::model::HIGHLIGHTER_OPACITY_F32);
+            out.push_str(&format!(
+                "<g opacity=\"{avg_opacity:.3}\" stroke=\"rgb({r},{g},{b})\" fill=\"rgb({r},{g},{b})\">\n"
+            ));
+            for s in strokes {
+                let stroke_w = s.stroke_w;
+                let points = s.points;
+                if points.len() == 1 {
+                    let pt = &points[0];
+                    let radius = (stroke_w * 0.5 * pt.pressure).max(0.5);
+                    out.push_str(&format!(
+                        "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"{radius:.2}\" stroke=\"none\"/>\n",
+                        pt.x, pt.y
+                    ));
+                    continue;
+                }
+
+                let dash_attr = match s.style {
+                    crate::model::StrokeStyle::Solid => String::new(),
+                    crate::model::StrokeStyle::Dashed => {
+                        format!(
+                            " stroke-dasharray=\"{:.1},{:.1}\"",
+                            stroke_w * 3.0,
+                            stroke_w * 2.0
+                        )
+                    }
+                    crate::model::StrokeStyle::DashDot => {
+                        format!(
+                            " stroke-dasharray=\"{:.1},{:.1},{:.1},{:.1}\"",
+                            stroke_w * 3.0,
+                            stroke_w * 1.5,
+                            stroke_w * 0.8,
+                            stroke_w * 1.5
+                        )
+                    }
+                    crate::model::StrokeStyle::Dotted => {
+                        format!(
+                            " stroke-dasharray=\"{:.1},{:.1}\"",
+                            stroke_w * 0.5,
+                            stroke_w * 1.5
+                        )
+                    }
+                };
+
+                let mut d = String::new();
+                for (i, pt) in points.iter().enumerate() {
+                    if i == 0 {
+                        d.push_str(&format!("M {:.1} {:.1}", pt.x, pt.y));
+                    } else {
+                        d.push_str(&format!(" L {:.1} {:.1}", pt.x, pt.y));
+                    }
+                }
+                out.push_str(&format!(
+                    "<path d=\"{d}\" stroke-width=\"{stroke_w:.1}\"{dash_attr} stroke-linecap=\"round\" stroke-linejoin=\"round\" fill=\"none\"/>\n"
+                ));
+            }
+            out.push_str("</g>\n");
+        }
+        out.push_str("</g>\n");
+    }
+
+    // Pass 2: Content Layer (pen strokes, shapes, connectors, images, sticky notes, text)
     for obj in &page.objects {
         match obj {
+            crate::model::DrawObject::Stroke {
+                is_highlighter: true,
+                ..
+            } => {
+                // Already rendered in Pass 1 Underlay Layer
+                continue;
+            }
             crate::model::DrawObject::Stroke {
                 points,
                 color,
                 width: stroke_w,
-                is_highlighter,
                 style,
                 ..
             } => {
                 if points.is_empty() {
                     continue;
                 }
-                let c_alpha = if *is_highlighter {
-                    (color.a as f32 / 255.0) * crate::model::HIGHLIGHTER_OPACITY_F32
-                } else {
-                    color.a as f32 / 255.0
-                };
+                let c_alpha = color.a as f32 / 255.0;
                 let stroke_color =
                     format!("rgba({},{},{},{:.3})", color.r, color.g, color.b, c_alpha);
 
@@ -296,8 +419,13 @@ pub fn export_page_to_svg(page: &Page) -> String {
 
                 match shape_type {
                     crate::model::ShapeKind::Rectangle => {
+                        let rx_attr = if *corner_radius > 0.0 {
+                            format!(" rx=\"{corner_radius:.1}\" ry=\"{corner_radius:.1}\"")
+                        } else {
+                            String::new()
+                        };
                         out.push_str(&format!(
-                            "<rect x=\"{x:.1}\" y=\"{y:.1}\" width=\"{sw:.1}\" height=\"{sh:.1}\" rx=\"{corner_radius:.1}\" ry=\"{corner_radius:.1}\" fill=\"{fill_str}\" stroke=\"{stroke_str}\" stroke-width=\"{stroke_width:.1}\"{rot_attr}/>\n"
+                            "<rect x=\"{x:.1}\" y=\"{y:.1}\" width=\"{sw:.1}\" height=\"{sh:.1}\"{rx_attr} fill=\"{fill_str}\" stroke=\"{stroke_str}\" stroke-width=\"{stroke_width:.1}\"{rot_attr}/>\n"
                         ));
                     }
                     crate::model::ShapeKind::Ellipse => {

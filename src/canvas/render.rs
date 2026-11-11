@@ -79,78 +79,95 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         }
     }
 
-    // 2. Draw existing page objects with Viewport Culling & Page-Space Mesh Cache
-    for obj in &page.objects {
-        // Culling: skip objects entirely outside the visible viewport
-        let obj_b = object_bounds(obj);
-        let screen_b = Rect::from_min_max(page_to_screen(obj_b.min), page_to_screen(obj_b.max));
-        if !screen_clip_rect.intersects(screen_b) {
-            continue;
-        }
+    // 2. Draw existing page objects with Two-Pass Layering & Page-Space Mesh Cache:
+    // Pass 1: Highlighters (Underlay Layer) — sits beneath ink handwriting, text, and diagrams so black ink is never dimmed.
+    // Pass 2: Content Layer — Pen strokes, shapes, connectors, images, sticky notes, and text.
+    let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
 
-        match obj {
-            DrawObject::Stroke {
-                id,
-                points,
-                color,
-                width,
-                is_highlighter,
-                style,
-            } => {
-                // Simpan mesh di dalam cache menggunakan koordinat lokal kertas (`|p| p`, skala 1.0),
-                // lalu transformasikan ke posisi layar (`origin` + `state.zoom`) setiap frame agar
-                // goresan tidak pernah bergeser atau hilang ketika halaman di-scroll maupun di-zoom.
-                let key = (id.clone(), 0);
-                let page_mesh = if let Some(cached) = state.mesh_cache.get(&key) {
-                    cached.clone()
-                } else {
-                    let smoothed = smooth_stroke_points(points, state.smoothing_steps);
-                    let stroke_c = if *is_highlighter {
-                        Color32::from_rgba_unmultiplied(
-                            color.r,
-                            color.g,
-                            color.b,
-                            crate::model::HIGHLIGHTER_ALPHA,
-                        )
-                    } else {
-                        color.to_color32()
-                    };
-                    let mesh = tessellate_stroke_styled(
-                        &smoothed,
-                        *width,
-                        stroke_c,
-                        *is_highlighter,
-                        *style,
-                        |p| p,
-                    );
-                    if state.mesh_cache.len() > 1500 {
-                        let to_remove: Vec<_> =
-                            state.mesh_cache.keys().take(300).cloned().collect();
-                        for k in to_remove {
-                            state.mesh_cache.remove(&k);
-                        }
-                    }
-                    state.mesh_cache.insert(key, mesh.clone());
-                    mesh
-                };
-                let screen_mesh = transform_page_mesh_to_screen(&page_mesh, origin, state.zoom);
-                painter.add(screen_mesh);
-            }
-            _ => {
-                // Jangan gambar teks statis jika objek sedang disunting secara inline oleh TextEdit
-                if state.editing_text_id.as_deref() == Some(obj.id())
-                    && matches!(obj, DrawObject::Text { .. })
+    for pass_is_highlighter in [true, false] {
+        for obj in &page.objects {
+            match obj {
+                DrawObject::Stroke { is_highlighter, .. }
+                    if *is_highlighter != pass_is_highlighter =>
                 {
                     continue;
                 }
-                draw_non_stroke_object(
-                    &painter,
-                    obj,
-                    &page.objects,
-                    page_to_screen,
-                    state.zoom,
-                    |id| state.get_texture(id).map(|t| t.id()),
-                );
+                DrawObject::Stroke {
+                    id,
+                    points,
+                    color,
+                    width,
+                    is_highlighter,
+                    style,
+                } => {
+                    let obj_b = object_bounds(obj);
+                    let screen_b =
+                        Rect::from_min_max(page_to_screen(obj_b.min), page_to_screen(obj_b.max));
+                    if !screen_clip_rect.intersects(screen_b) {
+                        continue;
+                    }
+
+                    // Simpan mesh di dalam cache menggunakan koordinat lokal kertas (`|p| p`, skala 1.0),
+                    // lalu transformasikan ke posisi layar (`origin` + `state.zoom`) setiap frame agar
+                    // goresan tidak pernah bergeser atau hilang ketika halaman di-scroll maupun di-zoom.
+                    let key = (id.clone(), 0);
+                    let page_mesh = if let Some(cached) = state.mesh_cache.get(&key) {
+                        cached.clone()
+                    } else {
+                        let smoothed = smooth_stroke_points(points, state.smoothing_steps);
+                        let stroke_c = if *is_highlighter {
+                            Color32::from_rgba_unmultiplied(color.r, color.g, color.b, hl_alpha)
+                        } else {
+                            color.to_color32()
+                        };
+                        let mesh = tessellate_stroke_styled(
+                            &smoothed,
+                            *width,
+                            stroke_c,
+                            *is_highlighter,
+                            *style,
+                            |p| p,
+                        );
+                        if state.mesh_cache.len() > 1500 {
+                            let to_remove: Vec<_> =
+                                state.mesh_cache.keys().take(300).cloned().collect();
+                            for k in to_remove {
+                                state.mesh_cache.remove(&k);
+                            }
+                        }
+                        state.mesh_cache.insert(key, mesh.clone());
+                        mesh
+                    };
+                    let screen_mesh = transform_page_mesh_to_screen(&page_mesh, origin, state.zoom);
+                    painter.add(screen_mesh);
+                }
+                _ if pass_is_highlighter => {
+                    // Non-strokes are rendered in Pass 2 (Content Layer)
+                    continue;
+                }
+                _ => {
+                    let obj_b = object_bounds(obj);
+                    let screen_b =
+                        Rect::from_min_max(page_to_screen(obj_b.min), page_to_screen(obj_b.max));
+                    if !screen_clip_rect.intersects(screen_b) {
+                        continue;
+                    }
+
+                    // Jangan gambar teks statis jika objek sedang disunting secara inline oleh TextEdit
+                    if state.editing_text_id.as_deref() == Some(obj.id())
+                        && matches!(obj, DrawObject::Text { .. })
+                    {
+                        continue;
+                    }
+                    draw_non_stroke_object(
+                        &painter,
+                        obj,
+                        &page.objects,
+                        page_to_screen,
+                        state.zoom,
+                        |id| state.get_texture(id).map(|t| t.id()),
+                    );
+                }
             }
         }
     }
@@ -366,7 +383,12 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                         }
                         1.0
                     });
-                    let pressure = state.effective_pressure(raw_pressure);
+                    let is_highlighter = state.current_tool == ActiveTool::Highlighter;
+                    let pressure = if is_highlighter && !state.highlighter_pressure_enabled {
+                        1.0
+                    } else {
+                        state.effective_pressure(raw_pressure)
+                    };
                     state.active_stroke_page_id = Some(page.id.clone());
                     state.draft_stroke = Some(vec![StrokePoint {
                         x: page_p.x,
@@ -935,7 +957,11 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                     }
                                     1.0
                                 });
-                                let pressure = if !state.pressure_sensitivity_enabled {
+                                let is_highlighter = state.current_tool == ActiveTool::Highlighter;
+                                let pressure = if (is_highlighter
+                                    && !state.highlighter_pressure_enabled)
+                                    || !state.pressure_sensitivity_enabled
+                                {
                                     1.0
                                 } else {
                                     (state.pressure_min
@@ -1344,11 +1370,12 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                         state.stroke_width
                     };
                     let color = if is_highlighter {
+                        let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
                         Color32::from_rgba_unmultiplied(
                             state.stroke_color.r(),
                             state.stroke_color.g(),
                             state.stroke_color.b(),
-                            crate::model::HIGHLIGHTER_ALPHA,
+                            hl_alpha,
                         )
                     } else {
                         state.stroke_color
@@ -1357,12 +1384,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     if let Some(recognized) = recognized_shape {
                         let new_id = Uuid::new_v4().to_string();
                         let is_line = recognized.kind == ShapeKind::Line;
-                        let corner_radius = if recognized.kind == ShapeKind::Rectangle {
-                            (recognized.width.abs().min(recognized.height.abs()) * 0.12)
-                                .clamp(4.0, 14.0)
-                        } else {
-                            0.0
-                        };
+                        let corner_radius = 0.0;
 
                         // Fase G4.3: Simpan stroke asli ke snapshot pertama, lalu ganti dengan shape terkoreksi
                         // Undo #1 -> kembali ke goresan asli pengguna
@@ -1425,11 +1447,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     let new_id = Uuid::new_v4().to_string();
                     let w = curr.x - start.x;
                     let h = curr.y - start.y;
-                    let corner_radius = if kind == ShapeKind::Rectangle {
-                        (w.abs().min(h.abs()) * 0.12).clamp(4.0, 14.0)
-                    } else {
-                        0.0
-                    };
+                    let corner_radius = 0.0;
                     page.objects.push(DrawObject::Shape {
                         id: new_id.clone(),
                         shape_type: kind,
@@ -1534,11 +1552,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
     if state.active_stroke_page_id.as_deref() == Some(&page.id) {
         if let Some(recognized) = &state.recognized_draft_shape {
             let stroke = Stroke::new(state.stroke_width * state.zoom, state.stroke_color);
-            let corner_radius = if recognized.kind == ShapeKind::Rectangle {
-                (recognized.width.abs().min(recognized.height.abs()) * 0.12).clamp(4.0, 14.0)
-            } else {
-                0.0
-            };
+            let corner_radius = 0.0;
             draw_shape_primitive(
                 &painter,
                 recognized.kind,
@@ -1599,11 +1613,12 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 state.stroke_width * state.zoom
             };
             let color = if is_highlighter {
+                let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
                 Color32::from_rgba_unmultiplied(
                     state.stroke_color.r(),
                     state.stroke_color.g(),
                     state.stroke_color.b(),
-                    crate::model::HIGHLIGHTER_ALPHA,
+                    hl_alpha,
                 )
             } else {
                 state.stroke_color
@@ -1625,11 +1640,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
             if let ActiveTool::Shape(kind) = state.current_tool {
                 let w = curr.x - start.x;
                 let h = curr.y - start.y;
-                let corner_radius = if kind == ShapeKind::Rectangle {
-                    (w.abs().min(h.abs()) * 0.12).clamp(4.0, 14.0)
-                } else {
-                    0.0
-                };
+                let corner_radius = 0.0;
                 draw_shape_primitive(
                     &painter,
                     kind,
@@ -2017,7 +2028,12 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 }
                 1.0
             });
-            let pressure = state.effective_pressure(raw_pressure);
+            let is_highlighter = state.current_tool == ActiveTool::Highlighter;
+            let pressure = if is_highlighter && !state.highlighter_pressure_enabled {
+                1.0
+            } else {
+                state.effective_pressure(raw_pressure)
+            };
             let pts = state.draft_stroke.take().unwrap_or_else(|| {
                 vec![StrokePoint {
                     x: page_p.x,
@@ -2026,7 +2042,6 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 }]
             });
             state.push_undo(&page.id, &page.objects);
-            let is_highlighter = state.current_tool == ActiveTool::Highlighter;
             let stroke_width = if is_highlighter {
                 state.stroke_width * 6.0
             } else if state.current_tool == ActiveTool::Pencil {
@@ -2035,11 +2050,12 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 state.stroke_width
             };
             let color = if is_highlighter {
+                let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
                 Color32::from_rgba_unmultiplied(
                     state.stroke_color.r(),
                     state.stroke_color.g(),
                     state.stroke_color.b(),
-                    crate::model::HIGHLIGHTER_ALPHA,
+                    hl_alpha,
                 )
             } else {
                 state.stroke_color

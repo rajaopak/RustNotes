@@ -63,47 +63,65 @@ pub fn render_zoom_window_canvas(
         Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(0, 114, 206, 90)),
     );
 
-    // 3. Render objek halaman yang tampak di dalam kotak target
-    for obj in &page.objects {
-        let b = object_bounds(obj);
-        if !b.intersects(target.expand(20.0)) {
-            continue;
-        }
-        match obj {
-            DrawObject::Stroke {
-                points,
-                color,
-                width,
-                is_highlighter,
-                style,
-                ..
-            } => {
-                let smoothed = smooth_stroke_points(points, state.smoothing_steps);
-                let stroke_w = width * scale;
-                let stroke_c = if *is_highlighter {
-                    Color32::from_rgba_unmultiplied(
-                        color.r,
-                        color.g,
-                        color.b,
-                        crate::model::HIGHLIGHTER_ALPHA,
-                    )
-                } else {
-                    color.to_color32()
-                };
-                let mesh = tessellate_stroke_styled(
-                    &smoothed,
-                    stroke_w,
-                    stroke_c,
-                    *is_highlighter,
-                    *style,
-                    page_to_zw,
-                );
-                painter.add(mesh);
-            }
-            other => {
-                draw_non_stroke_object(&painter, other, &page.objects, page_to_zw, scale, |id| {
-                    state.get_texture(id).map(|t| t.id())
-                });
+    // 3. Render objek halaman yang tampak di dalam kotak target dengan Two-Pass Layering
+    // Pass 1: Highlighters (underlay layer)
+    // Pass 2: Content layer (pen strokes, shapes, connectors, images, sticky notes, text)
+    let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
+
+    for pass_is_highlighter in [true, false] {
+        for obj in &page.objects {
+            match obj {
+                DrawObject::Stroke { is_highlighter, .. }
+                    if *is_highlighter != pass_is_highlighter =>
+                {
+                    continue;
+                }
+                DrawObject::Stroke {
+                    points,
+                    color,
+                    width,
+                    is_highlighter,
+                    style,
+                    ..
+                } => {
+                    let b = object_bounds(obj);
+                    if !b.intersects(target.expand(20.0)) {
+                        continue;
+                    }
+                    let smoothed = smooth_stroke_points(points, state.smoothing_steps);
+                    let stroke_w = width * scale;
+                    let stroke_c = if *is_highlighter {
+                        Color32::from_rgba_unmultiplied(color.r, color.g, color.b, hl_alpha)
+                    } else {
+                        color.to_color32()
+                    };
+                    let mesh = tessellate_stroke_styled(
+                        &smoothed,
+                        stroke_w,
+                        stroke_c,
+                        *is_highlighter,
+                        *style,
+                        page_to_zw,
+                    );
+                    painter.add(mesh);
+                }
+                _ if pass_is_highlighter => {
+                    continue;
+                }
+                other => {
+                    let b = object_bounds(obj);
+                    if !b.intersects(target.expand(20.0)) {
+                        continue;
+                    }
+                    draw_non_stroke_object(
+                        &painter,
+                        other,
+                        &page.objects,
+                        page_to_zw,
+                        scale,
+                        |id| state.get_texture(id).map(|t| t.id()),
+                    );
+                }
             }
         }
     }
@@ -190,11 +208,12 @@ pub fn render_zoom_window_canvas(
                     state.stroke_width
                 };
                 let color = if is_highlighter {
+                    let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
                     Color32::from_rgba_unmultiplied(
                         state.stroke_color.r(),
                         state.stroke_color.g(),
                         state.stroke_color.b(),
-                        crate::model::HIGHLIGHTER_ALPHA,
+                        hl_alpha,
                     )
                 } else {
                     state.stroke_color
@@ -230,11 +249,12 @@ pub fn render_zoom_window_canvas(
             state.stroke_width * scale
         };
         let color = if is_highlighter {
+            let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
             Color32::from_rgba_unmultiplied(
                 state.stroke_color.r(),
                 state.stroke_color.g(),
                 state.stroke_color.b(),
-                crate::model::HIGHLIGHTER_ALPHA,
+                hl_alpha,
             )
         } else {
             state.stroke_color

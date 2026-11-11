@@ -409,16 +409,41 @@ fn tessellate_single_ribbon(
         add_semicircle_cap(mesh, screen_pts[0], radii[0], start_outward, color, 8);
     }
 
-    // Build ribbon vertices
+    // Build ribbon vertices with fold prevention for highlighters
     let base_idx = mesh.vertices.len() as u32;
+    let mut left_verts: Vec<Pos2> = Vec::with_capacity(screen_pts.len());
+    let mut right_verts: Vec<Pos2> = Vec::with_capacity(screen_pts.len());
+
     for i in 0..screen_pts.len() {
         let p = screen_pts[i];
         let n = normals[i];
         let r = radii[i];
 
-        let left = p + n * r;
-        let right = p - n * r;
+        let mut left = p + n * r;
+        let mut right = p - n * r;
 
+        if is_highlighter && i > 0 {
+            let seg = p - screen_pts[i - 1];
+            let seg_len = seg.length();
+            if seg_len > 1e-4 {
+                let seg_dir = seg / seg_len;
+                let prev_l = left_verts[i - 1];
+                let prev_r = right_verts[i - 1];
+
+                // Cegah pita highlighter melipat diri (fold backward) pada belokan tajam
+                let l_proj = (left - prev_l).dot(seg_dir);
+                if l_proj < 0.0 {
+                    left = prev_l + (left - prev_l) - seg_dir * l_proj;
+                }
+                let r_proj = (right - prev_r).dot(seg_dir);
+                if r_proj < 0.0 {
+                    right = prev_r + (right - prev_r) - seg_dir * r_proj;
+                }
+            }
+        }
+
+        left_verts.push(left);
+        right_verts.push(right);
         mesh.colored_vertex(left, color);
         mesh.colored_vertex(right, color);
     }

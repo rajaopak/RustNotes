@@ -1555,12 +1555,92 @@ impl RustNotesApp {
                         }
                     });
 
+                    ui.add_space(6.0);
+                    ui.group(|ui| {
+                        ui.label(
+                            RichText::new(lang.tr(
+                                "Highlighter & Transparansi",
+                                "Highlighter & Opacity",
+                            ))
+                            .strong()
+                            .size(13.0),
+                        );
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.label(lang.tr("Transparansi (Opacity):", "Highlighter Opacity:"));
+                            let pct = (self.settings.highlighter_opacity * 100.0).round() as i32;
+                            let mut slider_val = self.settings.highlighter_opacity;
+                            if ui
+                                .add(
+                                    egui::Slider::new(&mut slider_val, 0.15..=0.70)
+                                        .step_by(0.01)
+                                        .text(format!("{pct}%")),
+                                )
+                                .changed()
+                            {
+                                self.settings.highlighter_opacity = slider_val;
+                                settings_changed = true;
+                            }
+                        });
+
+                        ui.add_space(4.0);
+                        if ui
+                            .checkbox(
+                                &mut self.settings.highlighter_pressure_enabled,
+                                lang.tr(
+                                    "Aktifkan Sensitivitas Tekanan pada Highlighter",
+                                    "Enable Pressure Sensitivity for Highlighter",
+                                ),
+                            )
+                            .changed()
+                        {
+                            settings_changed = true;
+                        }
+
+                        ui.add_space(6.0);
+                        ui.label(lang.tr(
+                            "Pratinjau Highlighter:",
+                            "Highlighter Preview:",
+                        ));
+                        let (rect, _) = ui.allocate_exact_size(
+                            Vec2::new(ui.available_width(), 24.0),
+                            Sense::hover(),
+                        );
+                        let painter = ui.painter_at(rect);
+                        painter.rect_filled(rect, 4.0, Color32::from_rgb(245, 247, 250));
+                        // Text sample under highlighter
+                        painter.text(
+                            rect.left_center() + Vec2::new(12.0, 0.0),
+                            egui::Align2::LEFT_CENTER,
+                            "RustNotes High-End Inking Engine",
+                            egui::FontId::proportional(13.0),
+                            Color32::from_rgb(20, 25, 35),
+                        );
+                        // Highlighter overlay strip
+                        let hl_color = Color32::from_rgba_unmultiplied(
+                            255,
+                            225,
+                            50,
+                            (self.settings.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8,
+                        );
+                        let hl_rect = Rect::from_min_max(
+                            rect.left_top() + Vec2::new(8.0, 4.0),
+                            rect.right_bottom() - Vec2::new(8.0, 4.0),
+                        );
+                        painter.rect_filled(hl_rect, 2.0, hl_color);
+                    });
+
                     if settings_changed {
                         self.canvas_state.pressure_sensitivity_enabled =
                             self.settings.pressure_sensitivity_enabled;
                         self.canvas_state.pressure_min = self.settings.pressure_min;
                         self.canvas_state.pressure_multiplier =
                             self.settings.pressure_multiplier;
+                        self.canvas_state.highlighter_opacity =
+                            self.settings.highlighter_opacity;
+                        self.canvas_state.highlighter_pressure_enabled =
+                            self.settings.highlighter_pressure_enabled;
+                        self.canvas_state.mesh_cache.clear();
                         let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
                     }
 

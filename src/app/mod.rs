@@ -31,6 +31,8 @@ impl eframe::App for RustNotesApp {
         self.canvas_state.pressure_sensitivity_enabled = self.settings.pressure_sensitivity_enabled;
         self.canvas_state.pressure_min = self.settings.pressure_min;
         self.canvas_state.pressure_multiplier = self.settings.pressure_multiplier;
+        self.canvas_state.highlighter_opacity = self.settings.highlighter_opacity;
+        self.canvas_state.highlighter_pressure_enabled = self.settings.highlighter_pressure_enabled;
 
         // Apply Goodnotes theme styling (Dark / Light / System OS Windows)
         setup_goodnotes_theme(ctx, self.settings.theme_mode);

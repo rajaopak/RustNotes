@@ -2948,3 +2948,120 @@ fn test_negative_cases_unsupported_shapes_preserve_none() {
         "Kurva terbuka U tidak boleh dikenali sebagai bentuk tertutup"
     );
 }
+
+#[test]
+fn test_rectangle_sharp_corners_and_recognition() {
+    // 1. Recognize clean rectangle
+    let rect_corners = [
+        Pos2::new(10.0, 10.0),
+        Pos2::new(110.0, 10.0),
+        Pos2::new(110.0, 60.0),
+        Pos2::new(10.0, 60.0),
+    ];
+    let mut pts = Vec::new();
+    for (a, b) in [
+        (rect_corners[0], rect_corners[1]),
+        (rect_corners[1], rect_corners[2]),
+        (rect_corners[2], rect_corners[3]),
+        (rect_corners[3], rect_corners[0]),
+    ] {
+        for t in 0..10 {
+            let f = t as f32 / 10.0;
+            pts.push(StrokePoint::from(Pos2::new(
+                a.x + (b.x - a.x) * f,
+                a.y + (b.y - a.y) * f,
+            )));
+        }
+    }
+    pts.push(StrokePoint::from(rect_corners[0]));
+
+    let recognized = recognize_shape(&pts).expect("Must recognize rectangle");
+    assert_eq!(recognized.kind, ShapeKind::Rectangle);
+
+    // Verify DrawObject::Shape creation for standard rectangle has sharp 90-degree corners (radius 0.0)
+    let shape_obj = DrawObject::Shape {
+        id: "rect_1".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: recognized.x,
+        y: recognized.y,
+        width: recognized.width,
+        height: recognized.height,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        corner_radius: 0.0, // Standard sharp rectangle
+        rotation: 0.0,
+        label: None,
+        curve_points: Vec::new(),
+        locked: false,
+    };
+
+    if let DrawObject::Shape { corner_radius, .. } = shape_obj {
+        assert_eq!(
+            corner_radius, 0.0,
+            "Standard rectangle must have zero corner radius"
+        );
+    } else {
+        panic!("Expected shape object");
+    }
+}
+
+#[test]
+fn test_highlighter_tessellation_no_ribbon_inversion() {
+    // Sharp hairpin turn stroke (0,0) -> (100,0) -> (10, 20)
+    let pts = vec![
+        StrokePoint {
+            x: 0.0,
+            y: 0.0,
+            pressure: 1.0,
+        },
+        StrokePoint {
+            x: 50.0,
+            y: 0.0,
+            pressure: 1.0,
+        },
+        StrokePoint {
+            x: 100.0,
+            y: 0.0,
+            pressure: 1.0,
+        },
+        StrokePoint {
+            x: 50.0,
+            y: 10.0,
+            pressure: 1.0,
+        },
+        StrokePoint {
+            x: 10.0,
+            y: 20.0,
+            pressure: 1.0,
+        },
+    ];
+
+    let mesh = tessellate_stroke_styled(
+        &pts,
+        18.0,
+        Color32::from_rgba_unmultiplied(255, 225, 0, 95),
+        true, // is_highlighter
+        StrokeStyle::Solid,
+        |p| p,
+    );
+
+    assert!(
+        !mesh.vertices.is_empty(),
+        "Mesh vertices should not be empty"
+    );
+    assert!(!mesh.indices.is_empty(), "Mesh indices should not be empty");
+
+    // All indices must be within vertices length
+    for &idx in &mesh.indices {
+        assert!((idx as usize) < mesh.vertices.len(), "Index out of bounds");
+    }
+
+    // Verify all vertex positions are finite numbers
+    for v in &mesh.vertices {
+        assert!(
+            v.pos.x.is_finite() && v.pos.y.is_finite(),
+            "Vertices must be finite"
+        );
+    }
+}

@@ -86,6 +86,10 @@ pub struct CanvasState {
     pub pressure_min: f32,
     pub pressure_multiplier: f32,
 
+    // Task 3: Highlighter system configuration
+    pub highlighter_opacity: f32,
+    pub highlighter_pressure_enabled: bool,
+
     // Inline text editing
     pub editing_text_id: Option<String>,
     pub focus_text_edit: bool,
@@ -161,6 +165,8 @@ impl Default for CanvasState {
             pressure_sensitivity_enabled: true,
             pressure_min: 0.2,
             pressure_multiplier: 1.0,
+            highlighter_opacity: crate::model::HIGHLIGHTER_OPACITY_F32,
+            highlighter_pressure_enabled: false,
             editing_text_id: None,
             focus_text_edit: false,
             text_buffer: String::new(),

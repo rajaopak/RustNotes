@@ -744,3 +744,81 @@ fn test_validate_notebook_assets_detects_missing() {
     let missing = validate_notebook_assets(dir, &nb);
     assert_eq!(missing, vec!["non_existent_hash.png".to_string()]);
 }
+
+#[test]
+fn test_highlighter_underlay_layering_and_mask_export() {
+    let mut page = Page::new(PageTemplate::Blank);
+    page.width = 400.0;
+    page.height = 300.0;
+
+    // First add a pen stroke
+    page.objects.push(DrawObject::Stroke {
+        id: "pen_1".to_string(),
+        points: vec![
+            StrokePoint {
+                x: 50.0,
+                y: 50.0,
+                pressure: 1.0,
+            },
+            StrokePoint {
+                x: 150.0,
+                y: 50.0,
+                pressure: 1.0,
+            },
+        ],
+        color: ColorData {
+            r: 10,
+            g: 10,
+            b: 10,
+            a: 255,
+        },
+        width: 3.0,
+        is_highlighter: false,
+        style: StrokeStyle::Solid,
+    });
+
+    // Then add a highlighter stroke (drawn after pen)
+    page.objects.push(DrawObject::Stroke {
+        id: "hl_1".to_string(),
+        points: vec![
+            StrokePoint {
+                x: 40.0,
+                y: 50.0,
+                pressure: 1.0,
+            },
+            StrokePoint {
+                x: 160.0,
+                y: 50.0,
+                pressure: 1.0,
+            },
+        ],
+        color: ColorData {
+            r: 255,
+            g: 220,
+            b: 0,
+            a: 95,
+        },
+        width: 15.0,
+        is_highlighter: true,
+        style: StrokeStyle::Solid,
+    });
+
+    // In SVG export, the highlighters group must appear BEFORE the pen stroke
+    let svg = export_page_to_svg(&page);
+    let hl_idx = svg
+        .find("<g id=\"highlighters\">")
+        .expect("Must contain highlighters group");
+    let pen_idx = svg
+        .find("<path d=\"M 50.0 50.0 L 150.0 50.0\"")
+        .expect("Must contain pen stroke");
+    assert!(
+        hl_idx < pen_idx,
+        "Highlighters must be rendered in the underlay layer before pen strokes"
+    );
+
+    // In PNG export, verify export succeeds without error
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let out_png = tmp.path().join("hl_test.png");
+    export_page_to_png(tmp.path(), "nb_hl", &page, &out_png).expect("PNG export must succeed");
+    assert!(out_png.exists());
+}
