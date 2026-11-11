@@ -1,6 +1,21 @@
 use crate::model::{DrawObject, ShapeKind};
 use eframe::egui::{Pos2, Rect, Vec2};
 
+pub fn text_approx_size(text: &str, font_size: f32) -> (f32, f32) {
+    let lines: Vec<&str> = text.lines().collect();
+    let line_count = lines.len().max(1) as f32;
+    let max_line_len = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f32;
+    let approx_w = (max_line_len * (font_size * 0.58).max(8.0)).max(20.0);
+    let approx_h = line_count * (font_size * 1.35).max(18.0);
+    (approx_w, approx_h)
+}
+
+pub fn equation_approx_size(latex: &str, font_size: f32, scale: f32) -> (f32, f32) {
+    let eff_font = font_size * scale;
+    let layout = super::math::MathLayout::compute_from_str(latex, eff_font);
+    (layout.width.max(20.0), layout.height.max(eff_font))
+}
+
 pub fn object_bounds(obj: &DrawObject) -> Rect {
     match obj {
         DrawObject::Stroke { points, width, .. } => {
@@ -35,8 +50,21 @@ pub fn object_bounds(obj: &DrawObject) -> Rect {
         } => {
             let half = *stroke_width / 2.0;
             if *shape_type == ShapeKind::Line {
-                let p1 = Pos2::new(*x, *y);
-                let p2 = Pos2::new(*x + *width, *y + *height);
+                let mut p1 = Pos2::new(*x, *y);
+                let mut p2 = Pos2::new(*x + *width, *y + *height);
+                if rotation.abs() > 1e-4 {
+                    let cx = *x + *width * 0.5;
+                    let cy = *y + *height * 0.5;
+                    let cos_a = rotation.cos();
+                    let sin_a = rotation.sin();
+                    let rot_pt = |p: Pos2| {
+                        let dx = p.x - cx;
+                        let dy = p.y - cy;
+                        Pos2::new(cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)
+                    };
+                    p1 = rot_pt(p1);
+                    p2 = rot_pt(p2);
+                }
                 Rect::from_two_pos(p1, p2).expand(half)
             } else if rotation.abs() < 1e-3 {
                 let left = x.min(x + width) - half;
@@ -62,13 +90,7 @@ pub fn object_bounds(obj: &DrawObject) -> Rect {
             rotation,
             ..
         } => {
-            let lines: Vec<&str> = text.lines().collect();
-            let line_count = lines.len().max(1) as f32;
-            let max_line_len = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f32;
-            let approx_w = max_line_len * (font_size * 0.58).max(8.0);
-            let approx_h = line_count * (font_size * 1.35).max(18.0);
-            let w = approx_w.max(20.0);
-            let h = approx_h;
+            let (w, h) = text_approx_size(text, *font_size);
             let rot = *rotation;
             if rot.abs() < 1e-3 {
                 Rect::from_min_size(Pos2::new(*x, *y), Vec2::new(w, h))
@@ -131,11 +153,7 @@ pub fn object_bounds(obj: &DrawObject) -> Rect {
             rotation,
             ..
         } => {
-            let eff_font = *font_size * *scale;
-            let nodes = super::math::parse_latex_math(latex).unwrap_or_default();
-            let layout = super::math::MathLayout::compute(&nodes, eff_font);
-            let w = layout.width.max(20.0);
-            let h = layout.height.max(eff_font);
+            let (w, h) = equation_approx_size(latex, *font_size, *scale);
             let rot = *rotation;
             if rot.abs() < 1e-3 {
                 Rect::from_min_size(Pos2::new(*x, *y), Vec2::new(w, h))
@@ -304,6 +322,144 @@ pub fn segments_cross(a: Pos2, b: Pos2, c: Pos2, d: Pos2) -> bool {
 pub fn screen_to_page_point(screen_pos: Pos2, page_origin: Pos2, zoom: f32) -> Pos2 {
     let rel = screen_pos - page_origin;
     Pos2::new(rel.x / zoom, rel.y / zoom)
+}
+
+/// Menghitung simpul batas luar (boundary vertices/corners) dari suatu objek gambar
+/// dengan memperhitungkan rotasi dan orientasi sebenarnya di kanvas.
+pub fn object_boundary_vertices(obj: &DrawObject) -> Vec<Pos2> {
+    match obj {
+        DrawObject::Stroke { points, .. } => points.iter().map(|p| p.to_pos2()).collect(),
+        DrawObject::Shape {
+            x,
+            y,
+            width,
+            height,
+            rotation,
+            shape_type,
+            ..
+        } => {
+            if *shape_type == ShapeKind::Line {
+                let mut p1 = Pos2::new(*x, *y);
+                let mut p2 = Pos2::new(*x + *width, *y + *height);
+                if rotation.abs() > 1e-4 {
+                    let cx = *x + *width * 0.5;
+                    let cy = *y + *height * 0.5;
+                    let cos_a = rotation.cos();
+                    let sin_a = rotation.sin();
+                    let rot_pt = |p: Pos2| {
+                        let dx = p.x - cx;
+                        let dy = p.y - cy;
+                        Pos2::new(cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)
+                    };
+                    p1 = rot_pt(p1);
+                    p2 = rot_pt(p2);
+                }
+                vec![p1, p2]
+            } else {
+                let mut verts = shape_vertices(*shape_type, *x, *y, *width, *height);
+                if rotation.abs() > 1e-4 {
+                    let cx = *x + *width * 0.5;
+                    let cy = *y + *height * 0.5;
+                    let cos_a = rotation.cos();
+                    let sin_a = rotation.sin();
+                    for v in &mut verts {
+                        let dx = v.x - cx;
+                        let dy = v.y - cy;
+                        *v = Pos2::new(cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a);
+                    }
+                }
+                verts
+            }
+        }
+        DrawObject::Text {
+            x,
+            y,
+            font_size,
+            text,
+            rotation,
+            ..
+        } => {
+            let (w, h) = text_approx_size(text, *font_size);
+            let p0 = Pos2::new(*x, *y);
+            let cos_a = rotation.cos();
+            let sin_a = rotation.sin();
+            let rot_v =
+                |lx: f32, ly: f32| Vec2::new(lx * cos_a - ly * sin_a, lx * sin_a + ly * cos_a);
+            vec![p0, p0 + rot_v(w, 0.0), p0 + rot_v(w, h), p0 + rot_v(0.0, h)]
+        }
+        DrawObject::StickyNote {
+            x,
+            y,
+            width,
+            height,
+            rotation,
+            ..
+        }
+        | DrawObject::Image {
+            x,
+            y,
+            width,
+            height,
+            rotation,
+            ..
+        } => {
+            let center = Pos2::new(*x + *width * 0.5, *y + *height * 0.5);
+            let hw = *width * 0.5;
+            let hh = *height * 0.5;
+            let cos_a = rotation.cos();
+            let sin_a = rotation.sin();
+            let rot_v =
+                |lx: f32, ly: f32| Vec2::new(lx * cos_a - ly * sin_a, lx * sin_a + ly * cos_a);
+            vec![
+                center + rot_v(-hw, -hh),
+                center + rot_v(hw, -hh),
+                center + rot_v(hw, hh),
+                center + rot_v(-hw, hh),
+            ]
+        }
+        DrawObject::Equation {
+            x,
+            y,
+            latex,
+            font_size,
+            scale,
+            rotation,
+            ..
+        } => {
+            let (w, h) = equation_approx_size(latex, *font_size, *scale);
+            let center = Pos2::new(*x + w * 0.5, *y + h * 0.5);
+            let hw = w * 0.5;
+            let hh = h * 0.5;
+            let cos_a = rotation.cos();
+            let sin_a = rotation.sin();
+            let rot_v =
+                |lx: f32, ly: f32| Vec2::new(lx * cos_a - ly * sin_a, lx * sin_a + ly * cos_a);
+            vec![
+                center + rot_v(-hw, -hh),
+                center + rot_v(hw, -hh),
+                center + rot_v(hw, hh),
+                center + rot_v(-hw, hh),
+            ]
+        }
+        DrawObject::Connector {
+            start,
+            end,
+            control_points,
+            ..
+        } => {
+            let mut pts = Vec::new();
+            if let crate::model::ConnectorEnd::Free { x, y } = start {
+                pts.push(Pos2::new(*x, *y));
+            }
+            for cp in control_points {
+                pts.push(Pos2::new(cp.x, cp.y));
+            }
+            if let crate::model::ConnectorEnd::Free { x, y } = end {
+                pts.push(Pos2::new(*x, *y));
+            }
+            pts
+        }
+    }
 }
 
 pub fn page_to_screen_point(page_pos: Pos2, page_origin: Pos2, zoom: f32) -> Pos2 {

@@ -770,12 +770,8 @@ impl SelectionFrame {
                     rotation,
                     ..
                 } => {
-                    let lines: Vec<&str> = text.lines().collect();
-                    let line_count = lines.len().max(1) as f32;
-                    let max_line_len =
-                        lines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f32;
-                    let approx_w = (max_line_len * (font_size * 0.58).max(8.0)).max(20.0);
-                    let approx_h = line_count * (font_size * 1.35).max(18.0);
+                    let (approx_w, approx_h) =
+                        super::primitives::text_approx_size(text, *font_size);
                     let cos_a = rotation.cos();
                     let sin_a = rotation.sin();
                     let rot_v = |lx: f32, ly: f32| {
@@ -800,11 +796,7 @@ impl SelectionFrame {
                     rotation,
                     ..
                 } => {
-                    let eff_font = *font_size * *scale;
-                    let layout =
-                        crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
-                    let w = layout.width.max(20.0);
-                    let h = layout.height.max(eff_font);
+                    let (w, h) = super::primitives::equation_approx_size(latex, *font_size, *scale);
                     let pivot = Pos2::new(*x + w * 0.5, *y + h * 0.5);
                     let rot = *rotation;
                     return Some(Self::new(pivot, Vec2::new(w, h), rot, stem_length));

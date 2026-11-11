@@ -3620,3 +3620,305 @@ fn test_equation_serialization_and_svg() {
     assert!(svg.contains("<text"));
     assert!(svg.contains("<line"));
 }
+
+#[test]
+fn test_rotated_text_hit_test_precision() {
+    let text_obj = DrawObject::Text {
+        id: "text-rot".into(),
+        x: 100.0,
+        y: 100.0,
+        text: "Hello RustNotes".into(),
+        font_size: 20.0,
+        color: dummy_color(),
+        rotation: std::f32::consts::FRAC_PI_4, // 45 degrees CW around (100, 100)
+        font_family: crate::model::FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: crate::model::TextAlign::Left,
+    };
+
+    // (100, 100) is the anchor pivot point -> must hit
+    assert!(hit_test_object(&text_obj, Pos2::new(100.0, 100.0), 2.0));
+    assert_eq!(
+        distance_to_object(&text_obj, Pos2::new(100.0, 100.0)),
+        Some(0.0)
+    );
+
+    // A point along the rotated text axis:
+    // With w approx 150, at 45 deg, center of text is roughly (100 + 75*cos45, 100 + 75*sin45) ~ (153, 153)
+    let center_along = Pos2::new(100.0 + 50.0 * 0.7071, 100.0 + 50.0 * 0.7071);
+    assert!(hit_test_object(&text_obj, center_along, 4.0));
+    assert_eq!(distance_to_object(&text_obj, center_along), Some(0.0));
+
+    // Point in the empty corner of unrotated AABB (e.g. horizontally to the right: 100+120, 100)
+    // In unrotated AABB this point was inside, but rotated text points down-right!
+    // So (220.0, 100.0) is clearly outside the rotated text geometry.
+    let empty_aabb_corner = Pos2::new(220.0, 100.0);
+    assert!(!hit_test_object(&text_obj, empty_aabb_corner, 2.0));
+    assert!(distance_to_object(&text_obj, empty_aabb_corner).unwrap() > 10.0);
+}
+
+#[test]
+fn test_rotated_sticky_note_and_image_hit_test() {
+    // 100x40 Sticky Note at (100, 100), center is (150, 120).
+    // Rotated 90 degrees: visual dimensions become 40 wide x 100 high.
+    // Visual span: x in [130, 170], y in [70, 170].
+    let sticky = DrawObject::StickyNote {
+        id: "sticky-rot".into(),
+        x: 100.0,
+        y: 100.0,
+        width: 100.0,
+        height: 40.0,
+        text: "Rotated Note".into(),
+        color: dummy_color(),
+        text_color: dummy_color(),
+        font_size: 14.0,
+        font_family: crate::model::FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: crate::model::TextAlign::Left,
+        rotation: std::f32::consts::FRAC_PI_2,
+    };
+
+    // Center is (150, 120) -> must hit
+    assert!(hit_test_object(&sticky, Pos2::new(150.0, 120.0), 2.0));
+    assert_eq!(
+        distance_to_object(&sticky, Pos2::new(150.0, 120.0)),
+        Some(0.0)
+    );
+
+    // Point in visual vertical extension: (150, 160) -> inside vertical rect
+    assert!(hit_test_object(&sticky, Pos2::new(150.0, 160.0), 2.0));
+
+    // Point in horizontal extension where unrotated sticky was (e.g. 195, 120)
+    // Visually it has rotated away from here!
+    assert!(!hit_test_object(&sticky, Pos2::new(195.0, 120.0), 2.0));
+    assert!(distance_to_object(&sticky, Pos2::new(195.0, 120.0)).unwrap() > 15.0);
+
+    // Identical test for DrawObject::Image
+    let img = DrawObject::Image {
+        id: "img-rot".into(),
+        asset_id: "asset-1".into(),
+        x: 100.0,
+        y: 100.0,
+        width: 100.0,
+        height: 40.0,
+        rotation: std::f32::consts::FRAC_PI_2,
+        lock_aspect: true,
+    };
+    assert!(hit_test_object(&img, Pos2::new(150.0, 160.0), 2.0));
+    assert!(!hit_test_object(&img, Pos2::new(195.0, 120.0), 2.0));
+}
+
+#[test]
+fn test_rotated_shapes_hit_test_precision() {
+    // 1. Rotated Line: Horizontal line from (0, 50) to (100, 50).
+    // Center is (50, 50). Rotated 90 deg -> becomes vertical line from (50, 0) to (50, 100).
+    let rot_line = DrawObject::Shape {
+        id: "line-rot".into(),
+        shape_type: ShapeKind::Line,
+        x: 0.0,
+        y: 50.0,
+        width: 100.0,
+        height: 0.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: std::f32::consts::FRAC_PI_2,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+
+    // Center is (50, 50) -> must hit
+    assert!(hit_test_object(&rot_line, Pos2::new(50.0, 50.0), 2.0));
+    // Rotated top endpoint (50, 0) -> must hit
+    assert!(hit_test_object(&rot_line, Pos2::new(50.0, 5.0), 2.0));
+    // Rotated bottom endpoint (50, 100) -> must hit
+    assert!(hit_test_object(&rot_line, Pos2::new(50.0, 95.0), 2.0));
+    // Unrotated horizontal endpoint (95, 50) -> must NOT hit (it rotated away!)
+    assert!(!hit_test_object(&rot_line, Pos2::new(95.0, 50.0), 2.0));
+
+    // 2. Rotated Hollow Rectangle: 100x60 at (100, 100), center (150, 130).
+    // Rotated 90 deg -> becomes 60 wide x 100 high.
+    let hollow_rect = DrawObject::Shape {
+        id: "rect-rot".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 100.0,
+        y: 100.0,
+        width: 100.0,
+        height: 60.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: std::f32::consts::FRAC_PI_2,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    // Center of hollow rectangle -> NOT hit (hollow!)
+    assert!(!hit_test_object(&hollow_rect, Pos2::new(150.0, 130.0), 2.0));
+    // Boundary of rotated rectangle: visual x in [120, 180], y in [80, 180]
+    // Top border of rotated rect: (150, 80) -> hits border
+    assert!(hit_test_object(&hollow_rect, Pos2::new(150.0, 80.0), 2.0));
+
+    // 3. Rotated Ellipse (Filled): 100x40 at (100, 100), center (150, 120), rotated 90 deg.
+    let rot_ellipse = DrawObject::Shape {
+        id: "ellipse-rot".into(),
+        shape_type: ShapeKind::Ellipse,
+        x: 100.0,
+        y: 100.0,
+        width: 100.0,
+        height: 40.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: Some(dummy_color()),
+        rotation: std::f32::consts::FRAC_PI_2,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    // Center -> hits
+    assert!(hit_test_object(&rot_ellipse, Pos2::new(150.0, 120.0), 2.0));
+    // (150, 160) inside vertical rotated ellipse -> hits
+    assert!(hit_test_object(&rot_ellipse, Pos2::new(150.0, 160.0), 2.0));
+    // (190, 120) outside vertical rotated ellipse -> misses
+    assert!(!hit_test_object(&rot_ellipse, Pos2::new(190.0, 120.0), 2.0));
+}
+
+#[test]
+fn test_lasso_intersection_edge_cross_without_corner_enclosure() {
+    // Sticky Note at (50, 50) size 100x100 (corners: (50,50), (150,50), (150,150), (50,150)). Center is (100, 100).
+    let sticky = DrawObject::StickyNote {
+        id: "sticky-cut".into(),
+        x: 50.0,
+        y: 50.0,
+        width: 100.0,
+        height: 100.0,
+        text: "Cut Note".into(),
+        color: dummy_color(),
+        text_color: dummy_color(),
+        font_size: 14.0,
+        font_family: crate::model::FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: crate::model::TextAlign::Left,
+        rotation: 0.0,
+    };
+
+    // A thin horizontal lasso band that slices across the sticky note from y=60 to y=70:
+    // (0, 60) -> (200, 60) -> (200, 70) -> (0, 70).
+    // Note:
+    // - Center of sticky (100, 100) is OUTSIDE the band (band y is [60, 70]).
+    // - None of the 4 corners of sticky ((50,50), (150,50), etc.) are inside the band.
+    // - BUT the band cross-cuts the sticky note's left and right vertical edges!
+    let slice_lasso = vec![
+        Pos2::new(0.0, 60.0),
+        Pos2::new(200.0, 60.0),
+        Pos2::new(200.0, 70.0),
+        Pos2::new(0.0, 70.0),
+    ];
+
+    // Intersection mode MUST detect this edge crossing and select it!
+    assert!(object_in_lasso(&sticky, &slice_lasso));
+    assert!(object_in_lasso_mode(
+        &sticky,
+        &slice_lasso,
+        LassoSelectionMode::Intersection
+    ));
+
+    // Containment mode MUST NOT select it (only partially sliced)
+    assert!(!object_contained_in_lasso(&sticky, &slice_lasso));
+    assert!(!object_in_lasso_mode(
+        &sticky,
+        &slice_lasso,
+        LassoSelectionMode::Containment
+    ));
+}
+
+#[test]
+fn test_lasso_containment_and_intersection_rotated_objects() {
+    // 100x40 Sticky Note at (100, 100) rotated 90 degrees around (150, 120).
+    // Visual rect: x in [130, 170], y in [70, 170].
+    let sticky_rot = DrawObject::StickyNote {
+        id: "sticky-rot-lasso".into(),
+        x: 100.0,
+        y: 100.0,
+        width: 100.0,
+        height: 40.0,
+        text: "Note".into(),
+        color: dummy_color(),
+        text_color: dummy_color(),
+        font_size: 14.0,
+        font_family: crate::model::FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: crate::model::TextAlign::Left,
+        rotation: std::f32::consts::FRAC_PI_2,
+    };
+
+    // 1. Large lasso enclosing the entire vertical rotated rect: x in [100, 200], y in [50, 200]
+    let enclosing_lasso = vec![
+        Pos2::new(100.0, 50.0),
+        Pos2::new(200.0, 50.0),
+        Pos2::new(200.0, 200.0),
+        Pos2::new(100.0, 200.0),
+    ];
+    assert!(object_contained_in_lasso(&sticky_rot, &enclosing_lasso));
+    assert!(object_in_lasso(&sticky_rot, &enclosing_lasso));
+
+    // 2. Lasso enclosing unrotated rect: x in [90, 210], y in [90, 150]
+    // The rotated sticky reaches up to y=70 and down to y=170, so top and bottom poke outside!
+    let unrotated_span_lasso = vec![
+        Pos2::new(90.0, 90.0),
+        Pos2::new(210.0, 90.0),
+        Pos2::new(210.0, 150.0),
+        Pos2::new(90.0, 150.0),
+    ];
+    // Cannot be contained because ends poke outside!
+    assert!(!object_contained_in_lasso(
+        &sticky_rot,
+        &unrotated_span_lasso
+    ));
+    // But does intersect because center (150, 120) is inside!
+    assert!(object_in_lasso(&sticky_rot, &unrotated_span_lasso));
+}
+
+#[test]
+fn test_lasso_encloses_single_point_stroke_dot() {
+    let dot = DrawObject::Stroke {
+        id: "dot-1".into(),
+        points: vec![StrokePoint {
+            x: 50.0,
+            y: 50.0,
+            pressure: 1.0,
+        }],
+        color: dummy_color(),
+        width: 6.0,
+        is_highlighter: false,
+        style: crate::model::StrokeStyle::Solid,
+    };
+
+    // Lasso with radius > 3.0 around (50, 50) -> fully contained
+    let big_lasso = vec![
+        Pos2::new(40.0, 40.0),
+        Pos2::new(60.0, 40.0),
+        Pos2::new(60.0, 60.0),
+        Pos2::new(40.0, 60.0),
+    ];
+    assert!(object_contained_in_lasso(&dot, &big_lasso));
+    assert!(object_in_lasso(&dot, &big_lasso));
+
+    // Tight lasso: boundary cuts through (51.0, 50.0) -> radius=3.0 pokes out!
+    let tight_lasso = vec![
+        Pos2::new(48.0, 48.0),
+        Pos2::new(51.0, 48.0),
+        Pos2::new(51.0, 52.0),
+        Pos2::new(48.0, 52.0),
+    ];
+    assert!(!object_contained_in_lasso(&dot, &tight_lasso));
+    assert!(object_in_lasso(&dot, &tight_lasso));
+}
