@@ -569,6 +569,22 @@ impl RustNotesApp {
                                                         painter.add(text_shape);
                                                     }
                                                     crate::model::DrawObject::Connector { .. } => {}
+                                                    crate::model::DrawObject::Equation {
+                                                        x,
+                                                        y,
+                                                        color,
+                                                        ..
+                                                    } => {
+                                                        let pos =
+                                                            origin + Vec2::new(x * scale, y * scale);
+                                                        painter.text(
+                                                            pos,
+                                                            egui::Align2::LEFT_TOP,
+                                                            "∑",
+                                                            FontId::proportional(8.0),
+                                                            color.to_color32(),
+                                                        );
+                                                    }
                                                 }
                                             }
 

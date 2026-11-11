@@ -13,6 +13,7 @@ pub enum ActiveTool {
     Connector,
     Text,
     StickyNote,
+    Equation,
     Laser,
     Hand,
 }

@@ -702,6 +702,21 @@ pub fn draw_non_stroke_object(
                 }
             }
         }
+        DrawObject::Equation {
+            x,
+            y,
+            latex,
+            font_size,
+            scale,
+            color,
+            rotation,
+            ..
+        } => {
+            let eff_font = *font_size * *scale;
+            let screen_pos = page_to_screen(Pos2::new(*x, *y));
+            let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+            layout.render(painter, screen_pos, zoom, *rotation, color.to_color32());
+        }
     }
 }
 

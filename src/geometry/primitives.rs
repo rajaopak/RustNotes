@@ -122,6 +122,33 @@ pub fn object_bounds(obj: &DrawObject) -> Rect {
             let bb_h = *width * sin_a + *height * cos_a;
             Rect::from_center_size(Pos2::new(cx, cy), Vec2::new(bb_w, bb_h))
         }
+        DrawObject::Equation {
+            x,
+            y,
+            latex,
+            font_size,
+            scale,
+            rotation,
+            ..
+        } => {
+            let eff_font = *font_size * *scale;
+            let nodes = super::math::parse_latex_math(latex).unwrap_or_default();
+            let layout = super::math::MathLayout::compute(&nodes, eff_font);
+            let w = layout.width.max(20.0);
+            let h = layout.height.max(eff_font);
+            let rot = *rotation;
+            if rot.abs() < 1e-3 {
+                Rect::from_min_size(Pos2::new(*x, *y), Vec2::new(w, h))
+            } else {
+                let cx = *x + w * 0.5;
+                let cy = *y + h * 0.5;
+                let cos_a = rot.cos().abs();
+                let sin_a = rot.sin().abs();
+                let bb_w = w * cos_a + h * sin_a;
+                let bb_h = w * sin_a + h * cos_a;
+                Rect::from_center_size(Pos2::new(cx, cy), Vec2::new(bb_w, bb_h))
+            }
+        }
         DrawObject::Connector {
             start,
             end,

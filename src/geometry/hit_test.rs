@@ -72,8 +72,15 @@ pub fn distance_to_object(obj: &DrawObject, p: Pos2) -> Option<f32> {
                 }
             }
         }
-        DrawObject::Text { .. } | DrawObject::StickyNote { .. } | DrawObject::Image { .. } => {
-            if b.contains(p) { Some(0.0) } else { None }
+        DrawObject::Text { .. }
+        | DrawObject::StickyNote { .. }
+        | DrawObject::Image { .. }
+        | DrawObject::Equation { .. } => {
+            if b.contains(p) {
+                Some(0.0)
+            } else {
+                None
+            }
         }
         DrawObject::Connector {
             start,
@@ -164,9 +171,10 @@ pub fn hit_test_object(obj: &DrawObject, p: Pos2, tolerance: f32) -> bool {
                 }
             }
         }
-        DrawObject::Text { .. } | DrawObject::StickyNote { .. } | DrawObject::Image { .. } => {
-            b.contains(p)
-        }
+        DrawObject::Text { .. }
+        | DrawObject::StickyNote { .. }
+        | DrawObject::Image { .. }
+        | DrawObject::Equation { .. } => b.contains(p),
         DrawObject::Connector {
             start,
             end,
@@ -257,7 +265,10 @@ pub fn object_in_lasso(obj: &DrawObject, polygon: &[Pos2]) -> bool {
             }
             false
         }
-        DrawObject::Text { .. } | DrawObject::StickyNote { .. } | DrawObject::Image { .. } => {
+        DrawObject::Text { .. }
+        | DrawObject::StickyNote { .. }
+        | DrawObject::Image { .. }
+        | DrawObject::Equation { .. } => {
             let corners = [
                 b.left_top(),
                 b.right_top(),
@@ -447,6 +458,42 @@ pub fn object_contained_in_lasso(obj: &DrawObject, polygon: &[Pos2]) -> bool {
                 p0 + rot_v(approx_w, 0.0),
                 p0 + rot_v(approx_w, approx_h),
                 p0 + rot_v(0.0, approx_h),
+            ];
+            if !corners.iter().all(|&c| point_in_polygon(c, polygon)) {
+                return false;
+            }
+            for i in 0..4 {
+                if crosses_polygon(corners[i], corners[(i + 1) % 4]) {
+                    return false;
+                }
+            }
+            true
+        }
+        DrawObject::Equation {
+            x,
+            y,
+            latex,
+            font_size,
+            scale,
+            rotation,
+            ..
+        } => {
+            let eff_font = *font_size * *scale;
+            let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+            let w = layout.width.max(20.0);
+            let h = layout.height.max(eff_font);
+            let center = Pos2::new(*x + w * 0.5, *y + h * 0.5);
+            let hw = w * 0.5;
+            let hh = h * 0.5;
+            let cos_a = rotation.cos();
+            let sin_a = rotation.sin();
+            let rot_v =
+                |lx: f32, ly: f32| Vec2::new(lx * cos_a - ly * sin_a, lx * sin_a + ly * cos_a);
+            let corners = [
+                center + rot_v(-hw, -hh),
+                center + rot_v(hw, -hh),
+                center + rot_v(hw, hh),
+                center + rot_v(-hw, hh),
             ];
             if !corners.iter().all(|&c| point_in_polygon(c, polygon)) {
                 return false;

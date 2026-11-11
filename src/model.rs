@@ -538,10 +538,28 @@ pub enum DrawObject {
         #[serde(default)]
         locked: bool,
     },
+    Equation {
+        id: String,
+        latex: String,
+        x: f32,
+        y: f32,
+        font_size: f32,
+        color: ColorData,
+        #[serde(default)]
+        rotation: f32,
+        #[serde(default)]
+        locked: bool,
+        #[serde(default = "default_equation_scale")]
+        scale: f32,
+    },
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_equation_scale() -> f32 {
+    1.0
 }
 
 fn default_text_align_left() -> TextAlign {
@@ -570,19 +588,24 @@ impl DrawObject {
             Self::StickyNote { id, .. } => id,
             Self::Image { id, .. } => id,
             Self::Connector { id, .. } => id,
+            Self::Equation { id, .. } => id,
         }
     }
 
     pub fn is_locked(&self) -> bool {
         match self {
-            Self::Shape { locked, .. } | Self::Connector { locked, .. } => *locked,
+            Self::Shape { locked, .. }
+            | Self::Connector { locked, .. }
+            | Self::Equation { locked, .. } => *locked,
             _ => false,
         }
     }
 
     pub fn set_locked(&mut self, val: bool) {
         match self {
-            Self::Shape { locked, .. } | Self::Connector { locked, .. } => *locked = val,
+            Self::Shape { locked, .. }
+            | Self::Connector { locked, .. }
+            | Self::Equation { locked, .. } => *locked = val,
             _ => {}
         }
     }
@@ -913,7 +936,8 @@ impl Notebook {
                 | DrawObject::Text { id, .. }
                 | DrawObject::StickyNote { id, .. }
                 | DrawObject::Image { id, .. }
-                | DrawObject::Connector { id, .. } => {
+                | DrawObject::Connector { id, .. }
+                | DrawObject::Equation { id, .. } => {
                     *id = Uuid::new_v4().to_string();
                 }
                 DrawObject::Shape { id, .. } => {
@@ -1350,6 +1374,7 @@ pub enum ShortcutAction {
     ToolShape,
     ToolConnector,
     ToolStickyNote,
+    ToolEquation,
     Undo,
     Redo,
     Save,
@@ -1368,7 +1393,7 @@ pub enum ShortcutAction {
 }
 
 impl ShortcutAction {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::ToolPen,
         Self::ToolHighlighter,
         Self::ToolEraser,
@@ -1377,6 +1402,7 @@ impl ShortcutAction {
         Self::ToolShape,
         Self::ToolConnector,
         Self::ToolStickyNote,
+        Self::ToolEquation,
         Self::Undo,
         Self::Redo,
         Self::Save,
@@ -1412,6 +1438,8 @@ impl ShortcutAction {
             (Self::ToolConnector, AppLanguage::English) => "Diagram Connector Tool",
             (Self::ToolStickyNote, AppLanguage::Indonesian) => "Catatan Tempel (Sticky Note)",
             (Self::ToolStickyNote, AppLanguage::English) => "Sticky Note Tool",
+            (Self::ToolEquation, AppLanguage::Indonesian) => "Formula Matematika (LaTeX)",
+            (Self::ToolEquation, AppLanguage::English) => "Math Equation Tool (LaTeX)",
             (Self::Undo, AppLanguage::Indonesian) => "Batalkan (Undo)",
             (Self::Undo, AppLanguage::English) => "Undo",
             (Self::Redo, AppLanguage::Indonesian) => "Ulangi (Redo)",
@@ -1455,6 +1483,7 @@ impl ShortcutAction {
             Self::ToolShape => KeyBinding::plain("S"),
             Self::ToolConnector => KeyBinding::plain("C"),
             Self::ToolStickyNote => KeyBinding::plain("N"),
+            Self::ToolEquation => KeyBinding::alt("E"),
             Self::Undo => KeyBinding::ctrl("Z"),
             Self::Redo => KeyBinding::ctrl("Y"),
             Self::Save => KeyBinding::ctrl("S"),

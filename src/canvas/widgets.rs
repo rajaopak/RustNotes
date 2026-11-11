@@ -1239,3 +1239,190 @@ pub fn render_inline_text_editor(
         }
     }
 }
+
+/// Dialog modal untuk membuat dan mengedit rumus matematika LaTeX (Task 10)
+pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState, page: &mut Page) {
+    if !state.show_equation_dialog {
+        return;
+    }
+
+    let mut open = true;
+    let title = if state.editing_equation_id.is_some() {
+        "📐 Edit Rumus Matematika (LaTeX)"
+    } else {
+        "📐 Sisipkan Rumus Matematika (LaTeX)"
+    };
+
+    let mut insert_action = false;
+    let mut close_action = false;
+
+    egui::Window::new(title)
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(true)
+        .default_width(480.0)
+        .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+        .show(ctx, |ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+
+            ui.horizontal(|ui| {
+                ui.label("Ukuran Font:");
+                ui.add(egui::Slider::new(&mut state.equation_font_size, 12.0..=64.0).suffix(" pt"));
+            });
+
+            // Quick LaTeX Snippet Buttons
+            ui.label(
+                egui::RichText::new("Simbol & Rumus Cepat:")
+                    .size(12.0)
+                    .strong(),
+            );
+            ui.horizontal_wrapped(|ui| {
+                let snippets = [
+                    (r"\frac{a}{b}", r"\frac{a}{b}"),
+                    (r"\sqrt{x}", r"\sqrt{x}"),
+                    (r"x^{2}", r"^{2}"),
+                    (r"x_{i}", r"_{i}"),
+                    (r"\sum", r"\sum_{i=1}^{n}"),
+                    (r"\int", r"\int_{a}^{b}"),
+                    (r"\alpha", r"\alpha"),
+                    (r"\beta", r"\beta"),
+                    (r"\pi", r"\pi"),
+                    (r"\theta", r"\theta"),
+                    (r"\pm", r"\pm"),
+                    (r"\times", r"\times"),
+                    (r"\leq", r"\leq"),
+                    (r"\geq", r"\geq"),
+                    (r"\neq", r"\neq"),
+                    (r"\approx", r"\approx"),
+                    (r"\infty", r"\infty"),
+                    (r"\to", r"\to"),
+                ];
+                for (lbl, snip) in snippets {
+                    if ui.button(lbl).clicked() {
+                        state.equation_latex_buffer.push_str(snip);
+                    }
+                }
+            });
+
+            ui.separator();
+
+            ui.label("Kode LaTeX:");
+            let text_edit = egui::TextEdit::multiline(&mut state.equation_latex_buffer)
+                .desired_rows(3)
+                .desired_width(f32::INFINITY)
+                .font(egui::TextStyle::Monospace)
+                .hint_text(r"Contoh: E = mc^2 atau \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}");
+            ui.add(text_edit);
+
+            ui.separator();
+
+            // Live Preview Box
+            ui.label(egui::RichText::new("Pratinjau Visual:").size(12.0).strong());
+            let parse_result =
+                crate::geometry::math::parse_latex_math(&state.equation_latex_buffer);
+            match parse_result {
+                Ok(nodes) => {
+                    let preview_font_size = state.equation_font_size.clamp(14.0, 36.0);
+                    let layout =
+                        crate::geometry::math::MathLayout::compute(&nodes, preview_font_size);
+                    let box_w = (layout.width + 40.0).max(ui.available_width());
+                    let box_h = (layout.height + 30.0).max(60.0);
+
+                    let (rect, _resp) =
+                        ui.allocate_exact_size(Vec2::new(box_w, box_h), egui::Sense::hover());
+                    if ui.is_rect_visible(rect) {
+                        let painter = ui.painter_at(rect);
+                        let bg_col = if ui.visuals().dark_mode {
+                            Color32::from_rgb(32, 32, 36)
+                        } else {
+                            Color32::from_rgb(248, 249, 250)
+                        };
+                        let border_col = if ui.visuals().dark_mode {
+                            Color32::from_rgb(60, 60, 65)
+                        } else {
+                            Color32::from_rgb(220, 224, 230)
+                        };
+                        painter.rect_filled(rect, 4.0, bg_col);
+                        painter.rect_stroke(
+                            rect,
+                            4.0,
+                            Stroke::new(1.0_f32, border_col),
+                            egui::StrokeKind::Outside,
+                        );
+
+                        let text_col = if ui.visuals().dark_mode {
+                            Color32::from_rgb(240, 240, 245)
+                        } else {
+                            Color32::from_rgb(20, 20, 25)
+                        };
+
+                        let render_x = rect.min.x + (rect.width() - layout.width).max(0.0) * 0.5;
+                        let render_y = rect.min.y + (rect.height() - layout.height).max(0.0) * 0.5;
+                        layout.render(&painter, Pos2::new(render_x, render_y), 1.0, 0.0, text_col);
+                    }
+                }
+                Err(err) => {
+                    ui.colored_label(
+                        Color32::from_rgb(235, 87, 87),
+                        format!("⚠️ Kesalahan sintaks: {}", err),
+                    );
+                }
+            }
+
+            ui.separator();
+
+            ui.horizontal(|ui| {
+                if ui.button("Simpan / Masukkan").clicked() {
+                    insert_action = true;
+                }
+                if ui.button("Batal").clicked() {
+                    close_action = true;
+                }
+            });
+        });
+
+    if !open || close_action {
+        state.show_equation_dialog = false;
+        state.editing_equation_id = None;
+        state.equation_latex_buffer.clear();
+    } else if insert_action {
+        let clean_latex = state.equation_latex_buffer.trim().to_string();
+        if !clean_latex.is_empty() {
+            state.push_undo(&page.id, &page.objects);
+            if let Some(ref edit_id) = state.editing_equation_id {
+                for obj in &mut page.objects {
+                    if obj.id() == edit_id {
+                        if let DrawObject::Equation {
+                            latex, font_size, ..
+                        } = obj
+                        {
+                            *latex = clean_latex.clone();
+                            *font_size = state.equation_font_size;
+                        }
+                        break;
+                    }
+                }
+            } else {
+                let new_id = uuid::Uuid::new_v4().to_string();
+                let insert_pos = state.equation_insert_pos;
+                let new_obj = DrawObject::Equation {
+                    id: new_id.clone(),
+                    latex: clean_latex,
+                    x: insert_pos.x,
+                    y: insert_pos.y,
+                    font_size: state.equation_font_size,
+                    scale: 1.0,
+                    color: state.text_color.into(),
+                    rotation: 0.0,
+                    locked: false,
+                };
+                page.objects.push(new_obj);
+                state.selected_ids = vec![new_id];
+            }
+            state.spatial_grid.rebuild(&page.objects);
+        }
+        state.show_equation_dialog = false;
+        state.editing_equation_id = None;
+        state.equation_latex_buffer.clear();
+    }
+}

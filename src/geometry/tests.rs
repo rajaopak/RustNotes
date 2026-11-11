@@ -3376,3 +3376,247 @@ fn test_highlighter_tessellation_no_ribbon_inversion() {
         );
     }
 }
+
+#[test]
+fn test_latex_tokenizer_and_parser() {
+    // 1. Basic formula
+    let ast = parse_latex_math("x + y = z").expect("Failed to parse basic formula");
+    assert!(!ast.is_empty());
+
+    // 2. Fraction
+    let frac_ast = parse_latex_math(r"\frac{a + 1}{b - 2}").expect("Failed to parse fraction");
+    assert!(frac_ast.iter().any(|n| matches!(n, MathNode::Frac { .. })));
+
+    // 3. Square root & nth root
+    let sqrt_ast = parse_latex_math(r"\sqrt{x^2 + y^2}").expect("Failed to parse sqrt");
+    assert!(
+        sqrt_ast
+            .iter()
+            .any(|n| matches!(n, MathNode::Radical { .. }))
+    );
+    let root3_ast = parse_latex_math(r"\sqrt[3]{27}").expect("Failed to parse nth root");
+    assert!(
+        root3_ast
+            .iter()
+            .any(|n| matches!(n, MathNode::Radical { .. }))
+    );
+
+    // 4. Subscript & Superscript
+    let sub_sup_ast = parse_latex_math("x_1^2 + a_{ij}").expect("Failed to parse sub/super");
+    assert!(
+        sub_sup_ast
+            .iter()
+            .any(|n| matches!(n, MathNode::SubSup { sup: Some(_), .. }))
+    );
+    assert!(
+        sub_sup_ast
+            .iter()
+            .any(|n| matches!(n, MathNode::SubSup { sub: Some(_), .. }))
+    );
+
+    // 5. Large Operators (Sum, Integral)
+    let sum_ast = parse_latex_math(r"\sum_{i=1}^{n} x_i").expect("Failed to parse sum");
+    assert!(!sum_ast.is_empty());
+    let int_ast = parse_latex_math(r"\int_{0}^{\infty} e^{-x} dx").expect("Failed to parse int");
+    assert!(!int_ast.is_empty());
+
+    // 6. Greek & Operators
+    let greek_ast =
+        parse_latex_math(r"\alpha + \beta = \pi \pm \theta").expect("Failed to parse greek");
+    assert!(!greek_ast.is_empty());
+
+    // 7. Functions
+    let fn_ast = parse_latex_math(r"\sin(x) + \cos(\theta) = \ln(y)").expect("Failed to parse fn");
+    assert!(!fn_ast.is_empty());
+
+    // 8. Text block
+    let txt_ast = parse_latex_math(r"x = 5 \text{ meter}").expect("Failed to parse text");
+    assert!(
+        txt_ast
+            .iter()
+            .any(|n| matches!(n, MathNode::Text(t) if t == " meter"))
+    );
+
+    // 9. Error resilience on incomplete syntax
+    let err_result = parse_latex_math(r"\frac{unclosed");
+    assert!(err_result.is_err(), "Unclosed braces should return error");
+}
+
+#[test]
+fn test_math_layout_dimensions() {
+    let layout = MathLayout::compute_from_str(r"E = mc^2", 24.0);
+    assert!(layout.width > 20.0);
+    assert!(layout.height > 10.0);
+    assert!(!layout.items.is_empty());
+
+    // Fraction layout creates fraction bar line
+    let frac_layout = MathLayout::compute_from_str(r"\frac{1}{2}", 24.0);
+    let has_line = frac_layout
+        .items
+        .iter()
+        .any(|item| matches!(item, MathLayoutItem::Line { .. }));
+    assert!(has_line, "Fraction must include a division line segment");
+
+    // Radical layout creates radical bar line
+    let sqrt_layout = MathLayout::compute_from_str(r"\sqrt{x}", 24.0);
+    let has_sqrt_line = sqrt_layout
+        .items
+        .iter()
+        .any(|item| matches!(item, MathLayoutItem::Line { .. }));
+    assert!(
+        has_sqrt_line,
+        "Radical must include an overline line segment"
+    );
+}
+
+#[test]
+fn test_equation_draw_object_transforms() {
+    let mut eq = DrawObject::Equation {
+        id: "eq1".to_string(),
+        latex: r"\frac{-b \pm \sqrt{b^2 - 4ac}}{2a}".to_string(),
+        x: 100.0,
+        y: 100.0,
+        font_size: 22.0,
+        scale: 1.0,
+        color: dummy_color(),
+        rotation: 0.0,
+        locked: false,
+    };
+
+    // 1. Translate
+    translate_object(&mut eq, 50.0, -20.0);
+    if let DrawObject::Equation { x, y, .. } = eq {
+        assert_eq!(x, 150.0);
+        assert_eq!(y, 80.0);
+    } else {
+        panic!("Object type changed");
+    }
+
+    // 2. Scale
+    scale_object(&mut eq, Pos2::new(0.0, 0.0), 2.0, 2.0);
+    if let DrawObject::Equation { x, y, scale, .. } = eq {
+        assert_eq!(x, 300.0);
+        assert_eq!(y, 160.0);
+        assert_eq!(scale, 2.0);
+    } else {
+        panic!("Object type changed");
+    }
+
+    // 3. Rotate around origin
+    rotate_object(
+        &mut eq,
+        Pos2::new(300.0, 160.0),
+        std::f32::consts::FRAC_PI_2,
+    );
+    if let DrawObject::Equation { rotation, .. } = eq {
+        assert!((rotation - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
+    } else {
+        panic!("Object type changed");
+    }
+
+    // 4. Flip horizontal & vertical
+    flip_object_horizontal(&mut eq, 300.0);
+    flip_object_vertical(&mut eq, 160.0);
+    let b = object_bounds(&eq);
+    assert!(b.is_finite());
+}
+
+#[test]
+fn test_equation_selection_frame() {
+    let eq = DrawObject::Equation {
+        id: "eq_sel".to_string(),
+        latex: r"A = \pi r^2".to_string(),
+        x: 50.0,
+        y: 50.0,
+        font_size: 20.0,
+        scale: 1.0,
+        color: dummy_color(),
+        rotation: 0.25,
+        locked: false,
+    };
+
+    let frame = SelectionFrame::from_objects(&[&eq], 24.0)
+        .expect("SelectionFrame should exist for Equation");
+    assert!(frame.local_size.x > 10.0);
+    assert!(frame.local_size.y > 10.0);
+    assert_eq!(frame.rotation, 0.25);
+    for c in &frame.corners {
+        assert!(c.x.is_finite() && c.y.is_finite());
+    }
+}
+
+#[test]
+fn test_equation_hit_test_and_lasso() {
+    let eq = DrawObject::Equation {
+        id: "eq_hit".to_string(),
+        latex: r"y = mx + b".to_string(),
+        x: 100.0,
+        y: 100.0,
+        font_size: 20.0,
+        scale: 1.0,
+        color: dummy_color(),
+        rotation: 0.0,
+        locked: false,
+    };
+
+    // Hit test at center
+    let bounds = object_bounds(&eq);
+    assert!(hit_test_object(&eq, bounds.center(), 5.0));
+    assert!(!hit_test_object(&eq, Pos2::new(0.0, 0.0), 5.0));
+
+    // Lasso containment
+    let lasso_box = vec![
+        Pos2::new(bounds.min.x - 10.0, bounds.min.y - 10.0),
+        Pos2::new(bounds.max.x + 10.0, bounds.min.y - 10.0),
+        Pos2::new(bounds.max.x + 10.0, bounds.max.y + 10.0),
+        Pos2::new(bounds.min.x - 10.0, bounds.max.y + 10.0),
+    ];
+    assert!(object_contained_in_lasso(&eq, &lasso_box));
+    assert!(object_in_lasso(&eq, &lasso_box));
+
+    // Outside lasso
+    let outside_lasso = vec![
+        Pos2::new(0.0, 0.0),
+        Pos2::new(20.0, 0.0),
+        Pos2::new(20.0, 20.0),
+        Pos2::new(0.0, 20.0),
+    ];
+    assert!(!object_contained_in_lasso(&eq, &outside_lasso));
+    assert!(!object_in_lasso(&eq, &outside_lasso));
+}
+
+#[test]
+fn test_equation_serialization_and_svg() {
+    let eq = DrawObject::Equation {
+        id: "eq_serde".to_string(),
+        latex: r"\int x dx = \frac{x^2}{2} + C".to_string(),
+        x: 80.0,
+        y: 120.0,
+        font_size: 24.0,
+        scale: 1.0,
+        color: dummy_color(),
+        rotation: 0.1,
+        locked: false,
+    };
+
+    // JSON roundtrip
+    let json = serde_json::to_string(&eq).expect("Failed to serialize Equation");
+    let deserialized: DrawObject =
+        serde_json::from_str(&json).expect("Failed to deserialize Equation");
+    assert_eq!(eq.id(), deserialized.id());
+    if let DrawObject::Equation {
+        latex, font_size, ..
+    } = deserialized
+    {
+        assert_eq!(latex, r"\int x dx = \frac{x^2}{2} + C");
+        assert_eq!(font_size, 24.0);
+    } else {
+        panic!("Wrong variant");
+    }
+
+    // Vector SVG generation
+    let layout = MathLayout::compute_from_str(r"\frac{a}{b}", 24.0);
+    let svg = layout.to_svg(50.0, 50.0, &dummy_color(), 0.0);
+    assert!(svg.contains("<text"));
+    assert!(svg.contains("<line"));
+}

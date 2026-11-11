@@ -7,7 +7,7 @@ use super::primitives::{
 use super::state::CanvasState;
 use super::types::{ActiveTool, EraserMode, ResizeCorner};
 pub use super::widgets::FloatingToolbarStyle;
-use super::widgets::render_inline_text_editor;
+use super::widgets::{render_equation_modal_dialog, render_inline_text_editor};
 use super::zoom_window::render_zoom_target_indicator;
 use crate::geometry::{
     ShapeTransformBox, TransformHandleKind, calculate_proportional_scale,
@@ -517,7 +517,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 state.focus_text_edit = true;
                 state.current_tool = ActiveTool::Lasso;
             }
-            ActiveTool::Hand => {}
+            ActiveTool::Hand | ActiveTool::Equation => {}
         }
     }
 
@@ -1922,7 +1922,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         }
     }
 
-    // Double-click pada objek Teks, StickyNote, atau Shape untuk menyunting isinya secara langsung (Task 6.1)
+    // Double-click pada objek Teks, StickyNote, Shape, atau Equation untuk menyunting isinya secara langsung (Task 6.1 & 10)
     if response.double_clicked()
         && let Some(pos) = pointer_pos
     {
@@ -1930,26 +1930,40 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         if let Some(obj) = page.objects.iter_mut().rev().find(|obj| {
             matches!(
                 obj,
-                DrawObject::Text { .. } | DrawObject::StickyNote { .. } | DrawObject::Shape { .. }
+                DrawObject::Text { .. }
+                    | DrawObject::StickyNote { .. }
+                    | DrawObject::Shape { .. }
+                    | DrawObject::Equation { .. }
             ) && hit_test_object(obj, page_p, 8.0 / state.zoom)
         }) && !obj.is_locked()
         {
             let id = obj.id().to_string();
-            if let DrawObject::Shape { label, color, .. } = obj
-                && label.is_none()
+            if let DrawObject::Equation {
+                latex, font_size, ..
+            } = obj
             {
-                *label = Some(crate::model::ShapeLabel {
-                    text: String::new(),
-                    font_size: 16.0,
-                    color: color.clone(),
-                    alignment: crate::model::TextAlign::Center,
-                    vertical_alignment: crate::model::VerticalAlign::Middle,
-                });
+                state.show_equation_dialog = true;
+                state.editing_equation_id = Some(id.clone());
+                state.equation_latex_buffer = latex.clone();
+                state.equation_font_size = *font_size;
+                state.selected_ids = vec![id];
+            } else {
+                if let DrawObject::Shape { label, color, .. } = obj
+                    && label.is_none()
+                {
+                    *label = Some(crate::model::ShapeLabel {
+                        text: String::new(),
+                        font_size: 16.0,
+                        color: color.clone(),
+                        alignment: crate::model::TextAlign::Center,
+                        vertical_alignment: crate::model::VerticalAlign::Middle,
+                    });
+                }
+                state.push_undo(&page.id, &page.objects);
+                state.selected_ids = vec![id.clone()];
+                state.editing_text_id = Some(id);
+                state.focus_text_edit = true;
             }
-            state.push_undo(&page.id, &page.objects);
-            state.selected_ids = vec![id.clone()];
-            state.editing_text_id = Some(id);
-            state.focus_text_edit = true;
         }
     }
 
@@ -2029,6 +2043,42 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
             state.selected_ids = vec![id.clone()];
             state.editing_text_id = Some(id);
             state.focus_text_edit = true;
+            state.current_tool = ActiveTool::Lasso;
+        } else if state.current_tool == ActiveTool::Equation {
+            let hit_eq = page
+                .objects
+                .iter()
+                .rev()
+                .find(|obj| {
+                    matches!(obj, DrawObject::Equation { .. })
+                        && hit_test_object(obj, page_p, 8.0 / state.zoom)
+                })
+                .map(|o| {
+                    (
+                        o.id().to_string(),
+                        if let DrawObject::Equation {
+                            latex, font_size, ..
+                        } = o
+                        {
+                            (latex.clone(), *font_size)
+                        } else {
+                            (String::new(), 22.0)
+                        },
+                    )
+                });
+
+            if let Some((id, (latex, fsz))) = hit_eq {
+                state.show_equation_dialog = true;
+                state.editing_equation_id = Some(id.clone());
+                state.equation_latex_buffer = latex;
+                state.equation_font_size = fsz;
+                state.selected_ids = vec![id];
+            } else {
+                state.show_equation_dialog = true;
+                state.editing_equation_id = None;
+                state.equation_insert_pos = page_p;
+                state.equation_latex_buffer = String::new();
+            }
             state.current_tool = ActiveTool::Lasso;
         } else if state.current_tool == ActiveTool::Eraser {
             state.eraser_undo_pushed = false;
@@ -2187,6 +2237,9 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
 
     // 9. Inline Text / StickyNote / Shape Text Editor langsung di atas kanvas halaman
     render_inline_text_editor(ui, &painter, page, state, page_to_screen);
+
+    // 10. Dialog Modal LaTeX Equation Tool (Task 10)
+    render_equation_modal_dialog(ui.ctx(), state, page);
 
     // Context menu on selection or blank canvas
     let has_selection_on_this_page = !state.selected_ids.is_empty()

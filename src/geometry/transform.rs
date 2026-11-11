@@ -29,6 +29,10 @@ pub fn translate_object(obj: &mut DrawObject, dx: f32, dy: f32) {
             *x += dx;
             *y += dy;
         }
+        DrawObject::Equation { x, y, .. } => {
+            *x += dx;
+            *y += dy;
+        }
         DrawObject::Connector {
             start,
             end,
@@ -118,6 +122,20 @@ pub fn scale_object(obj: &mut DrawObject, origin: Pos2, sx: f32, sy: f32) {
             *width *= sx;
             *height *= sy;
         }
+        DrawObject::Equation {
+            x,
+            y,
+            scale,
+            locked,
+            ..
+        } => {
+            if *locked {
+                return;
+            }
+            *x = origin.x + (*x - origin.x) * sx;
+            *y = origin.y + (*y - origin.y) * sy;
+            *scale *= (sx.abs() + sy.abs()) / 2.0;
+        }
         DrawObject::Connector {
             start,
             end,
@@ -192,6 +210,22 @@ pub fn flip_object_horizontal(obj: &mut DrawObject, center_x: f32) {
         DrawObject::Image { x, width, .. } => {
             *x = 2.0 * center_x - (*x + *width);
         }
+        DrawObject::Equation {
+            x,
+            latex,
+            font_size,
+            scale,
+            locked,
+            ..
+        } => {
+            if *locked {
+                return;
+            }
+            let eff_font = *font_size * *scale;
+            let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+            let width = layout.width.max(20.0);
+            *x = 2.0 * center_x - (*x + width);
+        }
         DrawObject::Connector {
             start,
             end,
@@ -262,6 +296,22 @@ pub fn flip_object_vertical(obj: &mut DrawObject, center_y: f32) {
         }
         DrawObject::Image { y, height, .. } => {
             *y = 2.0 * center_y - (*y + *height);
+        }
+        DrawObject::Equation {
+            y,
+            latex,
+            font_size,
+            scale,
+            locked,
+            ..
+        } => {
+            if *locked {
+                return;
+            }
+            let eff_font = *font_size * *scale;
+            let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+            let height = layout.height.max(eff_font);
+            *y = 2.0 * center_y - (*y + height);
         }
         DrawObject::Connector {
             start,
@@ -389,6 +439,28 @@ pub fn rotate_object(obj: &mut DrawObject, origin: Pos2, angle_rad: f32) {
             *x = nx - *width / 2.0;
             *y = ny - *height / 2.0;
             *rotation += angle_rad;
+        }
+        DrawObject::Equation {
+            x,
+            y,
+            rotation,
+            latex,
+            font_size,
+            scale,
+            locked,
+            ..
+        } => {
+            if *locked {
+                return;
+            }
+            let eff_font = *font_size * *scale;
+            let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+            let cx = *x + layout.width * 0.5;
+            let cy = *y + layout.height * 0.5;
+            let (ncx, ncy) = rotate_pt(cx, cy);
+            *x = ncx - layout.width * 0.5;
+            *y = ncy - layout.height * 0.5;
+            *rotation = (*rotation + angle_rad).rem_euclid(std::f32::consts::TAU);
         }
         DrawObject::Connector {
             start,
@@ -557,6 +629,25 @@ fn rotate_object_90_cw(obj: &mut DrawObject, old_h: f32) {
             *y = ncy - *height / 2.0;
             *rotation = (*rotation + std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::TAU);
         }
+        DrawObject::Equation {
+            x,
+            y,
+            rotation,
+            latex,
+            font_size,
+            scale,
+            ..
+        } => {
+            let eff_font = *font_size * *scale;
+            let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+            let cx = *x + layout.width * 0.5;
+            let cy = *y + layout.height * 0.5;
+            let ncx = old_h - cy;
+            let ncy = cx;
+            *x = ncx - layout.width * 0.5;
+            *y = ncy - layout.height * 0.5;
+            *rotation = (*rotation + std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::TAU);
+        }
         DrawObject::Connector {
             start,
             end,
@@ -701,6 +792,25 @@ fn rotate_object_90_ccw(obj: &mut DrawObject, old_w: f32) {
             *y = ncy - *height / 2.0;
             *rotation = (*rotation - std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::TAU);
         }
+        DrawObject::Equation {
+            x,
+            y,
+            rotation,
+            latex,
+            font_size,
+            scale,
+            ..
+        } => {
+            let eff_font = *font_size * *scale;
+            let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+            let cx = *x + layout.width * 0.5;
+            let cy = *y + layout.height * 0.5;
+            let ncx = cy;
+            let ncy = old_w - cx;
+            *x = ncx - layout.width * 0.5;
+            *y = ncy - layout.height * 0.5;
+            *rotation = (*rotation - std::f32::consts::FRAC_PI_2).rem_euclid(std::f32::consts::TAU);
+        }
         DrawObject::Connector {
             start,
             end,
@@ -836,6 +946,25 @@ fn rotate_object_180(obj: &mut DrawObject, old_w: f32, old_h: f32) {
             let ncy = old_h - cy;
             *x = ncx - *width / 2.0;
             *y = ncy - *height / 2.0;
+            *rotation = (*rotation + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU);
+        }
+        DrawObject::Equation {
+            x,
+            y,
+            rotation,
+            latex,
+            font_size,
+            scale,
+            ..
+        } => {
+            let eff_font = *font_size * *scale;
+            let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+            let cx = *x + layout.width * 0.5;
+            let cy = *y + layout.height * 0.5;
+            let ncx = old_w - cx;
+            let ncy = old_h - cy;
+            *x = ncx - layout.width * 0.5;
+            *y = ncy - layout.height * 0.5;
             *rotation = (*rotation + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU);
         }
         DrawObject::Connector {

@@ -765,6 +765,20 @@ pub fn export_page_to_svg(page: &Page) -> String {
                     }
                 }
             }
+            crate::model::DrawObject::Equation {
+                x,
+                y,
+                latex,
+                font_size,
+                scale,
+                color,
+                rotation,
+                ..
+            } => {
+                let eff_font = *font_size * *scale;
+                let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+                out.push_str(&layout.to_svg(*x, *y, color, *rotation));
+            }
         }
     }
 

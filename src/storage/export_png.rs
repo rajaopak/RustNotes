@@ -867,6 +867,83 @@ pub fn export_page_to_png(
                     *italic,
                 );
             }
+            crate::model::DrawObject::Equation {
+                x,
+                y,
+                latex,
+                font_size,
+                scale: eq_scale,
+                color,
+                rotation,
+                ..
+            } => {
+                let eff_font = *font_size * *eq_scale;
+                let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+                let col = [color.r, color.g, color.b, color.a];
+                let center_x = (*x + layout.width * 0.5) * scale;
+                let center_y = (*y + layout.height * 0.5) * scale;
+                let cos_a = rotation.cos();
+                let sin_a = rotation.sin();
+                let is_rot = rotation.abs() > 1e-4;
+
+                let rot_pt = |pt: eframe::egui::Pos2| -> eframe::egui::Pos2 {
+                    if !is_rot {
+                        pt
+                    } else {
+                        let dx = pt.x - center_x;
+                        let dy = pt.y - center_y;
+                        eframe::egui::Pos2::new(
+                            center_x + dx * cos_a - dy * sin_a,
+                            center_y + dx * sin_a + dy * cos_a,
+                        )
+                    }
+                };
+
+                for item in &layout.items {
+                    match item {
+                        crate::geometry::math::MathLayoutItem::Glyph {
+                            text,
+                            font_size: g_font,
+                            is_italic,
+                            pos: g_pos,
+                        } => {
+                            let item_x = (*x + g_pos.x) * scale;
+                            let item_y = (*y + g_pos.y) * scale;
+                            let final_pos = rot_pt(eframe::egui::Pos2::new(item_x, item_y));
+                            draw_egui_text(
+                                &mut img,
+                                &fonts,
+                                final_pos.x / scale,
+                                final_pos.y / scale,
+                                text,
+                                *g_font,
+                                col,
+                                scale,
+                                *rotation,
+                                crate::model::FontFamilyPreset::Serif,
+                                false,
+                                *is_italic,
+                            );
+                        }
+                        crate::geometry::math::MathLayoutItem::Line {
+                            start,
+                            end,
+                            stroke_width,
+                        } => {
+                            let p1 = rot_pt(eframe::egui::Pos2::new(
+                                (*x + start.x) * scale,
+                                (*y + start.y) * scale,
+                            ));
+                            let p2 = rot_pt(eframe::egui::Pos2::new(
+                                (*x + end.x) * scale,
+                                (*y + end.y) * scale,
+                            ));
+                            let r_stroke = (*stroke_width * scale * 0.5).max(1.0);
+                            draw_capsule_segment(&mut img, p1, p2, r_stroke, col);
+                        }
+                    }
+                }
+            }
             crate::model::DrawObject::Connector { style, .. } => {
                 if let Some(poly) = crate::geometry::connector_polyline(obj, &page.objects)
                     && poly.len() >= 2

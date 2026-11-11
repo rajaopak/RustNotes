@@ -108,6 +108,13 @@ pub struct CanvasState {
     // Task 6: Lasso selection mode (Containment vs Intersection)
     pub lasso_selection_mode: crate::model::LassoSelectionMode,
 
+    // Task 10: Equation Tool State & Modal Dialog
+    pub show_equation_dialog: bool,
+    pub equation_latex_buffer: String,
+    pub editing_equation_id: Option<String>,
+    pub equation_insert_pos: Pos2,
+    pub equation_font_size: f32,
+
     // Fase G7: Connector interactive creation & snapping state
     pub draft_connector_start: Option<crate::model::ConnectorEnd>,
     pub draft_connector_current: Option<crate::model::Point2D>,
@@ -190,6 +197,11 @@ impl Default for CanvasState {
             text_color: Color32::from_rgb(35, 35, 35),
             sticky_bg_color: Color32::from_rgb(254, 243, 189),
             lasso_selection_mode: crate::model::LassoSelectionMode::default(),
+            show_equation_dialog: false,
+            equation_latex_buffer: String::new(),
+            editing_equation_id: None,
+            equation_insert_pos: Pos2::new(100.0, 100.0),
+            equation_font_size: 22.0,
             draft_connector_start: None,
             draft_connector_current: None,
             connector_snap_candidate: None,
@@ -375,7 +387,8 @@ impl CanvasState {
                     | DrawObject::Text { id, .. }
                     | DrawObject::StickyNote { id, .. }
                     | DrawObject::Image { id, .. }
-                    | DrawObject::Connector { id, .. } => *id = new_id.clone(),
+                    | DrawObject::Connector { id, .. }
+                    | DrawObject::Equation { id, .. } => *id = new_id.clone(),
                 }
                 new_ids.push(new_id);
                 duplicated.push(clone);
@@ -417,7 +430,8 @@ impl CanvasState {
                 | DrawObject::Text { id, .. }
                 | DrawObject::StickyNote { id, .. }
                 | DrawObject::Image { id, .. }
-                | DrawObject::Connector { id, .. } => *id = new_id.clone(),
+                | DrawObject::Connector { id, .. }
+                | DrawObject::Equation { id, .. } => *id = new_id.clone(),
             }
             new_ids.push(new_id);
         }

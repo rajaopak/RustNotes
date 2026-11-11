@@ -517,6 +517,11 @@ impl RustNotesApp {
                                 (ActiveTool::Lasso, "✂", "Lasso Selection (L)"),
                                 (ActiveTool::Text, "T", "Text Box (T)"),
                                 (ActiveTool::StickyNote, "🗒", "Sticky Note"),
+                                (
+                                    ActiveTool::Equation,
+                                    "∑",
+                                    "Equation / LaTeX Tool (Alt+E)",
+                                ),
                                 (ActiveTool::Laser, "✨", "Laser Pointer"),
                                 (ActiveTool::Hand, "✋", "Hand / Pan Mode (Space)"),
                             ];
@@ -561,6 +566,11 @@ impl RustNotesApp {
                                         self.show_doc_title_popup = false;
                                     } else {
                                         self.canvas_state.current_tool = tool_var;
+                                        if tool_var == ActiveTool::Equation {
+                                            self.canvas_state.show_equation_dialog = true;
+                                            self.canvas_state.editing_equation_id = None;
+                                            self.canvas_state.equation_latex_buffer.clear();
+                                        }
                                     }
                                 }
                             }
@@ -679,6 +689,11 @@ impl RustNotesApp {
                                 (ActiveTool::Lasso, "✂", "Lasso Selection (L)"),
                                 (ActiveTool::Text, "T", "Text Box (T)"),
                                 (ActiveTool::StickyNote, "🗒", "Sticky Note"),
+                                (
+                                    ActiveTool::Equation,
+                                    "∑",
+                                    "Equation / LaTeX Tool (Alt+E)",
+                                ),
                                 (ActiveTool::Laser, "✨", "Laser Pointer"),
                                 (ActiveTool::Hand, "✋", "Hand / Pan Mode (Space)"),
                             ];
@@ -723,6 +738,11 @@ impl RustNotesApp {
                                         self.show_doc_title_popup = false;
                                     } else {
                                         self.canvas_state.current_tool = tool_var;
+                                        if tool_var == ActiveTool::Equation {
+                                            self.canvas_state.show_equation_dialog = true;
+                                            self.canvas_state.editing_equation_id = None;
+                                            self.canvas_state.equation_latex_buffer.clear();
+                                        }
                                     }
                                 }
                             }

@@ -791,6 +791,24 @@ impl SelectionFrame {
                         stem_length,
                     ));
                 }
+                crate::model::DrawObject::Equation {
+                    x,
+                    y,
+                    latex,
+                    font_size,
+                    scale,
+                    rotation,
+                    ..
+                } => {
+                    let eff_font = *font_size * *scale;
+                    let layout =
+                        crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+                    let w = layout.width.max(20.0);
+                    let h = layout.height.max(eff_font);
+                    let pivot = Pos2::new(*x + w * 0.5, *y + h * 0.5);
+                    let rot = *rotation;
+                    return Some(Self::new(pivot, Vec2::new(w, h), rot, stem_length));
+                }
                 crate::model::DrawObject::Connector { .. } => {
                     // Connector menggunakan waypoint handles tersendiri
                     return None;
