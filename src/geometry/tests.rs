@@ -3922,3 +3922,69 @@ fn test_lasso_encloses_single_point_stroke_dot() {
     assert!(!object_contained_in_lasso(&dot, &tight_lasso));
     assert!(object_in_lasso(&dot, &tight_lasso));
 }
+
+#[test]
+fn test_stroke_radius_at_pressure_dynamic_range() {
+    let base_width = 20.0;
+
+    // 1. Min pressure (0.05 clamped) produces minimum radius (0.5 minimum bound)
+    let r_min = stroke_radius_at_pressure(base_width, 0.05, false);
+    assert!((r_min - 0.5).abs() < 1e-4);
+
+    // 2. Mid pressure produces proportional radius
+    let r_mid = stroke_radius_at_pressure(base_width, 0.5, false);
+    assert!((r_mid - 5.0).abs() < 1e-4);
+
+    // 3. Full pressure produces maximum half-width radius
+    let r_max = stroke_radius_at_pressure(base_width, 1.0, false);
+    assert!((r_max - 10.0).abs() < 1e-4);
+
+    // Dynamic range is 20x (from min 0.5 up to 10.0)
+    assert!((r_max / r_min - 20.0).abs() < 1e-4);
+
+    // 4. Highlighter is completely independent of pressure
+    let r_hl_light = stroke_radius_at_pressure(base_width, 0.1, true);
+    let r_hl_heavy = stroke_radius_at_pressure(base_width, 1.0, true);
+    assert_eq!(r_hl_light, r_hl_heavy);
+    assert_eq!(r_hl_light, 10.0);
+}
+
+#[test]
+fn test_tessellate_single_point_pressure_mesh() {
+    let pt_light = vec![StrokePoint::new(100.0, 100.0, 0.1)];
+    let pt_heavy = vec![StrokePoint::new(100.0, 100.0, 1.0)];
+
+    let mesh_light = tessellate_stroke_styled(
+        &pt_light,
+        20.0,
+        Color32::BLACK,
+        false,
+        StrokeStyle::Solid,
+        &|p| p,
+    );
+    let mesh_heavy = tessellate_stroke_styled(
+        &pt_heavy,
+        20.0,
+        Color32::BLACK,
+        false,
+        StrokeStyle::Solid,
+        &|p| p,
+    );
+
+    let max_dist = |mesh: &eframe::egui::Mesh| {
+        mesh.vertices
+            .iter()
+            .map(|v| (v.pos - Pos2::new(100.0, 100.0)).length())
+            .fold(0.0_f32, f32::max)
+    };
+
+    let dist_light = max_dist(&mesh_light);
+    let dist_heavy = max_dist(&mesh_heavy);
+
+    // Radius light should be 20.0 * 0.1 / 2.0 = 1.0
+    assert!((dist_light - 1.0).abs() < 0.1);
+    // Radius heavy should be 20.0 * 1.0 / 2.0 = 10.0
+    assert!((dist_heavy - 10.0).abs() < 0.1);
+    // Full 10x dynamic range verified on rendered mesh vertices
+    assert!(dist_heavy > dist_light * 8.0);
+}

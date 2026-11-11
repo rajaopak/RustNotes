@@ -1445,3 +1445,85 @@ fn test_text_and_sticky_formatting_and_undo() {
         assert!(!*bold);
     }
 }
+
+#[test]
+fn test_canvas_state_effective_pressure_affine_calibration() {
+    let mut state = CanvasState::default();
+    assert!(state.pressure_sensitivity_enabled);
+
+    // Default min 0.2, mult 1.0
+    assert!((state.effective_pressure(0.0) - 0.2).abs() < 1e-4);
+    assert!((state.effective_pressure(0.5) - 0.6).abs() < 1e-4);
+    assert!((state.effective_pressure(1.0) - 1.0).abs() < 1e-4);
+    assert!((state.effective_pressure(f32::NAN) - 0.2).abs() < 1e-4);
+    assert!((state.effective_pressure(-0.5) - 0.2).abs() < 1e-4);
+
+    // Disabled -> always 1.0
+    state.pressure_sensitivity_enabled = false;
+    assert_eq!(state.effective_pressure(0.1), 1.0);
+    assert_eq!(state.effective_pressure(0.0), 1.0);
+
+    // Sensitivity multiplier = 2.0 -> half pressure gives full output
+    state.pressure_sensitivity_enabled = true;
+    state.pressure_multiplier = 2.0;
+    assert!((state.effective_pressure(0.5) - 1.0).abs() < 1e-4);
+    assert!((state.effective_pressure(0.25) - 0.6).abs() < 1e-4);
+}
+
+#[test]
+fn test_stylus_touch_tracking_and_pressure_extraction() {
+    let dev = egui::TouchDeviceId(0);
+    let id_palm = egui::TouchId::from(1u64);
+    let id_stylus = egui::TouchId::from(2u64);
+
+    let events = vec![
+        egui::Event::Touch {
+            device_id: dev,
+            id: id_palm,
+            phase: egui::TouchPhase::Move,
+            pos: Pos2::new(100.0, 500.0),
+            force: Some(0.1),
+        },
+        egui::Event::Touch {
+            device_id: dev,
+            id: id_stylus,
+            phase: egui::TouchPhase::Move,
+            pos: Pos2::new(200.0, 200.0),
+            force: Some(0.75),
+        },
+    ];
+
+    // 1. Initial touch selection based on reference pointer position near stylus
+    let (chosen_id, force) = extract_touch_pressure(&events, None, Some(Pos2::new(205.0, 198.0)));
+    assert_eq!(chosen_id, Some(id_stylus));
+    assert_eq!(force, Some(0.75));
+
+    // 2. Active touch tracking keeps stylus ID even if palm event is ordered differently
+    let reversed_events = vec![
+        egui::Event::Touch {
+            device_id: dev,
+            id: id_stylus,
+            phase: egui::TouchPhase::Move,
+            pos: Pos2::new(210.0, 202.0),
+            force: Some(0.85),
+        },
+        egui::Event::Touch {
+            device_id: dev,
+            id: id_palm,
+            phase: egui::TouchPhase::Move,
+            pos: Pos2::new(95.0, 510.0),
+            force: Some(0.12),
+        },
+    ];
+    let (tracked_id, tracked_force) =
+        extract_touch_pressure(&reversed_events, Some(id_stylus), None);
+    assert_eq!(tracked_id, Some(id_stylus));
+    assert_eq!(tracked_force, Some(0.85));
+
+    // 3. Fallback when no touch events match
+    let empty_events: Vec<egui::Event> = Vec::new();
+    let (fallback_id, fallback_force) =
+        extract_touch_pressure(&empty_events, Some(id_stylus), None);
+    assert_eq!(fallback_id, Some(id_stylus));
+    assert_eq!(fallback_force, None);
+}

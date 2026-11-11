@@ -98,6 +98,15 @@ pub fn tessellate_stroke_ex(
 
 /// Tessellator komprehensif yang mendukung gaya garis (Solid, Dashed, Dash-Dot, Dotted)
 /// dengan komputasi jarak kumulatif (cumulative path distance) agar pola dash konsisten di seluruh kurva.
+#[inline]
+pub fn stroke_radius_at_pressure(base_width: f32, pressure: f32, is_highlighter: bool) -> f32 {
+    if is_highlighter {
+        (base_width / 2.0).max(1.0)
+    } else {
+        (base_width * pressure.clamp(0.05, 1.0) / 2.0).max(0.5)
+    }
+}
+
 pub fn tessellate_stroke_styled(
     points: &[StrokePoint],
     base_width: f32,
@@ -114,11 +123,7 @@ pub fn tessellate_stroke_styled(
     // Dukungan goresan 1 titik (Single-point stroke / tap)
     if points.len() == 1 {
         let center = page_to_screen(points[0].to_pos2());
-        let r = if is_highlighter {
-            (base_width / 2.0).max(1.0)
-        } else {
-            (base_width * (0.35 + 0.65 * points[0].pressure) / 2.0).max(1.0)
-        };
+        let r = stroke_radius_at_pressure(base_width, points[0].pressure, is_highlighter);
         add_round_cap(&mut mesh, center, r, color, 12);
         return mesh;
     }
@@ -133,11 +138,7 @@ pub fn tessellate_stroke_styled(
     let total_len = *dists.last().unwrap_or(&0.0);
     if total_len < 1e-4 {
         let center = page_to_screen(points[0].to_pos2());
-        let r = if is_highlighter {
-            (base_width / 2.0).max(1.0)
-        } else {
-            (base_width * (0.35 + 0.65 * points[0].pressure) / 2.0).max(1.0)
-        };
+        let r = stroke_radius_at_pressure(base_width, points[0].pressure, is_highlighter);
         add_round_cap(&mut mesh, center, r, color, 12);
         return mesh;
     }
@@ -159,11 +160,7 @@ pub fn tessellate_stroke_styled(
             while s <= total_len {
                 let pt = sample_point_at_dist(points, &dists, s);
                 let center = page_to_screen(pt.to_pos2());
-                let r = if is_highlighter {
-                    (base_width / 2.0).max(1.0)
-                } else {
-                    (base_width * (0.35 + 0.65 * pt.pressure) / 2.0).max(0.8)
-                };
+                let r = stroke_radius_at_pressure(base_width, pt.pressure, is_highlighter).max(0.8);
                 add_round_cap(&mut mesh, center, r, color, 10);
                 s += dot_spacing;
             }
@@ -179,11 +176,9 @@ pub fn tessellate_stroke_styled(
                 let sub_pts = slice_stroke_by_dist(points, &dists, s_start, s_end);
                 if sub_pts.len() == 1 {
                     let center = page_to_screen(sub_pts[0].to_pos2());
-                    let r = if is_highlighter {
-                        (base_width / 2.0).max(1.0)
-                    } else {
-                        (base_width * (0.35 + 0.65 * sub_pts[0].pressure) / 2.0).max(1.0)
-                    };
+                    let r =
+                        stroke_radius_at_pressure(base_width, sub_pts[0].pressure, is_highlighter)
+                            .max(1.0);
                     add_round_cap(&mut mesh, center, r, color, 10);
                 } else if sub_pts.len() >= 2 {
                     tessellate_single_ribbon(
@@ -226,11 +221,8 @@ pub fn tessellate_stroke_styled(
                 if s_dot_mid <= total_len {
                     let dot_pt = sample_point_at_dist(points, &dists, s_dot_mid);
                     let center = page_to_screen(dot_pt.to_pos2());
-                    let r = if is_highlighter {
-                        (base_width / 2.0).max(1.0)
-                    } else {
-                        (base_width * (0.35 + 0.65 * dot_pt.pressure) / 2.0).max(0.8)
-                    };
+                    let r = stroke_radius_at_pressure(base_width, dot_pt.pressure, is_highlighter)
+                        .max(0.8);
                     add_round_cap(&mut mesh, center, r, color, 10);
                 }
                 curr += cycle;
@@ -314,11 +306,7 @@ fn tessellate_single_ribbon(
     }
     if points.len() == 1 {
         let center = page_to_screen(points[0].to_pos2());
-        let r = if is_highlighter {
-            (base_width / 2.0).max(1.0)
-        } else {
-            (base_width * (0.35 + 0.65 * points[0].pressure) / 2.0).max(1.0)
-        };
+        let r = stroke_radius_at_pressure(base_width, points[0].pressure, is_highlighter);
         add_round_cap(mesh, center, r, color, 12);
         return;
     }
@@ -366,11 +354,7 @@ fn tessellate_single_ribbon(
     let mut radii = Vec::with_capacity(pts_to_use.len());
     for pt in pts_to_use {
         screen_pts.push(page_to_screen(pt.to_pos2()));
-        let r = if is_highlighter {
-            (base_width / 2.0).max(1.0)
-        } else {
-            (base_width * (0.35 + 0.65 * pt.pressure) / 2.0).max(0.5)
-        };
+        let r = stroke_radius_at_pressure(base_width, pt.pressure, is_highlighter);
         radii.push(r);
     }
 

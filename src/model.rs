@@ -355,6 +355,10 @@ impl From<Pos2> for StrokePoint {
 }
 
 impl StrokePoint {
+    pub fn new(x: f32, y: f32, pressure: f32) -> Self {
+        Self { x, y, pressure }
+    }
+
     pub fn to_pos2(&self) -> Pos2 {
         Pos2::new(self.x, self.y)
     }
@@ -1351,15 +1355,29 @@ fn default_highlighter_opacity() -> f32 {
     HIGHLIGHTER_OPACITY_F32
 }
 
+#[inline]
+pub fn calculate_effective_pressure(enabled: bool, min_p: f32, mult: f32, raw: f32) -> f32 {
+    if !enabled {
+        return 1.0;
+    }
+    if raw.is_nan() || raw <= 0.0 {
+        return min_p.clamp(0.01, 1.0);
+    }
+    let mult = mult.clamp(0.1, 5.0);
+    let min_p = min_p.clamp(0.01, 0.95);
+    let cal = (raw * mult).clamp(0.0, 1.0);
+    (min_p + (1.0 - min_p) * cal).clamp(min_p, 1.0)
+}
+
 impl AppSettings {
+    #[inline]
     pub fn effective_pressure(&self, raw_pressure: f32) -> f32 {
-        if self.pressure_sensitivity_enabled {
-            let mult = self.pressure_multiplier.clamp(0.1, 5.0);
-            let min_p = self.pressure_min.clamp(0.01, 0.9);
-            (raw_pressure * mult).clamp(min_p, 1.0)
-        } else {
-            1.0
-        }
+        calculate_effective_pressure(
+            self.pressure_sensitivity_enabled,
+            self.pressure_min,
+            self.pressure_multiplier,
+            raw_pressure,
+        )
     }
 }
 
@@ -1671,12 +1689,12 @@ mod tests {
     fn test_app_settings_pressure_calculation() {
         let mut settings = AppSettings::default();
         assert!(settings.pressure_sensitivity_enabled);
-        assert_eq!(settings.effective_pressure(0.5), 0.5);
-        assert_eq!(settings.effective_pressure(0.02), 0.1); // clamped to min 0.1
+        assert!((settings.effective_pressure(0.5) - 0.55).abs() < 1e-4);
+        assert!((settings.effective_pressure(0.0) - 0.1).abs() < 1e-4); // clamped to min 0.1
         assert_eq!(settings.effective_pressure(1.0), 1.0);
 
         settings.pressure_multiplier = 1.5;
-        assert_eq!(settings.effective_pressure(0.4), 0.6);
+        assert!((settings.effective_pressure(0.4) - 0.64).abs() < 1e-4);
 
         settings.pressure_sensitivity_enabled = false;
         assert_eq!(settings.effective_pressure(0.2), 1.0); // when disabled, always 1.0

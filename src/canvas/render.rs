@@ -372,14 +372,10 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 // Fase 8.5: Palm Rejection — tolak awal goresan jika multi-touch terdeteksi
                 let multi_touch = ui.input(|i| i.multi_touch().is_some());
                 if !(state.palm_rejection_enabled && multi_touch) {
-                    let raw_pressure = ui.input(|i| {
-                        for event in &i.raw.events {
-                            if let egui::Event::Touch { force: Some(f), .. } = event {
-                                return (*f).clamp(0.05, 1.0);
-                            }
-                        }
-                        1.0
-                    });
+                    let (touch_id, touch_force) =
+                        ui.input(|i| extract_touch_pressure(&i.raw.events, None, Some(pos)));
+                    state.active_touch_id = touch_id;
+                    let raw_pressure = touch_force.unwrap_or(1.0).clamp(0.0, 1.0);
                     let is_highlighter = state.current_tool == ActiveTool::Highlighter;
                     let pressure = if is_highlighter && !state.highlighter_pressure_enabled {
                         1.0
@@ -961,25 +957,38 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                                 && let Some(last) = pts.last()
                                 && (page_p - last.to_pos2()).length() >= min_dist
                             {
-                                let raw_pressure = ui.input(|i| {
-                                    for event in &i.raw.events {
-                                        if let egui::Event::Touch { force: Some(f), .. } = event {
-                                            return (*f).clamp(0.05, 1.0);
-                                        }
-                                    }
-                                    1.0
+                                let (touch_id, touch_force) = ui.input(|i| {
+                                    extract_touch_pressure(
+                                        &i.raw.events,
+                                        state.active_touch_id,
+                                        Some(pos),
+                                    )
                                 });
+                                if touch_id.is_some() && state.active_touch_id.is_none() {
+                                    state.active_touch_id = touch_id;
+                                }
                                 let is_highlighter = state.current_tool == ActiveTool::Highlighter;
                                 let pressure = if (is_highlighter
                                     && !state.highlighter_pressure_enabled)
                                     || !state.pressure_sensitivity_enabled
                                 {
                                     1.0
+                                } else if let Some(f) = touch_force {
+                                    crate::model::calculate_effective_pressure(
+                                        state.pressure_sensitivity_enabled,
+                                        state.pressure_min,
+                                        state.pressure_multiplier,
+                                        f.clamp(0.0, 1.0),
+                                    )
+                                } else if state.active_touch_id.is_some() {
+                                    pts.last().map(|p| p.pressure).unwrap_or(1.0)
                                 } else {
-                                    (state.pressure_min
-                                        + (1.0 - state.pressure_min)
-                                            * (raw_pressure * state.pressure_multiplier))
-                                        .clamp(0.05, 1.0)
+                                    crate::model::calculate_effective_pressure(
+                                        state.pressure_sensitivity_enabled,
+                                        state.pressure_min,
+                                        state.pressure_multiplier,
+                                        1.0,
+                                    )
                                 };
                                 pts.push(StrokePoint {
                                     x: page_p.x,
@@ -1362,7 +1371,19 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                         .last()
                         .is_none_or(|last| (p - last.to_pos2()).length() >= 0.5);
                     if should_append {
-                        let pressure = pts.last().map(|pt| pt.pressure).unwrap_or(1.0);
+                        let (_, touch_force) = ui.input(|i| {
+                            extract_touch_pressure(&i.raw.events, state.active_touch_id, Some(pos))
+                        });
+                        let is_highlighter = state.current_tool == ActiveTool::Highlighter;
+                        let pressure = if (is_highlighter && !state.highlighter_pressure_enabled)
+                            || !state.pressure_sensitivity_enabled
+                        {
+                            1.0
+                        } else if let Some(f) = touch_force {
+                            state.effective_pressure(f.clamp(0.0, 1.0))
+                        } else {
+                            pts.last().map(|pt| pt.pressure).unwrap_or(1.0)
+                        };
                         pts.push(StrokePoint {
                             x: p.x,
                             y: p.y,
@@ -1370,6 +1391,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                         });
                     }
                 }
+                state.active_touch_id = None;
 
                 if !pts.is_empty() {
                     state.push_undo(&page.id, &page.objects);
@@ -2097,14 +2119,11 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
             ActiveTool::Pen | ActiveTool::Pencil | ActiveTool::Highlighter
         ) {
             // Task 1: Dukung click-only / tap tunggal untuk menghasilkan titik goresan yang valid
-            let raw_pressure = ui.input(|i| {
-                for event in &i.raw.events {
-                    if let egui::Event::Touch { force: Some(f), .. } = event {
-                        return (*f).clamp(0.05, 1.0);
-                    }
-                }
-                1.0
+            let (_touch_id, touch_force) = ui.input(|i| {
+                extract_touch_pressure(&i.raw.events, state.active_touch_id, pointer_pos)
             });
+            state.active_touch_id = None;
+            let raw_pressure = touch_force.unwrap_or(1.0).clamp(0.0, 1.0);
             let is_highlighter = state.current_tool == ActiveTool::Highlighter;
             let pressure = if is_highlighter && !state.highlighter_pressure_enabled {
                 1.0
@@ -2340,4 +2359,45 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
     });
 
     response
+}
+
+/// Mengambil TouchId dan gaya tekanan (pressure/force) dari daftar event egui.
+/// Jika `active_id` sudah ada, prioritaskan sentuhan dengan ID tersebut.
+/// Jika belum ada, cari sentuhan yang paling dekat dengan `reference_pos` (atau sentuhan pertama).
+pub(crate) fn extract_touch_pressure(
+    events: &[egui::Event],
+    active_id: Option<egui::TouchId>,
+    reference_pos: Option<Pos2>,
+) -> (Option<egui::TouchId>, Option<f32>) {
+    if let Some(target_id) = active_id {
+        // Cari event terbaru untuk sentuhan yang sedang aktif
+        for event in events.iter().rev() {
+            if let egui::Event::Touch { id, force, .. } = event
+                && *id == target_id
+            {
+                return (Some(target_id), *force);
+            }
+        }
+    }
+
+    // Jika belum ada ID aktif, cari sentuhan terdekat dengan posisi pointer
+    let mut best_candidate: Option<(egui::TouchId, Option<f32>, f32)> = None;
+    for event in events.iter().rev() {
+        if let egui::Event::Touch { id, pos, force, .. } = event {
+            let dist = reference_pos.map(|p| (*pos - p).length()).unwrap_or(0.0);
+            if let Some((_, _, best_dist)) = best_candidate {
+                if dist < best_dist {
+                    best_candidate = Some((*id, *force, dist));
+                }
+            } else {
+                best_candidate = Some((*id, *force, dist));
+            }
+        }
+    }
+
+    if let Some((id, force, _)) = best_candidate {
+        (Some(id), force)
+    } else {
+        (active_id, None)
+    }
 }

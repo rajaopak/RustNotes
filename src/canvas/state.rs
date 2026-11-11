@@ -85,6 +85,7 @@ pub struct CanvasState {
     pub pressure_sensitivity_enabled: bool,
     pub pressure_min: f32,
     pub pressure_multiplier: f32,
+    pub active_touch_id: Option<egui::TouchId>,
 
     // Task 3: Highlighter system configuration
     pub highlighter_opacity: f32,
@@ -184,6 +185,7 @@ impl Default for CanvasState {
             pressure_sensitivity_enabled: true,
             pressure_min: 0.2,
             pressure_multiplier: 1.0,
+            active_touch_id: None,
             highlighter_opacity: crate::model::HIGHLIGHTER_OPACITY_F32,
             highlighter_pressure_enabled: false,
             editing_text_id: None,
@@ -216,12 +218,14 @@ impl Default for CanvasState {
 impl CanvasState {
     pub const MAX_UNDO_DEPTH: usize = 200;
 
+    #[inline]
     pub fn effective_pressure(&self, raw: f32) -> f32 {
-        if !self.pressure_sensitivity_enabled {
-            return 1.0;
-        }
-        (self.pressure_min + (1.0 - self.pressure_min) * (raw * self.pressure_multiplier))
-            .clamp(0.05, 1.0)
+        crate::model::calculate_effective_pressure(
+            self.pressure_sensitivity_enabled,
+            self.pressure_min,
+            self.pressure_multiplier,
+            raw,
+        )
     }
 
     pub fn get_or_load_texture(
