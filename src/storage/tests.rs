@@ -475,25 +475,34 @@ fn test_export_notebook_to_pdf_and_reimport() {
     let nb = Notebook::new("PDF Roundtrip", PageTemplate::Blank, Color32::WHITE);
     let out_pdf = dir.join("exported.pdf");
 
-    let pdfium_available = get_pdfium().is_ok();
     let export_res = export_notebook_to_pdf(dir, &nb, &out_pdf);
+    export_res.expect("Ekspor PDF harus berhasil");
+    assert!(out_pdf.exists());
+    let pdf_bytes = fs::read(&out_pdf).expect("read exported pdf");
+    let imported_pages = import_pdf_to_pages(dir, &nb.id, &pdf_bytes).expect("import pages");
+    assert_eq!(imported_pages.len(), nb.pages.len());
+    assert!(imported_pages[0].background.is_some());
+}
 
-    if pdfium_available {
-        export_res.expect("Ekspor PDF harus berhasil jika pustaka PDFium tersedia");
-        assert!(out_pdf.exists());
-        let pdf_bytes = fs::read(&out_pdf).expect("read exported pdf");
-        let imported_pages = import_pdf_to_pages(dir, &nb.id, &pdf_bytes).expect("import pages");
-        assert_eq!(imported_pages.len(), nb.pages.len());
-        assert!(imported_pages[0].background.is_some());
-    } else {
+#[test]
+fn test_export_pdf_temporary_file_cleanup() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+
+    let nb = Notebook::new("Temp Cleanup", PageTemplate::Blank, Color32::WHITE);
+    let out_pdf = dir.join("clean.pdf");
+
+    let export_res = export_notebook_to_pdf(dir, &nb, &out_pdf);
+    assert!(export_res.is_ok());
+    assert!(out_pdf.exists());
+
+    // Pastikan tidak ada berkas *.tmp.* yang tertinggal di direktori tujuan
+    let read_dir = fs::read_dir(dir).expect("read_dir");
+    for entry in read_dir.flatten() {
+        let fname = entry.file_name().to_string_lossy().to_string();
         assert!(
-            export_res.is_err(),
-            "Ekspor PDF harus mengembalikan Err informatif saat PDFium tidak tersedia"
-        );
-        let err_msg = export_res.unwrap_err();
-        assert!(
-            err_msg.contains("PDFium library tidak ditemukan") || err_msg.contains("pdfium.dll"),
-            "Pesan error harus memuat diagnostik jalur PDFium: {err_msg}"
+            !fname.contains("tmp."),
+            "Berkas sementara tidak boleh tertinggal setelah export: {fname}"
         );
     }
 }
