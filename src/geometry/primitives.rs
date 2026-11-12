@@ -302,8 +302,10 @@ pub fn point_in_polygon(p: Pos2, polygon: &[Pos2]) -> bool {
     for i in 0..polygon.len() {
         let pi = polygon[i];
         let pj = polygon[j];
+        let dy = pj.y - pi.y;
         if (pi.y > p.y) != (pj.y > p.y)
-            && p.x < (pj.x - pi.x) * (p.y - pi.y) / (pj.y - pi.y).max(1e-6) + pi.x
+            && dy.abs() > 1e-9
+            && p.x < (pj.x - pi.x) * (p.y - pi.y) / dy + pi.x
         {
             inside = !inside;
         }

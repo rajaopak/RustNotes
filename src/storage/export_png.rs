@@ -803,37 +803,115 @@ pub fn render_page_to_rgba_image(
                 font_family,
                 bold,
                 italic,
+                alignment,
+                rotation,
                 ..
             } => {
-                let x0 = (*x * scale).round().max(0.0) as i32;
-                let y0 = (*y * scale).round().max(0.0) as i32;
-                let x1 = ((*x + *width) * scale).round().min(width_px as f32 - 1.0) as i32;
-                let y1 = ((*y + *height) * scale).round().min(height_px as f32 - 1.0) as i32;
-                let fill_rgba = [color.r, color.g, color.b, color.a];
-                for py in y0..=y1 {
-                    for px in x0..=x1 {
-                        blend_pixel(&mut img, px, py, fill_rgba);
-                    }
-                }
-                let tl = eframe::egui::Pos2::new(x0 as f32, y0 as f32);
-                let tr = eframe::egui::Pos2::new(x1 as f32, y0 as f32);
-                let br = eframe::egui::Pos2::new(x1 as f32, y1 as f32);
-                let bl = eframe::egui::Pos2::new(x0 as f32, y1 as f32);
+                let rot = *rotation;
+                let cx = *x + *width * 0.5;
+                let cy = *y + *height * 0.5;
+                let hw = *width * 0.5;
+                let hh = *height * 0.5;
+
                 let border_col = [235, 208, 116, 255];
-                draw_capsule_segment(&mut img, tl, tr, 1.2, border_col);
-                draw_capsule_segment(&mut img, tr, br, 1.2, border_col);
-                draw_capsule_segment(&mut img, br, bl, 1.2, border_col);
-                draw_capsule_segment(&mut img, bl, tl, 1.2, border_col);
+                let r_border = (1.2 * scale).max(1.0);
+                let fill_rgba = [color.r, color.g, color.b, color.a];
+
+                let (text_x, text_y) = if rot.abs() <= 1e-4 {
+                    let x0 = (*x * scale).round().max(0.0) as i32;
+                    let y0 = (*y * scale).round().max(0.0) as i32;
+                    let x1 = ((*x + *width) * scale).round().min(width_px as f32 - 1.0) as i32;
+                    let y1 = ((*y + *height) * scale).round().min(height_px as f32 - 1.0) as i32;
+                    for py in y0..=y1 {
+                        for px in x0..=x1 {
+                            blend_pixel(&mut img, px, py, fill_rgba);
+                        }
+                    }
+                    let tl = eframe::egui::Pos2::new(x0 as f32, y0 as f32);
+                    let tr = eframe::egui::Pos2::new(x1 as f32, y0 as f32);
+                    let br = eframe::egui::Pos2::new(x1 as f32, y1 as f32);
+                    let bl = eframe::egui::Pos2::new(x0 as f32, y1 as f32);
+                    draw_capsule_segment(&mut img, tl, tr, r_border, border_col);
+                    draw_capsule_segment(&mut img, tr, br, r_border, border_col);
+                    draw_capsule_segment(&mut img, br, bl, r_border, border_col);
+                    draw_capsule_segment(&mut img, bl, tl, r_border, border_col);
+
+                    let tx = match alignment {
+                        crate::model::TextAlign::Left => *x + 10.0,
+                        crate::model::TextAlign::Center => cx,
+                        crate::model::TextAlign::Right => *x + *width - 10.0,
+                    };
+                    (tx, *y + 10.0)
+                } else {
+                    let cos_a = rot.cos();
+                    let sin_a = rot.sin();
+                    let rot_pt = |lx: f32, ly: f32| {
+                        eframe::egui::Pos2::new(
+                            (cx + lx * cos_a - ly * sin_a) * scale,
+                            (cy + lx * sin_a + ly * cos_a) * scale,
+                        )
+                    };
+                    let tl = rot_pt(-hw, -hh);
+                    let tr = rot_pt(hw, -hh);
+                    let br = rot_pt(hw, hh);
+                    let bl = rot_pt(-hw, hh);
+                    let verts = vec![tl, tr, br, bl];
+
+                    let px_min = tl.x.min(tr.x).min(br.x).min(bl.x).floor().max(0.0) as i32;
+                    let px_max =
+                        tl.x.max(tr.x)
+                            .max(br.x)
+                            .max(bl.x)
+                            .ceil()
+                            .min(width_px as f32 - 1.0) as i32;
+                    let py_min = tl.y.min(tr.y).min(br.y).min(bl.y).floor().max(0.0) as i32;
+                    let py_max =
+                        tl.y.max(tr.y)
+                            .max(br.y)
+                            .max(bl.y)
+                            .ceil()
+                            .min(height_px as f32 - 1.0) as i32;
+
+                    for py in py_min..=py_max {
+                        for px in px_min..=px_max {
+                            let p = eframe::egui::Pos2::new(px as f32 + 0.5, py as f32 + 0.5);
+                            if crate::geometry::point_in_polygon(p, &verts) {
+                                blend_pixel(&mut img, px, py, fill_rgba);
+                            }
+                        }
+                    }
+
+                    draw_capsule_segment(&mut img, tl, tr, r_border, border_col);
+                    draw_capsule_segment(&mut img, tr, br, r_border, border_col);
+                    draw_capsule_segment(&mut img, br, bl, r_border, border_col);
+                    draw_capsule_segment(&mut img, bl, tl, r_border, border_col);
+
+                    let pad = 10.0;
+                    let local_pos = match alignment {
+                        crate::model::TextAlign::Left => {
+                            eframe::egui::Vec2::new(-hw + pad, -hh + pad)
+                        }
+                        crate::model::TextAlign::Center => eframe::egui::Vec2::new(0.0, -hh + pad),
+                        crate::model::TextAlign::Right => {
+                            eframe::egui::Vec2::new(hw - pad, -hh + pad)
+                        }
+                    };
+                    (
+                        cx + local_pos.x * cos_a - local_pos.y * sin_a,
+                        cy + local_pos.x * sin_a + local_pos.y * cos_a,
+                    )
+                };
+
                 draw_egui_text(
                     &mut img,
                     &fonts,
-                    *x + 10.0,
-                    *y + 10.0,
+                    text_x,
+                    text_y,
                     text,
                     *font_size,
                     [text_color.r, text_color.g, text_color.b, text_color.a],
                     scale,
-                    0.0,
+                    rot,
                     *font_family,
                     *bold,
                     *italic,

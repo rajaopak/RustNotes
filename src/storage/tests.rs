@@ -875,3 +875,175 @@ fn test_highlighter_underlay_layering_and_mask_export() {
     export_page_to_png(tmp.path(), "nb_hl", &page, &out_png).expect("PNG export must succeed");
     assert!(out_png.exists());
 }
+
+#[test]
+fn test_asset_path_traversal_protection() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+
+    // 1. sanitize_path_component harus memblokir traversal
+    assert!(super::notebook_store::sanitize_path_component("../../../etc/passwd").is_err());
+    assert!(super::notebook_store::sanitize_path_component("..\\..\\windows\\system32").is_err());
+    assert!(super::notebook_store::sanitize_path_component("").is_err());
+    assert!(super::notebook_store::sanitize_path_component("   ").is_err());
+    assert!(super::notebook_store::sanitize_path_component("folder/file.png").is_err());
+    assert!(super::notebook_store::sanitize_path_component("folder\\file.png").is_err());
+
+    // Valid components pass
+    assert!(super::notebook_store::sanitize_path_component("valid-asset-id_123.png").is_ok());
+    assert!(
+        super::notebook_store::sanitize_path_component("550e8400-e29b-41d4-a716-446655440000")
+            .is_ok()
+    );
+
+    // 2. load_asset_from_notebook menolak path traversal
+    let res = super::notebook_store::load_asset_from_notebook(dir, "nb_1", "../secret.txt");
+    assert!(res.is_err());
+
+    let res_nb = super::notebook_store::load_asset_from_notebook(dir, "../nb_1", "asset.png");
+    assert!(res_nb.is_err());
+
+    // 3. save_asset_to_notebook menolak traversal di notebook_id dan extension
+    let res_save = super::notebook_store::save_asset_to_notebook(dir, "../nb_1", b"data", "png");
+    assert!(res_save.is_err());
+
+    // Extension berbahaya dinetralisir ke alfanumerik aman atau "bin"
+    let ok_save =
+        super::notebook_store::save_asset_to_notebook(dir, "nb_1", b"data", "../../../evil");
+    assert!(ok_save.is_ok());
+    let saved_name = ok_save.unwrap();
+    assert!(!saved_name.contains('/') && !saved_name.contains('\\') && !saved_name.contains(".."));
+
+    // 4. validate_notebook_assets mendeteksi asset_id berbahaya sebagai missing
+    let mut nb = Notebook::new("Test", PageTemplate::Blank, eframe::egui::Color32::WHITE);
+    nb.id = "nb_1".to_string();
+    let mut page = Page::with_size(PageTemplate::Blank, 200.0, 300.0);
+    page.background = Some(PageBackground::Image {
+        asset_id: "../../evil.png".to_string(),
+    });
+    nb.pages.push(page);
+    let missing = super::notebook_store::validate_notebook_assets(dir, &nb);
+    assert_eq!(missing, vec!["../../evil.png".to_string()]);
+}
+
+#[test]
+fn test_transactional_archive_import_staging_leaves_no_zombies() {
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+
+    // Buat berkas zip yang memiliki notebook.json valid, namun berisi asset dengan nama berbahaya (path traversal)
+    let bad_zip = dir.join("bad_archive.rnote");
+    {
+        let file = std::fs::File::create(&bad_zip).expect("create zip");
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+
+        let mut nb = Notebook::new(
+            "Corrupt Import Test",
+            PageTemplate::Blank,
+            eframe::egui::Color32::WHITE,
+        );
+        nb.id = "target-nb-id-123".to_string();
+        let nb_json = serde_json::to_string(&nb).unwrap();
+        zip.start_file("notebook.json", opts).unwrap();
+        zip.write_all(nb_json.as_bytes()).unwrap();
+
+        // Tambahkan asset berbahaya yang mencoba path traversal
+        zip.start_file("assets/.._.._evil.png", opts).unwrap();
+        zip.write_all(b"malicious payload").unwrap();
+
+        zip.finish().unwrap();
+    }
+
+    // Eksekusi impor dari arsip berbahaya
+    let res = super::archive::import_notebook_from_zip(dir, &bad_zip);
+    assert!(
+        res.is_err(),
+        "Impor arsip dengan nama aset tidak sah harus ditolak"
+    );
+
+    // Verifikasi bahwa direktori target notebook TIDAK pernah dibuat atau ditinggalkan di disk
+    let nb_target_dir = dir.join("notebooks").join("target-nb-id-123");
+    assert!(
+        !nb_target_dir.exists(),
+        "Transactional staging harus menjamin tidak ada direktori parsial/zombie yang tertinggal di disk jika impor gagal"
+    );
+}
+
+#[test]
+fn test_sticky_note_png_rotation_rendering() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    let nb_id = "sticky_rot_test";
+
+    let mut page = Page::with_size(PageTemplate::Blank, 400.0, 400.0);
+    page.paper_color = ColorData {
+        r: 255,
+        g: 255,
+        b: 255,
+        a: 255,
+    };
+
+    // Tambahkan Sticky Note di tengah halaman yang diputar 45 derajat (PI / 4)
+    page.objects.push(DrawObject::StickyNote {
+        id: "sticky-1".to_string(),
+        x: 150.0,
+        y: 150.0,
+        width: 100.0,
+        height: 100.0,
+        text: "Catatan".to_string(),
+        color: ColorData {
+            r: 254,
+            g: 226,
+            b: 114,
+            a: 255,
+        },
+        text_color: ColorData {
+            r: 30,
+            g: 30,
+            b: 30,
+            a: 255,
+        },
+        font_size: 16.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Center,
+        rotation: std::f32::consts::FRAC_PI_4, // 45 derajat
+    });
+
+    let img = super::export_png::render_page_to_rgba_image(dir, nb_id, &page)
+        .expect("render page to rgba image");
+
+    // Center sticky note adalah Pos2(200, 200). Pada skala 2x: Pos2(400, 400).
+    // Pixel pusat harus berwarna kuning Sticky Note (#FEE272 = 254, 226, 114)
+    let center_px = img.get_pixel(400, 400);
+    assert_eq!(center_px[0], 254);
+    assert_eq!(center_px[1], 226);
+    assert_eq!(center_px[2], 114);
+
+    // Titik (200, 130) di kanvas (skala 2x: 400, 260) berada di luar kotak unrotated (y: 150..250),
+    // tetapi berada di dalam kotak yang berputar 45 derajat (ujung atas berputar ke y = 200 - 50*sqrt(2) ≈ 129.3).
+    // Pada skala 2x: y = 200 * 2 - 100*sqrt(2) ≈ 400 - 141.4 = 258.6.
+    // Di pixel (400, 280), harus terisi warna Sticky Note karena rotasi!
+    let top_rot_px = img.get_pixel(400, 280);
+    assert_eq!(
+        top_rot_px[0], 254,
+        "Pixel rotated top-tip harus terisi warna sticky note kuning"
+    );
+    assert_eq!(top_rot_px[1], 226);
+    assert_eq!(top_rot_px[2], 114);
+
+    // Titik sudut unrotated (155, 155) -> (skala 2x: 310, 310) sekarang berada di LUAR kotak berotasi 45 derajat,
+    // sehingga harus berwarna kertas putih murni (255, 255, 255).
+    let corner_outside_px = img.get_pixel(310, 310);
+    assert_eq!(
+        corner_outside_px[0], 255,
+        "Corner yang ditinggalkan saat rotasi harus tetap berwarna kertas putih"
+    );
+    assert_eq!(corner_outside_px[1], 255);
+    assert_eq!(corner_outside_px[2], 255);
+}

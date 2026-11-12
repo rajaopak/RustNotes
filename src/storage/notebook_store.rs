@@ -119,19 +119,44 @@ pub fn load_notebook_from_dir(dir: &Path, notebook_id: &str) -> Result<Notebook,
     Err(format!("Notebook {} not found", notebook_id))
 }
 
+/// Memvalidasi bahwa sebuah komponen path (misal notebook_id atau asset_id) aman dari ancaman path traversal.
+pub fn sanitize_path_component(component: &str) -> Result<&str, String> {
+    let trimmed = component.trim();
+    if trimmed.is_empty() {
+        return Err("Komponen path tidak boleh kosong".to_string());
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains("..") {
+        return Err(format!(
+            "Komponen path tidak aman (mengandung traversal atau pemisah folder): '{trimmed}'"
+        ));
+    }
+    if let Some(file_name) = Path::new(trimmed).file_name()
+        && file_name.to_str() == Some(trimmed)
+    {
+        return Ok(trimmed);
+    }
+    Err(format!("Komponen path tidak valid: '{trimmed}'"))
+}
+
 pub fn save_asset_to_notebook(
     dir: &Path,
     notebook_id: &str,
     data: &[u8],
     extension: &str,
 ) -> Result<String, String> {
+    let safe_nb_id = sanitize_path_component(notebook_id)?;
     let mut hasher = Sha256::new();
     hasher.update(data);
     let hash_hex = format!("{:x}", hasher.finalize());
-    let ext = extension.trim_start_matches('.').to_lowercase();
+    let ext_raw = extension.trim_start_matches('.').to_lowercase();
+    let ext = if ext_raw.chars().all(|c| c.is_ascii_alphanumeric()) && !ext_raw.is_empty() {
+        ext_raw
+    } else {
+        "bin".to_string()
+    };
     let asset_filename = format!("{hash_hex}.{ext}");
 
-    let assets_dir = dir.join("notebooks").join(notebook_id).join("assets");
+    let assets_dir = dir.join("notebooks").join(safe_nb_id).join("assets");
     let _ = fs::create_dir_all(&assets_dir);
     let target_path = assets_dir.join(&asset_filename);
     if !target_path.exists() {
@@ -146,12 +171,14 @@ pub fn load_asset_from_notebook(
     notebook_id: &str,
     asset_id: &str,
 ) -> Result<Vec<u8>, String> {
+    let safe_nb_id = sanitize_path_component(notebook_id)?;
+    let safe_asset_id = sanitize_path_component(asset_id)?;
     let asset_path = dir
         .join("notebooks")
-        .join(notebook_id)
+        .join(safe_nb_id)
         .join("assets")
-        .join(asset_id);
-    fs::read(&asset_path).map_err(|e| format!("Failed to read asset {asset_id}: {e}"))
+        .join(safe_asset_id);
+    fs::read(&asset_path).map_err(|e| format!("Failed to read asset {safe_asset_id}: {e}"))
 }
 
 /// Menyalin seluruh aset gambar/PDF dari direktori notebook sumber ke direktori notebook target.
@@ -160,14 +187,11 @@ pub fn copy_notebook_assets(
     source_notebook_id: &str,
     target_notebook_id: &str,
 ) -> Result<(), String> {
-    let src_assets = dir
-        .join("notebooks")
-        .join(source_notebook_id)
-        .join("assets");
-    let dst_assets = dir
-        .join("notebooks")
-        .join(target_notebook_id)
-        .join("assets");
+    let safe_src = sanitize_path_component(source_notebook_id)?;
+    let safe_dst = sanitize_path_component(target_notebook_id)?;
+
+    let src_assets = dir.join("notebooks").join(safe_src).join("assets");
+    let dst_assets = dir.join("notebooks").join(safe_dst).join("assets");
 
     if !src_assets.exists() {
         let _ = fs::create_dir_all(&dst_assets);
@@ -187,6 +211,10 @@ pub fn copy_notebook_assets(
             .map_err(|e| format!("Gagal membaca tipe berkas aset: {e}"))?;
         if file_type.is_file() {
             let file_name = entry.file_name();
+            let name_str = file_name.to_string_lossy();
+            if sanitize_path_component(&name_str).is_err() {
+                continue;
+            }
             let src_path = entry.path();
             let dst_path = dst_assets.join(&file_name);
             fs::copy(&src_path, &dst_path)
@@ -230,6 +258,9 @@ pub fn duplicate_notebook_storage(
 /// Memvalidasi seluruh referensi aset di dalam notebook apakah berkas fisiknya ada di disk.
 /// Mengembalikan daftar `asset_id` yang hilang (jika ada).
 pub fn validate_notebook_assets(dir: &Path, notebook: &Notebook) -> Vec<String> {
+    if sanitize_path_component(&notebook.id).is_err() {
+        return vec!["invalid_notebook_id".to_string()];
+    }
     let assets_dir = dir.join("notebooks").join(&notebook.id).join("assets");
     let mut missing = Vec::new();
     let mut checked = std::collections::HashSet::new();
@@ -241,9 +272,13 @@ pub fn validate_notebook_assets(dir: &Path, notebook: &Notebook) -> Vec<String> 
             | crate::model::PageBackground::Pdf { asset_id, .. }
                 if checked.insert(asset_id.clone()) =>
             {
-                let asset_path = assets_dir.join(&asset_id);
-                if !asset_path.exists() {
+                if sanitize_path_component(&asset_id).is_err() {
                     missing.push(asset_id);
+                } else {
+                    let asset_path = assets_dir.join(&asset_id);
+                    if !asset_path.exists() {
+                        missing.push(asset_id);
+                    }
                 }
             }
             _ => {}
@@ -254,9 +289,13 @@ pub fn validate_notebook_assets(dir: &Path, notebook: &Notebook) -> Vec<String> 
             if let crate::model::DrawObject::Image { asset_id, .. } = obj
                 && checked.insert(asset_id.clone())
             {
-                let asset_path = assets_dir.join(asset_id);
-                if !asset_path.exists() {
+                if sanitize_path_component(asset_id).is_err() {
                     missing.push(asset_id.clone());
+                } else {
+                    let asset_path = assets_dir.join(asset_id);
+                    if !asset_path.exists() {
+                        missing.push(asset_id.clone());
+                    }
                 }
             }
         }

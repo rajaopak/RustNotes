@@ -66,6 +66,29 @@ pub fn export_notebook_to_zip(
     Ok(())
 }
 
+struct StagingDir(std::path::PathBuf);
+
+impl StagingDir {
+    fn create() -> Result<Self, String> {
+        let path = std::env::temp_dir().join(format!("rustnotes_staging_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&path)
+            .map_err(|e| format!("Gagal membuat direktori penampungan impor sementara: {e}"))?;
+        Ok(Self(path))
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for StagingDir {
+    fn drop(&mut self) {
+        if self.0.exists() {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+}
+
 /// Mengimpor buku catatan dari berkas arsip zip.
 /// Dilengkapi perlindungan:
 /// 1. Sanitasi ID mencegah Path Traversal (`../../`).
@@ -118,12 +141,14 @@ pub fn import_notebook_from_zip(dir: &Path, zip_source: &Path) -> Result<Noteboo
         nb.title = format!("{} (Imported)", nb.title);
     }
 
-    // Pastikan direktori tujuan tersedia
-    let nb_dir = dir.join("notebooks").join(&nb.id);
-    let assets_dir = nb_dir.join("assets");
-    let _ = fs::create_dir_all(&assets_dir);
+    // 4. Ekstraksi aset ke direktori penampungan sementara (staging)
+    // Mencegah ekstraksi parsial yang mengotori penyimpanan lokal jika terjadi kegagalan/korupsi
+    let staging_dir = StagingDir::create()?;
+    let staging_assets = staging_dir.path().join("assets");
+    fs::create_dir_all(&staging_assets)
+        .map_err(|e| format!("Gagal membuat direktori penampungan aset: {e}"))?;
 
-    // 4. Ekstraksi aset dengan sanitasi nama berkas dan proteksi Zip Bomb
+    let mut extracted_asset_names = Vec::new();
     let mut total_decompressed: u64 = content.len() as u64;
 
     for i in 0..archive.len() {
@@ -150,7 +175,7 @@ pub fn import_notebook_from_zip(dir: &Path, zip_source: &Path) -> Result<Noteboo
                 return Err(format!("Unsafe asset filename detected: {file_name}"));
             }
 
-            let dest_path = assets_dir.join(file_name);
+            let dest_path = staging_assets.join(file_name);
             let mut buf = Vec::new();
             entry
                 .take(MAX_ASSET_BYTES + 1)
@@ -169,23 +194,47 @@ pub fn import_notebook_from_zip(dir: &Path, zip_source: &Path) -> Result<Noteboo
             }
 
             let mut out =
-                fs::File::create(dest_path).map_err(|e| format!("Write asset error: {e}"))?;
+                fs::File::create(&dest_path).map_err(|e| format!("Write asset error: {e}"))?;
             out.write_all(&buf)
                 .map_err(|e| format!("Asset write error: {e}"))?;
+
+            extracted_asset_names.push(file_name.to_string());
         }
     }
 
-    // 5. Simpan notebook ke disk
-    save_notebook_to_dir(dir, &nb)?;
+    // 5. Commit fase final: Pindahkan aset dari staging ke repositori buku catatan
+    let nb_dir = dir.join("notebooks").join(&nb.id);
+    let target_assets = nb_dir.join("assets");
+    if let Err(e) = fs::create_dir_all(&target_assets) {
+        return Err(format!("Gagal membuat direktori buku catatan tujuan: {e}"));
+    }
 
-    // 6. Perbarui library index
+    for name in &extracted_asset_names {
+        let src_file = staging_assets.join(name);
+        let dst_file = target_assets.join(name);
+        if let Err(e) = fs::copy(&src_file, &dst_file) {
+            let _ = fs::remove_dir_all(&nb_dir);
+            return Err(format!("Gagal menyalin aset terverifikasi ke tujuan: {e}"));
+        }
+    }
+
+    // 6. Simpan notebook ke disk dengan rollback otomatis
+    if let Err(e) = save_notebook_to_dir(dir, &nb) {
+        let _ = fs::remove_dir_all(&nb_dir);
+        return Err(e);
+    }
+
+    // 7. Perbarui library index
     let mut index_res = load_library_index_from_dir(dir);
     index_res.index.notebooks.retain(|n| n.id != nb.id);
     index_res
         .index
         .notebooks
         .push(NotebookMeta::from_notebook(&nb));
-    save_library_index_to_dir(dir, &index_res.index)?;
+    if let Err(e) = save_library_index_to_dir(dir, &index_res.index) {
+        let _ = fs::remove_dir_all(&nb_dir);
+        return Err(e);
+    }
 
     Ok(nb)
 }

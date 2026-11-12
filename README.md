@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/GUI-eframe%20%2F%20egui%200.31-blue" alt="egui 0.31">
   <img src="https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20(x64)-0078D6?logo=windows" alt="Windows 64-bit">
   <img src="https://img.shields.io/badge/Runtime-Zero%20External%20Runtime-success" alt="Zero Runtime">
-  <img src="https://img.shields.io/badge/Tests-145%20Passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-185%2B%20Passing-brightgreen" alt="Tests">
 </p>
 
 ---
@@ -163,7 +163,8 @@ goodnotes-rust/
     │   ├── primitives.rs       # Perhitungan bounding box akurat per objek & gabungan
     │   ├── transform.rs        # Rotasi halaman, translasi, rotasi sudut, dan flip objek
     │   ├── hit_test.rs         # Deteksi sentuhan kursor & pengujian objek di dalam lasso
-    │   ├── tessellation.rs     # Tessellator pita segitiga (triangle strip) goresan & stabilo
+    │   ├── tessellation.rs     # Tessellator pita segitiga goresan, stabilo, & stylus pressure
+    │   ├── math.rs             # Parser LaTeX & mesin tata letak 2D formula matematika
     │   ├── spatial_grid.rs     # Akselerasi spasial grid untuk hit-test cepat di halaman padat
     │   ├── shapes.rs           # Algoritma pengenalan bentuk otomatis (Shape Recognition)
     │   ├── eraser.rs           # Logika pemotongan goresan sebagian (Stroke Splitter)
