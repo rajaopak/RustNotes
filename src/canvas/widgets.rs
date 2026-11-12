@@ -1256,157 +1256,203 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
     let mut insert_action = false;
     let mut close_action = false;
 
+    let clean_buffer = state.equation_latex_buffer.trim();
+    let is_empty = clean_buffer.is_empty();
+    let parse_result = if is_empty {
+        Ok(Vec::new())
+    } else {
+        crate::geometry::math::parse_latex_math(clean_buffer)
+    };
+
+    let is_valid = !is_empty && parse_result.is_ok();
+
+    let screen_rect = ctx.screen_rect();
+    let max_w = (screen_rect.width() * 0.95).max(400.0);
+    let max_h = (screen_rect.height() * 0.90).max(350.0);
+
     egui::Window::new(title)
         .open(&mut open)
         .collapsible(false)
         .resizable(true)
-        .default_width(480.0)
-        .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(screen_rect.center())
+        .default_size(Vec2::new(520.0, 500.0))
+        .min_width(380.0)
+        .min_height(320.0)
+        .max_width(max_w)
+        .max_height(max_h)
+        .constrain_to(screen_rect)
         .show(ctx, |ui| {
-            ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
-
-            ui.horizontal(|ui| {
-                ui.label("Ukuran Font:");
-                ui.add(egui::Slider::new(&mut state.equation_font_size, 12.0..=64.0).suffix(" pt"));
-            });
-
-            // Quick LaTeX Snippet Buttons
-            ui.label(
-                egui::RichText::new("Simbol & Rumus Cepat:")
-                    .size(12.0)
-                    .strong(),
-            );
-            ui.horizontal_wrapped(|ui| {
-                let snippets = [
-                    (r"\frac{a}{b}", r"\frac{a}{b}"),
-                    (r"\sqrt{x}", r"\sqrt{x}"),
-                    (r"x^{2}", r"^{2}"),
-                    (r"x_{i}", r"_{i}"),
-                    (r"\sum", r"\sum_{i=1}^{n}"),
-                    (r"\int", r"\int_{a}^{b}"),
-                    (r"\alpha", r"\alpha"),
-                    (r"\beta", r"\beta"),
-                    (r"\pi", r"\pi"),
-                    (r"\theta", r"\theta"),
-                    (r"\pm", r"\pm"),
-                    (r"\times", r"\times"),
-                    (r"\leq", r"\leq"),
-                    (r"\geq", r"\geq"),
-                    (r"\neq", r"\neq"),
-                    (r"\approx", r"\approx"),
-                    (r"\infty", r"\infty"),
-                    (r"\to", r"\to"),
-                ];
-                for (lbl, snip) in snippets {
-                    if ui.button(lbl).clicked() {
-                        state.equation_latex_buffer.push_str(snip);
-                    }
-                }
-            });
-
-            ui.separator();
-
-            ui.label("Kode LaTeX:");
-            let text_edit = egui::TextEdit::multiline(&mut state.equation_latex_buffer)
-                .desired_rows(3)
-                .desired_width(f32::INFINITY)
-                .font(egui::TextStyle::Monospace)
-                .hint_text(r"Contoh: E = mc^2 atau \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}");
-            ui.add(text_edit);
-
-            ui.separator();
-
-            // Live Preview Box
-            ui.label(egui::RichText::new("Pratinjau Visual:").size(12.0).strong());
-            let clean_buffer = state.equation_latex_buffer.trim();
-            let is_empty = clean_buffer.is_empty();
-            let parse_result = if is_empty {
-                Ok(Vec::new())
-            } else {
-                crate::geometry::math::parse_latex_math(clean_buffer)
-            };
-
-            let is_valid = !is_empty && parse_result.is_ok();
-
-            match &parse_result {
-                Ok(nodes) if !is_empty => {
-                    let preview_font_size = state.equation_font_size;
-                    let layout =
-                        crate::geometry::math::MathLayout::compute(nodes, preview_font_size);
-                    let box_w = (layout.width + 40.0).max(ui.available_width());
-                    let box_h = (layout.height + 30.0).max(60.0);
-
-                    let (rect, _resp) =
-                        ui.allocate_exact_size(Vec2::new(box_w, box_h), egui::Sense::hover());
-                    if ui.is_rect_visible(rect) {
-                        let painter = ui.painter_at(rect);
-                        let bg_col = if ui.visuals().dark_mode {
-                            Color32::from_rgb(32, 32, 36)
+            // Gunakan layout bottom_up agar bilah tombol tindakan ("Sisipkan" / "Batal")
+            // selalu tertambat di bagian paling bawah (pinned footer) dan tidak pernah
+            // terpotong atau terdorong ke luar layar ketika rumus sangat tinggi/panjang.
+            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.add_enabled_ui(is_valid, |ui| {
+                        let btn_text = if state.editing_equation_id.is_some() {
+                            "Perbarui Persamaan"
                         } else {
-                            Color32::from_rgb(248, 249, 250)
+                            "Sisipkan ke Halaman"
                         };
-                        let border_col = if ui.visuals().dark_mode {
-                            Color32::from_rgb(60, 60, 65)
-                        } else {
-                            Color32::from_rgb(220, 224, 230)
-                        };
-                        painter.rect_filled(rect, 4.0, bg_col);
-                        painter.rect_stroke(
-                            rect,
-                            4.0,
-                            Stroke::new(1.0_f32, border_col),
-                            egui::StrokeKind::Outside,
-                        );
-
-                        let text_col = if ui.visuals().dark_mode {
-                            Color32::from_rgb(240, 240, 245)
-                        } else {
-                            Color32::from_rgb(20, 20, 25)
-                        };
-
-                        let render_x = rect.min.x + (rect.width() - layout.width).max(0.0) * 0.5;
-                        let render_y = rect.min.y + (rect.height() - layout.height).max(0.0) * 0.5;
-                        layout.render(&painter, Pos2::new(render_x, render_y), 1.0, 0.0, text_col);
-                    }
-                }
-                Ok(_) => {
-                    ui.label(
-                        egui::RichText::new("Ketik rumus LaTeX di atas untuk melihat pratinjau visual.")
-                            .italics()
-                            .color(Color32::GRAY),
-                    );
-                }
-                Err(err) => {
-                    ui.colored_label(
-                        Color32::from_rgb(235, 87, 87),
-                        format!("⚠️ Kesalahan sintaks: {}", err),
-                    );
-                    ui.label(
-                        egui::RichText::new(
-                            "Catatan: Hanya rumus matematika murni (pecahan, akar, eksponen, greek, integral, dsb.) yang didukung. Makro TeX eksternal (TikZ/PGF) tidak didukung.",
-                        )
-                        .size(11.0)
-                        .color(Color32::GRAY),
-                    );
-                }
-            }
-
-            ui.separator();
-
-            ui.horizontal(|ui| {
-                ui.add_enabled_ui(is_valid, |ui| {
-                    let btn_text = if state.editing_equation_id.is_some() {
-                        "Perbarui Persamaan"
-                    } else {
-                        "Sisipkan ke Halaman"
-                    };
-                    if ui.button(btn_text).clicked() {
-                        insert_action = true;
+                        if ui.button(btn_text).clicked() {
+                            insert_action = true;
+                        }
+                    });
+                    if ui.button("Batal").clicked() {
+                        close_action = true;
                     }
                 });
-                if ui.button("Batal").clicked() {
-                    close_action = true;
-                }
+                ui.add_space(4.0);
+                ui.separator();
+
+                // Area konten di atas footer dengan ScrollArea vertikal dinamis
+                ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+
+                            ui.horizontal(|ui| {
+                                ui.label("Ukuran Font:");
+                                ui.add(
+                                    egui::Slider::new(&mut state.equation_font_size, 12.0..=64.0)
+                                        .suffix(" pt"),
+                                );
+                            });
+
+                            // Quick LaTeX Snippet Buttons
+                            ui.label(
+                                egui::RichText::new("Simbol & Rumus Cepat:")
+                                    .size(12.0)
+                                    .strong(),
+                            );
+                            ui.horizontal_wrapped(|ui| {
+                                let snippets = [
+                                    (r"\frac{a}{b}", r"\frac{a}{b}"),
+                                    (r"\sqrt{x}", r"\sqrt{x}"),
+                                    (r"x^{2}", r"^{2}"),
+                                    (r"x_{i}", r"_{i}"),
+                                    (r"\sum", r"\sum_{i=1}^{n}"),
+                                    (r"\int", r"\int_{a}^{b}"),
+                                    (r"\alpha", r"\alpha"),
+                                    (r"\beta", r"\beta"),
+                                    (r"\pi", r"\pi"),
+                                    (r"\theta", r"\theta"),
+                                    (r"\pm", r"\pm"),
+                                    (r"\times", r"\times"),
+                                    (r"\leq", r"\leq"),
+                                    (r"\geq", r"\geq"),
+                                    (r"\neq", r"\neq"),
+                                    (r"\approx", r"\approx"),
+                                    (r"\infty", r"\infty"),
+                                    (r"\to", r"\to"),
+                                ];
+                                for (lbl, snip) in snippets {
+                                    if ui.button(lbl).clicked() {
+                                        state.equation_latex_buffer.push_str(snip);
+                                    }
+                                }
+                            });
+
+                            ui.separator();
+
+                            ui.label("Kode LaTeX:");
+                            let text_edit = egui::TextEdit::multiline(&mut state.equation_latex_buffer)
+                                .desired_rows(3)
+                                .desired_width(f32::INFINITY)
+                                .font(egui::TextStyle::Monospace)
+                                .hint_text(r"Contoh: E = mc^2 atau \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}");
+                            ui.add(text_edit);
+
+                            ui.separator();
+
+                            // Live Preview Box dengan batas tinggi dan scroll internal
+                            ui.label(egui::RichText::new("Pratinjau Visual:").size(12.0).strong());
+
+                            match &parse_result {
+                                Ok(nodes) if !is_empty => {
+                                    let preview_font_size = state.equation_font_size;
+                                    let layout = crate::geometry::math::MathLayout::compute(
+                                        nodes,
+                                        preview_font_size,
+                                    );
+
+                                    let bg_col = if ui.visuals().dark_mode {
+                                        Color32::from_rgb(32, 32, 36)
+                                    } else {
+                                        Color32::from_rgb(248, 249, 250)
+                                    };
+                                    let border_col = if ui.visuals().dark_mode {
+                                        Color32::from_rgb(60, 60, 65)
+                                    } else {
+                                        Color32::from_rgb(220, 224, 230)
+                                    };
+                                    let text_col = if ui.visuals().dark_mode {
+                                        Color32::from_rgb(240, 240, 245)
+                                    } else {
+                                        Color32::from_rgb(20, 20, 25)
+                                    };
+
+                                    // Wadah pratinjau yang dibatasi tingginya dan mendukung scrolling horizontal/vertikal
+                                    egui::Frame::group(ui.style())
+                                        .fill(bg_col)
+                                        .stroke(Stroke::new(1.0_f32, border_col))
+                                        .corner_radius(4.0)
+                                        .inner_margin(8.0)
+                                        .show(ui, |ui| {
+                                            egui::ScrollArea::both()
+                                                .max_height(180.0)
+                                                .auto_shrink([false, true])
+                                                .show(ui, |ui| {
+                                                    let box_w = (layout.width + 24.0).max(ui.available_width());
+                                                    let box_h = (layout.height + 16.0).max(50.0);
+                                                    let (rect, _resp) = ui.allocate_exact_size(
+                                                        Vec2::new(box_w, box_h),
+                                                        egui::Sense::hover(),
+                                                    );
+                                                    if ui.is_rect_visible(rect) {
+                                                        let painter = ui.painter_at(rect);
+                                                        let render_x = rect.min.x
+                                                            + (rect.width() - layout.width).max(0.0) * 0.5;
+                                                        let render_y = rect.min.y
+                                                            + (rect.height() - layout.height).max(0.0) * 0.5;
+                                                        layout.render(
+                                                            &painter,
+                                                            Pos2::new(render_x, render_y),
+                                                            1.0,
+                                                            0.0,
+                                                            text_col,
+                                                        );
+                                                    }
+                                                });
+                                        });
+                                }
+                                Ok(_) => {
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Ketik rumus LaTeX di atas untuk melihat pratinjau visual.",
+                                        )
+                                        .italics()
+                                        .color(Color32::GRAY),
+                                    );
+                                }
+                                Err(err) => {
+                                    ui.colored_label(
+                                        Color32::from_rgb(235, 87, 87),
+                                        format!("⚠️ Kesalahan sintaks: {}", err),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Catatan: Hanya rumus matematika murni (pecahan, akar, eksponen, greek, integral, dsb.) yang didukung. Makro TeX eksternal (TikZ/PGF) tidak didukung.",
+                                        )
+                                        .size(11.0)
+                                        .color(Color32::GRAY),
+                                    );
+                                }
+                            }
+                        });
+                });
             });
         });
 

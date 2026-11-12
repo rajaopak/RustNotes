@@ -1527,3 +1527,34 @@ fn test_stylus_touch_tracking_and_pressure_extraction() {
     assert_eq!(fallback_id, Some(id_stylus));
     assert_eq!(fallback_force, None);
 }
+
+#[test]
+fn test_equation_modal_dialog_lifecycle_and_validation() {
+    let mut state = CanvasState::default();
+    let mut page = Page::new(PageTemplate::Blank);
+    let ctx = egui::Context::default();
+
+    // 1. Saat show_equation_dialog = false, dialog tidak mengubah state
+    state.show_equation_dialog = false;
+    super::widgets::render_equation_modal_dialog(&ctx, &mut state, &mut page);
+    assert!(page.objects.is_empty());
+
+    // 2. Buka dialog modal untuk persamaan baru
+    state.show_equation_dialog = true;
+    state.equation_latex_buffer = r"\frac{x}{y}".to_string();
+    state.equation_font_size = 24.0;
+    state.equation_insert_pos = Pos2::new(100.0, 150.0);
+
+    // Simulasikan frame egui
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        super::widgets::render_equation_modal_dialog(ctx, &mut state, &mut page);
+    });
+
+    // Validasi parser rumus LaTeX
+    let parsed = crate::geometry::math::parse_latex_math(&state.equation_latex_buffer);
+    assert!(parsed.is_ok());
+    let nodes = parsed.unwrap();
+    let layout = crate::geometry::math::MathLayout::compute(&nodes, state.equation_font_size);
+    assert!(layout.width > 0.0);
+    assert!(layout.height > 0.0);
+}
