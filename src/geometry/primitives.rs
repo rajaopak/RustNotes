@@ -238,12 +238,26 @@ pub fn shape_vertices(shape_type: ShapeKind, x: f32, y: f32, width: f32, height:
     let r = Rect::from_two_pos(p1, p2);
     match shape_type {
         ShapeKind::Line | ShapeKind::Curve => vec![p1, p2],
-        ShapeKind::Rectangle | ShapeKind::Ellipse => vec![
+        ShapeKind::Rectangle => vec![
             r.left_top(),
             r.right_top(),
             r.right_bottom(),
             r.left_bottom(),
         ],
+        ShapeKind::Ellipse => {
+            let center = r.center();
+            let rx = (r.width() * 0.5).abs();
+            let ry = (r.height() * 0.5).abs();
+            let mut pts = Vec::with_capacity(16);
+            for i in 0..16 {
+                let theta = (i as f32) * (std::f32::consts::TAU / 16.0);
+                pts.push(Pos2::new(
+                    center.x + rx * theta.cos(),
+                    center.y + ry * theta.sin(),
+                ));
+            }
+            pts
+        }
         ShapeKind::Diamond => vec![
             Pos2::new(r.center().x, r.top()),
             Pos2::new(r.right(), r.center().y),
@@ -329,6 +343,15 @@ pub fn screen_to_page_point(screen_pos: Pos2, page_origin: Pos2, zoom: f32) -> P
 /// Menghitung simpul batas luar (boundary vertices/corners) dari suatu objek gambar
 /// dengan memperhitungkan rotasi dan orientasi sebenarnya di kanvas.
 pub fn object_boundary_vertices(obj: &DrawObject) -> Vec<Pos2> {
+    object_boundary_vertices_with_context(obj, None)
+}
+
+/// Menghitung simpul batas luar dengan konteks daftar objek (diperlukan untuk
+/// menyelesaikan posisi titik tempel diagram connector bertipe `Attached`).
+pub fn object_boundary_vertices_with_context(
+    obj: &DrawObject,
+    all_objects: Option<&[DrawObject]>,
+) -> Vec<Pos2> {
     match obj {
         DrawObject::Stroke { points, .. } => points.iter().map(|p| p.to_pos2()).collect(),
         DrawObject::Shape {
@@ -449,6 +472,11 @@ pub fn object_boundary_vertices(obj: &DrawObject) -> Vec<Pos2> {
             control_points,
             ..
         } => {
+            if let Some(objects) = all_objects
+                && let Some(poly) = crate::geometry::connectors::connector_polyline(obj, objects)
+            {
+                return poly.into_iter().map(|p| Pos2::new(p.x, p.y)).collect();
+            }
             let mut pts = Vec::new();
             if let crate::model::ConnectorEnd::Free { x, y } = start {
                 pts.push(Pos2::new(*x, *y));

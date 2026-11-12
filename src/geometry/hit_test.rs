@@ -1,5 +1,5 @@
 use super::primitives::{
-    equation_approx_size, object_boundary_vertices, object_bounds, point_in_polygon,
+    equation_approx_size, object_boundary_vertices_with_context, object_bounds, point_in_polygon,
     point_to_segment_dist, segments_cross, shape_vertices, text_approx_size,
 };
 use crate::model::DrawObject;
@@ -512,41 +512,37 @@ pub fn hit_test_object(obj: &DrawObject, p: Pos2, tolerance: f32) -> bool {
 }
 
 /// Memeriksa apakah suatu objek memotong atau berada di dalam poligon lasso (Intersection Mode).
-/// Memeriksa:
-/// 1. Titik pusat objek berada di dalam lasso
-/// 2. Lasso berada di dalam objek
-/// 3. Simpul batas objek berada di dalam poligon lasso
-/// 4. Segmen batas objek memotong segmen batas poligon lasso
 pub fn object_in_lasso(obj: &DrawObject, polygon: &[Pos2]) -> bool {
+    object_in_lasso_with_context(obj, polygon, None)
+}
+
+/// Memeriksa apakah suatu objek memotong atau berada di dalam poligon lasso (Intersection Mode)
+/// dengan konteks daftar objek seluruh halaman (untuk resolusi konektor diagram).
+pub fn object_in_lasso_with_context(
+    obj: &DrawObject,
+    polygon: &[Pos2],
+    all_objects: Option<&[DrawObject]>,
+) -> bool {
     if polygon.len() < 3 {
         return false;
     }
-    let b = object_bounds(obj);
-    if !b.is_finite() {
-        return false;
-    }
 
-    // 1. Jika pusat objek berada di dalam lasso
-    if point_in_polygon(b.center(), polygon) {
-        return true;
-    }
-
-    // 2. Jika seluruh poligon lasso berada di dalam objek
+    // 1. Jika poligon lasso berada sepenuhnya di dalam objek
     if hit_test_object(obj, polygon[0], 0.0) {
         return true;
     }
 
-    let verts = object_boundary_vertices(obj);
+    let verts = object_boundary_vertices_with_context(obj, all_objects);
     if verts.is_empty() {
         return false;
     }
 
-    // 3. Jika ada simpul batas objek yang berada di dalam poligon lasso
+    // 2. Jika ada simpul batas objek yang berada di dalam poligon lasso
     if verts.iter().any(|&v| point_in_polygon(v, polygon)) {
         return true;
     }
 
-    // 4. Jika ada segmen batas objek yang memotong segmen poligon lasso
+    // 3. Jika ada segmen batas objek yang memotong segmen poligon lasso
     let is_closed = match obj {
         DrawObject::Stroke { .. } | DrawObject::Connector { .. } => false,
         DrawObject::Shape { shape_type, .. } => *shape_type != crate::model::ShapeKind::Line,
@@ -569,17 +565,73 @@ pub fn object_in_lasso(obj: &DrawObject, polygon: &[Pos2]) -> bool {
             }
         }
     }
+
+    // 4. Toleransi ketebalan untuk DrawObject::Stroke (pita visual kuas/stabilo tebal)
+    if let DrawObject::Stroke { points, width, .. } = obj {
+        let half_w = (*width * 0.5).max(1.0);
+        // Cek apakah ada titik poligon lasso yang menyentuh pita goresan
+        for p in polygon {
+            for i in 1..points.len() {
+                let a = points[i - 1].to_pos2();
+                let b = points[i].to_pos2();
+                if point_to_segment_dist(*p, a, b) <= half_w {
+                    return true;
+                }
+            }
+        }
+        // Cek apakah ada titik centerline goresan yang berada dalam jarak half_w dari batas poligon lasso
+        for pt in points {
+            let p = pt.to_pos2();
+            for j in 0..polygon.len() {
+                let l1 = polygon[j];
+                let l2 = polygon[(j + 1) % polygon.len()];
+                if point_to_segment_dist(p, l1, l2) <= half_w {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // 5. Toleransi ketebalan untuk DrawObject::Connector
+    if let DrawObject::Connector { style, .. } = obj {
+        let half_w = (style.stroke_width * 0.5).max(1.0);
+        for p in polygon {
+            for i in 1..verts.len() {
+                let a = verts[i - 1];
+                let b = verts[i];
+                if point_to_segment_dist(*p, a, b) <= half_w {
+                    return true;
+                }
+            }
+        }
+    }
+
     false
 }
 
 /// Memeriksa apakah suatu objek secara penuh dilingkupi di dalam batas poligon lasso (Containment Mode).
 /// Menjamin seluruh geometri terlihat objek berada di dalam poligon lasso tanpa ada batas yang terpotong.
 pub fn object_contained_in_lasso(obj: &DrawObject, polygon: &[Pos2]) -> bool {
+    object_contained_in_lasso_with_context(obj, polygon, None)
+}
+
+/// Memeriksa apakah suatu objek secara penuh dilingkupi di dalam batas poligon lasso (Containment Mode)
+/// dengan konteks daftar objek seluruh halaman (untuk resolusi konektor diagram).
+pub fn object_contained_in_lasso_with_context(
+    obj: &DrawObject,
+    polygon: &[Pos2],
+    all_objects: Option<&[DrawObject]>,
+) -> bool {
     if polygon.len() < 3 {
         return false;
     }
 
-    // 1. Broad-phase AABB culling
+    let verts = object_boundary_vertices_with_context(obj, all_objects);
+    if verts.is_empty() {
+        return false;
+    }
+
+    // 1. Broad-phase vertex-bounds culling (berdasarkan rentang simpul riil objek, bukan AABB luar)
     let mut poly_min_x = f32::INFINITY;
     let mut poly_max_x = f32::NEG_INFINITY;
     let mut poly_min_y = f32::INFINITY;
@@ -591,16 +643,21 @@ pub fn object_contained_in_lasso(obj: &DrawObject, polygon: &[Pos2]) -> bool {
         poly_max_y = poly_max_y.max(p.y);
     }
 
-    let b = object_bounds(obj);
-    if !b.is_finite() {
-        return false;
+    let mut vert_min_x = f32::INFINITY;
+    let mut vert_max_x = f32::NEG_INFINITY;
+    let mut vert_min_y = f32::INFINITY;
+    let mut vert_max_y = f32::NEG_INFINITY;
+    for v in &verts {
+        vert_min_x = vert_min_x.min(v.x);
+        vert_max_x = vert_max_x.max(v.x);
+        vert_min_y = vert_min_y.min(v.y);
+        vert_max_y = vert_max_y.max(v.y);
     }
 
-    // Jika batas luar objek keluar dari batas poligon, objek pasti tidak sepenuhnya dilingkupi
-    if b.min.x < poly_min_x - 0.5
-        || b.max.x > poly_max_x + 0.5
-        || b.min.y < poly_min_y - 0.5
-        || b.max.y > poly_max_y + 0.5
+    if vert_min_x < poly_min_x - 0.5
+        || vert_max_x > poly_max_x + 0.5
+        || vert_min_y < poly_min_y - 0.5
+        || vert_max_y > poly_max_y + 0.5
     {
         return false;
     }
@@ -624,11 +681,6 @@ pub fn object_contained_in_lasso(obj: &DrawObject, polygon: &[Pos2]) -> bool {
             ];
             return cardinals.iter().all(|&pt| point_in_polygon(pt, polygon));
         }
-    }
-
-    let verts = object_boundary_vertices(obj);
-    if verts.is_empty() {
-        return false;
     }
 
     // 2. Seluruh simpul batas objek harus berada di dalam poligon
@@ -669,8 +721,22 @@ pub fn object_in_lasso_mode(
     polygon: &[Pos2],
     mode: crate::model::LassoSelectionMode,
 ) -> bool {
+    object_in_lasso_mode_with_context(obj, polygon, mode, None)
+}
+
+/// Memilih objek menggunakan mode lasso yang dikonfigurasi dengan konteks objek seluruh halaman.
+pub fn object_in_lasso_mode_with_context(
+    obj: &DrawObject,
+    polygon: &[Pos2],
+    mode: crate::model::LassoSelectionMode,
+    all_objects: Option<&[DrawObject]>,
+) -> bool {
     match mode {
-        crate::model::LassoSelectionMode::Containment => object_contained_in_lasso(obj, polygon),
-        crate::model::LassoSelectionMode::Intersection => object_in_lasso(obj, polygon),
+        crate::model::LassoSelectionMode::Containment => {
+            object_contained_in_lasso_with_context(obj, polygon, all_objects)
+        }
+        crate::model::LassoSelectionMode::Intersection => {
+            object_in_lasso_with_context(obj, polygon, all_objects)
+        }
     }
 }

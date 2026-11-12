@@ -4045,3 +4045,208 @@ fn test_math_layout_compute_from_str_checked() {
     let res_err = MathLayout::compute_from_str_checked(r"\invalidCmd + 1", 20.0);
     assert!(res_err.is_err());
 }
+
+#[test]
+fn test_lasso_containment_tight_ellipse() {
+    // Ellipse 80x40 at (60, 80), center is (100, 100), rx=40, ry=20
+    let ellipse = DrawObject::Shape {
+        id: "ellipse-lasso".into(),
+        x: 60.0,
+        y: 80.0,
+        width: 80.0,
+        height: 40.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        shape_type: ShapeKind::Ellipse,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+
+    // Lasso 12-gon melingkupi kurva elips secara ketat (rx=45, ry=25),
+    // lasso ini memotong sudut-sudut AABB persegi luar (60, 80), (140, 80), dll.
+    let mut tight_lasso = Vec::new();
+    for i in 0..12 {
+        let theta = (i as f32) * (std::f32::consts::TAU / 12.0);
+        tight_lasso.push(Pos2::new(
+            100.0 + 45.0 * theta.cos(),
+            100.0 + 25.0 * theta.sin(),
+        ));
+    }
+
+    // Dengan representasi perimeter kurva 16-titik, seluruh simpul elips berada di dalam lasso!
+    assert!(object_contained_in_lasso(&ellipse, &tight_lasso));
+    assert!(object_in_lasso(&ellipse, &tight_lasso));
+}
+
+#[test]
+fn test_lasso_thick_stroke_intersection_mode() {
+    // Stroke tebal (width 20 pt) horizontal dari (100, 100) ke (200, 100)
+    // Pita visualnya membentang dari y=90 hingga y=110
+    let thick_stroke = DrawObject::Stroke {
+        id: "thick-stroke".into(),
+        points: vec![
+            StrokePoint {
+                x: 100.0,
+                y: 100.0,
+                pressure: 1.0,
+            },
+            StrokePoint {
+                x: 200.0,
+                y: 100.0,
+                pressure: 1.0,
+            },
+        ],
+        color: dummy_color(),
+        width: 20.0,
+        is_highlighter: false,
+        style: crate::model::StrokeStyle::Solid,
+    };
+
+    // Poligon lasso kecil di y=92..98 (menyentuh pita tebal stroke, tapi TIDAK memotong centerline y=100)
+    let ribbon_lasso = vec![
+        Pos2::new(140.0, 92.0),
+        Pos2::new(160.0, 92.0),
+        Pos2::new(160.0, 98.0),
+        Pos2::new(140.0, 98.0),
+    ];
+
+    // Toleransi ketebalan menjamin goresan tebal terseleksi pada mode Intersection
+    assert!(object_in_lasso(&thick_stroke, &ribbon_lasso));
+    // Pada mode Containment, pita tebal tidak sepenuhnya di dalam lasso kecil
+    assert!(!object_contained_in_lasso(&thick_stroke, &ribbon_lasso));
+}
+
+#[test]
+fn test_lasso_attached_connector_selection() {
+    let shape_a = DrawObject::Shape {
+        id: "shape_a".into(),
+        x: 100.0,
+        y: 100.0,
+        width: 80.0,
+        height: 60.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        shape_type: ShapeKind::Rectangle,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+
+    let shape_b = DrawObject::Shape {
+        id: "shape_b".into(),
+        x: 300.0,
+        y: 100.0,
+        width: 80.0,
+        height: 60.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        shape_type: ShapeKind::Rectangle,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+
+    // Connector Attached dari Right site shape_a (180, 130) ke Left site shape_b (300, 130)
+    let conn = DrawObject::Connector {
+        id: "conn-attached".into(),
+        start: crate::model::ConnectorEnd::Attached {
+            shape_id: "shape_a".into(),
+            site: crate::model::ConnectionSite::Right,
+        },
+        end: crate::model::ConnectorEnd::Attached {
+            shape_id: "shape_b".into(),
+            site: crate::model::ConnectionSite::Left,
+        },
+        route: crate::model::ConnectorRoute::Straight,
+        control_points: Vec::new(),
+        style: crate::model::ConnectorStyle {
+            stroke_color: dummy_color(),
+            stroke_width: 2.0,
+            start_marker: crate::model::MarkerKind::None,
+            end_marker: crate::model::MarkerKind::Arrow,
+        },
+        locked: false,
+    };
+
+    let all_objects = vec![shape_a, shape_b, conn.clone()];
+
+    // Lasso di antara kedua bentuk melingkupi konektor (x: 190..290, y: 110..150)
+    let conn_lasso = vec![
+        Pos2::new(170.0, 110.0),
+        Pos2::new(310.0, 110.0),
+        Pos2::new(310.0, 150.0),
+        Pos2::new(170.0, 150.0),
+    ];
+
+    // Dengan context all_objects, ujung konektor attached berhasil di-resolve!
+    assert!(super::hit_test::object_contained_in_lasso_with_context(
+        &conn,
+        &conn_lasso,
+        Some(&all_objects)
+    ));
+    assert!(super::hit_test::object_in_lasso_with_context(
+        &conn,
+        &conn_lasso,
+        Some(&all_objects)
+    ));
+}
+
+#[test]
+fn test_lasso_rotated_shape_containment_no_aabb_false_rejection() {
+    // Persegi panjang 100x20 di (100, 100) diputar 45 derajat (center 150, 110)
+    let rotated_rect = DrawObject::Shape {
+        id: "rot-rect".into(),
+        x: 100.0,
+        y: 100.0,
+        width: 100.0,
+        height: 20.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        shape_type: ShapeKind::Rectangle,
+        fill: None,
+        rotation: std::f32::consts::FRAC_PI_4,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+
+    let verts = super::primitives::object_boundary_vertices(&rotated_rect);
+    assert_eq!(verts.len(), 4);
+
+    // Lasso poligon yang membungkus 4 simpul riil objek dengan margin 5 pt
+    let mut poly_min_x = f32::INFINITY;
+    let mut poly_max_x = f32::NEG_INFINITY;
+    let mut poly_min_y = f32::INFINITY;
+    let mut poly_max_y = f32::NEG_INFINITY;
+    for v in &verts {
+        poly_min_x = poly_min_x.min(v.x);
+        poly_max_x = poly_max_x.max(v.x);
+        poly_min_y = poly_min_y.min(v.y);
+        poly_max_y = poly_max_y.max(v.y);
+    }
+
+    let tight_enclosing_lasso = vec![
+        Pos2::new(poly_min_x - 4.0, poly_min_y - 4.0),
+        Pos2::new(poly_max_x + 4.0, poly_min_y - 4.0),
+        Pos2::new(poly_max_x + 4.0, poly_max_y + 4.0),
+        Pos2::new(poly_min_x - 4.0, poly_max_y + 4.0),
+    ];
+
+    // Harus berhasil contained tanpa ditolak oleh broad-phase culling
+    assert!(object_contained_in_lasso(
+        &rotated_rect,
+        &tight_enclosing_lasso
+    ));
+    assert!(object_in_lasso(&rotated_rect, &tight_enclosing_lasso));
+}

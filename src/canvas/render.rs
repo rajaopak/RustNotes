@@ -14,11 +14,11 @@ use crate::geometry::{
     calculate_single_axis_resize, combined_bounds, find_alignment_guides, find_connector_snap_site,
     hit_test_connector_details, hit_test_connector_midpoint, hit_test_connector_with_objects,
     hit_test_object, hit_test_transform_handles, insert_control_point_at, next_shape_rect,
-    object_bounds, object_in_lasso_mode, point_in_polygon, prune_collinear_control_points,
-    prune_invalid_connector_control_points, recognize_handwriting_from_strokes, recognize_shape,
-    resolve_connector_endpoints, scale_object, shape_connection_point, should_reject_palm_input,
-    smooth_stroke_points, snap_point_to_grid, snap_value_to_grid, tessellate_stroke_styled,
-    translate_object,
+    object_bounds, object_in_lasso_mode_with_context, point_in_polygon,
+    prune_collinear_control_points, prune_invalid_connector_control_points,
+    recognize_handwriting_from_strokes, recognize_shape, resolve_connector_endpoints, scale_object,
+    shape_connection_point, should_reject_palm_input, smooth_stroke_points, snap_point_to_grid,
+    snap_value_to_grid, tessellate_stroke_styled, translate_object,
 };
 use crate::model::{
     ColorData, ConnectionSite, ConnectorEnd, ConnectorRoute, ConnectorStyle, DrawObject,
@@ -1567,14 +1567,17 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     state.selected_ids = vec![new_id];
                     state.spatial_grid.rebuild(&page.objects);
                 }
-            } else if !state.lasso_points.is_empty() {
+            } else if !state.lasso_points.is_empty()
+                && state.active_stroke_page_id.as_deref() == Some(&page.id)
+            {
                 if state.lasso_points.len() > 2 {
                     let mut selected = Vec::new();
                     for obj in &page.objects {
-                        if object_in_lasso_mode(
+                        if object_in_lasso_mode_with_context(
                             obj,
                             &state.lasso_points,
                             state.lasso_selection_mode,
+                            Some(&page.objects),
                         ) {
                             selected.push(obj.id().to_string());
                         }
@@ -1582,6 +1585,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     state.selected_ids = selected;
                 }
                 state.lasso_points.clear();
+                state.active_stroke_page_id = None;
             }
         }
     }
