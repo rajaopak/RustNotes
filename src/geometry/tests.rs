@@ -3988,3 +3988,60 @@ fn test_tessellate_single_point_pressure_mesh() {
     // Full 10x dynamic range verified on rendered mesh vertices
     assert!(dist_heavy > dist_light * 8.0);
 }
+
+#[test]
+fn test_unsupported_latex_macro_returns_parse_error() {
+    // 1. Perintah tidak dikenal harus mengembalikan error, bukan diam-diam fallback ke teks mentah
+    let res = parse_latex_math(r"\unknownMacro{x}");
+    assert!(res.is_err());
+    let err = res.unwrap_err();
+    assert!(err.message.contains("tidak didukung") && err.message.contains("unknownMacro"));
+
+    // 2. Makro paket eksternal (TikZ/PGF) ditolak secara eksplisit
+    let res_tikz = parse_latex_math(r"\begin{tikzpicture}\draw (0,0) -- (1,1);\end{tikzpicture}");
+    assert!(res_tikz.is_err());
+    let err_tikz = res_tikz.unwrap_err();
+    assert!(err_tikz.message.contains("tidak didukung"));
+
+    // 3. Formula valid yang disusupi perintah tidak sah harus gagal secara utuh
+    let res_mixed = parse_latex_math(r"\frac{\alpha + \beta}{\bogusCommand{x}}");
+    assert!(res_mixed.is_err());
+}
+
+#[test]
+fn test_standard_math_functions_accepted() {
+    let res = parse_latex_math(r"\sin(x) + \cos(y) = \tan(z)");
+    assert!(res.is_ok());
+
+    let res_log = parse_latex_math(r"\ln(x) + \log(y) + \exp(z)");
+    assert!(res_log.is_ok());
+
+    let res_lim = parse_latex_math(r"\lim_{x \to 0} \frac{\sin(x)}{x} = 1");
+    assert!(res_lim.is_ok());
+}
+
+#[test]
+fn test_extended_unicode_symbols_in_math() {
+    let res = parse_latex_math(r"\langle x \mid y \rangle");
+    assert!(res.is_ok());
+
+    let res_geom = parse_latex_math(r"A \perp B \parallel C");
+    assert!(res_geom.is_ok());
+
+    let res_logic = parse_latex_math(r"P \implies Q \iff \neg P \lor Q");
+    assert!(res_logic.is_ok());
+}
+
+#[test]
+fn test_math_layout_compute_from_str_checked() {
+    // Valid formula returns Ok layout with positive dimensions
+    let res_ok = MathLayout::compute_from_str_checked(r"E = mc^2", 20.0);
+    assert!(res_ok.is_ok());
+    let layout = res_ok.unwrap();
+    assert!(layout.width > 0.0);
+    assert!(layout.height > 0.0);
+
+    // Invalid formula returns Err with informative error
+    let res_err = MathLayout::compute_from_str_checked(r"\invalidCmd + 1", 20.0);
+    assert!(res_err.is_err());
+}

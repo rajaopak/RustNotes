@@ -334,11 +334,17 @@ fn parse_single_item(tokens: &[MathToken], cursor: &mut usize) -> Result<MathNod
                 "thinspace" => Ok(MathNode::Space(0.3)),
                 "thickspace" => Ok(MathNode::Space(0.6)),
                 "space" => Ok(MathNode::Space(0.4)),
+                cmd if cmd.starts_with("__raw_text:") => Ok(MathNode::Text(cmd.to_string())),
                 _ => {
                     if let Some(ch) = latex_command_to_char(cmd_name) {
                         Ok(MathNode::Symbol(ch))
+                    } else if is_standard_function_name(cmd_name) {
+                        Ok(MathNode::Text(cmd_name.to_string()))
                     } else {
-                        Ok(MathNode::Text(cmd.clone()))
+                        Err(MathParseError {
+                            message: format!("Perintah LaTeX tidak didukung: '\\{}'", cmd_name),
+                            position: *cursor,
+                        })
                     }
                 }
             }
@@ -586,8 +592,65 @@ pub fn latex_command_to_char(cmd: &str) -> Option<char> {
         "exists" => Some('∃'),
         "nexists" => Some('∄'),
         "dots" | "cdots" | "ldots" => Some('…'),
+        "langle" => Some('⟨'),
+        "rangle" => Some('⟩'),
+        "mid" => Some('∣'),
+        "parallel" => Some('∥'),
+        "perp" => Some('⊥'),
+        "angle" => Some('∠'),
+        "therefore" => Some('∴'),
+        "because" => Some('∵'),
+        "vee" | "lor" => Some('∨'),
+        "wedge" | "land" => Some('∧'),
+        "neg" | "lnot" => Some('¬'),
+        "top" => Some('⊤'),
+        "bot" => Some('⊥'),
+        "aleph" => Some('ℵ'),
+        "cong" => Some('≅'),
+        "prime" => Some('′'),
+        "dag" | "dagger" => Some('†'),
+        "ddag" | "ddagger" => Some('‡'),
         _ => None,
     }
+}
+
+/// Menentukan apakah perintah merupakan nama fungsi matematika standar (dicetak tegak/roman)
+#[inline]
+pub fn is_standard_function_name(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        "sin"
+            | "cos"
+            | "tan"
+            | "sec"
+            | "csc"
+            | "cot"
+            | "arcsin"
+            | "arccos"
+            | "arctan"
+            | "sinh"
+            | "cosh"
+            | "tanh"
+            | "coth"
+            | "sech"
+            | "csch"
+            | "ln"
+            | "log"
+            | "exp"
+            | "lg"
+            | "det"
+            | "dim"
+            | "gcd"
+            | "deg"
+            | "hom"
+            | "ker"
+            | "arg"
+            | "max"
+            | "min"
+            | "sup"
+            | "inf"
+            | "lim"
+    )
 }
 
 /// Item elemen visual hasil perhitungan tata letak 2D formula matematika
@@ -621,6 +684,12 @@ impl MathLayout {
     pub fn compute_from_str(latex: &str, font_size: f32) -> Self {
         let nodes = parse_latex_math(latex).unwrap_or_default();
         Self::compute(&nodes, font_size)
+    }
+
+    /// Menghitung tata letak 2D langsung dari string LaTeX dengan validasi syntax penuh
+    pub fn compute_from_str_checked(latex: &str, font_size: f32) -> Result<Self, MathParseError> {
+        let nodes = parse_latex_math(latex)?;
+        Ok(Self::compute(&nodes, font_size))
     }
 
     /// Menghitung tata letak 2D dari daftar MathNode pada ukuran font tertentu

@@ -1318,13 +1318,21 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
 
             // Live Preview Box
             ui.label(egui::RichText::new("Pratinjau Visual:").size(12.0).strong());
-            let parse_result =
-                crate::geometry::math::parse_latex_math(&state.equation_latex_buffer);
-            match parse_result {
-                Ok(nodes) => {
-                    let preview_font_size = state.equation_font_size.clamp(14.0, 36.0);
+            let clean_buffer = state.equation_latex_buffer.trim();
+            let is_empty = clean_buffer.is_empty();
+            let parse_result = if is_empty {
+                Ok(Vec::new())
+            } else {
+                crate::geometry::math::parse_latex_math(clean_buffer)
+            };
+
+            let is_valid = !is_empty && parse_result.is_ok();
+
+            match &parse_result {
+                Ok(nodes) if !is_empty => {
+                    let preview_font_size = state.equation_font_size;
                     let layout =
-                        crate::geometry::math::MathLayout::compute(&nodes, preview_font_size);
+                        crate::geometry::math::MathLayout::compute(nodes, preview_font_size);
                     let box_w = (layout.width + 40.0).max(ui.available_width());
                     let box_h = (layout.height + 30.0).max(60.0);
 
@@ -1361,10 +1369,24 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
                         layout.render(&painter, Pos2::new(render_x, render_y), 1.0, 0.0, text_col);
                     }
                 }
+                Ok(_) => {
+                    ui.label(
+                        egui::RichText::new("Ketik rumus LaTeX di atas untuk melihat pratinjau visual.")
+                            .italics()
+                            .color(Color32::GRAY),
+                    );
+                }
                 Err(err) => {
                     ui.colored_label(
                         Color32::from_rgb(235, 87, 87),
                         format!("⚠️ Kesalahan sintaks: {}", err),
+                    );
+                    ui.label(
+                        egui::RichText::new(
+                            "Catatan: Hanya rumus matematika murni (pecahan, akar, eksponen, greek, integral, dsb.) yang didukung. Makro TeX eksternal (TikZ/PGF) tidak didukung.",
+                        )
+                        .size(11.0)
+                        .color(Color32::GRAY),
                     );
                 }
             }
@@ -1372,9 +1394,16 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
             ui.separator();
 
             ui.horizontal(|ui| {
-                if ui.button("Simpan / Masukkan").clicked() {
-                    insert_action = true;
-                }
+                ui.add_enabled_ui(is_valid, |ui| {
+                    let btn_text = if state.editing_equation_id.is_some() {
+                        "Perbarui Persamaan"
+                    } else {
+                        "Sisipkan ke Halaman"
+                    };
+                    if ui.button(btn_text).clicked() {
+                        insert_action = true;
+                    }
+                });
                 if ui.button("Batal").clicked() {
                     close_action = true;
                 }
