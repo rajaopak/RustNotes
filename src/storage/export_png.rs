@@ -181,12 +181,11 @@ fn is_stroke_dash_on(dist: f32, style: crate::model::StrokeStyle, w: f32) -> boo
     }
 }
 
-pub fn export_page_to_png(
+pub fn render_page_to_rgba_image(
     dir: &Path,
     notebook_id: &str,
     page: &Page,
-    output_path: &Path,
-) -> Result<(), String> {
+) -> Result<image::RgbaImage, String> {
     let scale = 2.0_f32; // 2x resolution
     let width_px = (page.width * scale).round() as u32;
     let height_px = (page.height * scale).round() as u32;
@@ -1028,6 +1027,16 @@ pub fn export_page_to_png(
         }
     }
 
+    Ok(img)
+}
+
+pub fn export_page_to_png(
+    dir: &Path,
+    notebook_id: &str,
+    page: &Page,
+    output_path: &Path,
+) -> Result<(), String> {
+    let img = render_page_to_rgba_image(dir, notebook_id, page)?;
     img.save(output_path)
         .map_err(|e| format!("Gagal menyimpan berkas PNG: {e}"))
 }

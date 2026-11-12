@@ -1,16 +1,37 @@
-use super::export_png::export_page_to_png;
+use super::export_png::render_page_to_rgba_image;
 use super::notebook_store::save_asset_to_notebook;
 use crate::model::{Notebook, Page, PageBackground, PageTemplate};
 use pdfium_render::prelude::*;
-use std::fs;
 use std::path::Path;
 
 pub fn get_pdfium() -> Result<Pdfium, String> {
+    let mut searched_locations = Vec::new();
+
+    // 0. Cek environment variable PDFIUM_PATH / PDFIUM_DYNAMIC_LIB_PATH
+    if let Ok(env_path) =
+        std::env::var("PDFIUM_PATH").or_else(|_| std::env::var("PDFIUM_DYNAMIC_LIB_PATH"))
+    {
+        let p = Path::new(&env_path);
+        let candidate = if p.is_dir() {
+            p.join("pdfium.dll")
+        } else {
+            p.to_path_buf()
+        };
+        searched_locations.push(format!("ENV: {}", candidate.display()));
+        if candidate.exists()
+            && let Ok(bindings) =
+                Pdfium::bind_to_library(candidate.to_str().unwrap_or("pdfium.dll"))
+        {
+            return Ok(Pdfium::new(bindings));
+        }
+    }
+
     // 1. Cek di samping executable
     if let Ok(exe_path) = std::env::current_exe()
         && let Some(parent) = exe_path.parent()
     {
         let candidate = parent.join("pdfium.dll");
+        searched_locations.push(candidate.display().to_string());
         if candidate.exists()
             && let Ok(bindings) =
                 Pdfium::bind_to_library(candidate.to_str().unwrap_or("pdfium.dll"))
@@ -21,18 +42,20 @@ pub fn get_pdfium() -> Result<Pdfium, String> {
 
     // 2. Cek di direktori kerja
     let candidate = Path::new("pdfium.dll");
+    searched_locations.push(candidate.display().to_string());
     if candidate.exists()
         && let Ok(bindings) = Pdfium::bind_to_library("pdfium.dll")
     {
         return Ok(Pdfium::new(bindings));
     }
 
-    // 3. Fallback sistem
+    // 3. Fallback sistem / PATH
     Pdfium::bind_to_system_library()
         .map(Pdfium::new)
         .map_err(|e| {
             format!(
-                "PDFium library tidak ditemukan: {e}. Pastikan 'pdfium.dll' berada di direktori aplikasi."
+                "PDFium library tidak ditemukan ({e}). Lokasi yang diperiksa: {}. Pastikan 'pdfium.dll' berada di direktori aplikasi, path PDFIUM_PATH, atau terdaftar dalam PATH sistem.",
+                searched_locations.join(", ")
             )
         })
 }
@@ -42,8 +65,6 @@ pub fn import_pdf_to_pages(
     notebook_id: &str,
     pdf_data: &[u8],
 ) -> Result<Vec<Page>, String> {
-    let pdf_asset_id = save_asset_to_notebook(dir, notebook_id, pdf_data, "pdf")?;
-
     let pdfium = get_pdfium()?;
     let document = pdfium
         .load_pdf_from_byte_slice(pdf_data, None)
@@ -54,6 +75,9 @@ pub fn import_pdf_to_pages(
     if count == 0 {
         return Err("Dokumen PDF tidak memiliki halaman.".to_string());
     }
+
+    // Simpan aset PDF hanya setelah dokumen PDF berhasil divalidasi
+    let pdf_asset_id = save_asset_to_notebook(dir, notebook_id, pdf_data, "pdf")?;
 
     let mut pages = Vec::with_capacity(count as usize);
 
@@ -98,39 +122,44 @@ pub fn export_notebook_to_pdf(
     notebook: &Notebook,
     output_path: &Path,
 ) -> Result<(), String> {
+    if notebook.pages.is_empty() {
+        return Err("Buku catatan tidak memiliki halaman untuk diekspor ke PDF.".to_string());
+    }
+
     let pdfium = get_pdfium()?;
     let mut new_doc = pdfium
         .create_new_pdf()
-        .map_err(|e| format!("Gagal membuat dokumen PDF: {e}"))?;
+        .map_err(|e| format!("Gagal membuat dokumen PDF baru: {e}"))?;
 
     for (idx, page) in notebook.pages.iter().enumerate() {
-        let temp_png = dir.join(format!("temp_export_{idx}.png"));
-        export_page_to_png(dir, &notebook.id, page, &temp_png)?;
+        let rgba_img = render_page_to_rgba_image(dir, &notebook.id, page)?;
+        let dyn_img = image::DynamicImage::ImageRgba8(rgba_img);
 
         let w_pts = PdfPoints::new(page.width);
         let h_pts = PdfPoints::new(page.height);
         let mut pdf_page = new_doc
             .pages_mut()
             .create_page_at_end(PdfPagePaperSize::Custom(w_pts, h_pts))
-            .map_err(|e| format!("Gagal membuat halaman PDF: {e}"))?;
+            .map_err(|e| format!("Gagal membuat halaman {idx} PDF: {e}"))?;
 
-        if let Ok(data) = fs::read(&temp_png) {
-            let _ = fs::remove_file(&temp_png);
-            if let Ok(dyn_img) = image::load_from_memory(&data) {
-                let _ = pdf_page.objects_mut().create_image_object(
-                    PdfPoints::new(0.0),
-                    PdfPoints::new(0.0),
-                    &dyn_img,
-                    Some(w_pts),
-                    Some(h_pts),
-                );
-            }
-        }
+        pdf_page
+            .objects_mut()
+            .create_image_object(
+                PdfPoints::new(0.0),
+                PdfPoints::new(0.0),
+                &dyn_img,
+                Some(w_pts),
+                Some(h_pts),
+            )
+            .map_err(|e| format!("Gagal menambahkan objek gambar ke halaman {idx} PDF: {e}"))?;
     }
 
-    new_doc
-        .save_to_file(output_path)
-        .map_err(|e| format!("Gagal menyimpan PDF: {e}"))?;
+    new_doc.save_to_file(output_path).map_err(|e| {
+        format!(
+            "Gagal menyimpan berkas PDF ke '{}': {e}",
+            output_path.display()
+        )
+    })?;
 
     Ok(())
 }

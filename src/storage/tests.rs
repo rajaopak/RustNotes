@@ -475,14 +475,59 @@ fn test_export_notebook_to_pdf_and_reimport() {
     let nb = Notebook::new("PDF Roundtrip", PageTemplate::Blank, Color32::WHITE);
     let out_pdf = dir.join("exported.pdf");
 
+    let pdfium_available = get_pdfium().is_ok();
     let export_res = export_notebook_to_pdf(dir, &nb, &out_pdf);
-    if export_res.is_ok() {
+
+    if pdfium_available {
+        export_res.expect("Ekspor PDF harus berhasil jika pustaka PDFium tersedia");
         assert!(out_pdf.exists());
         let pdf_bytes = fs::read(&out_pdf).expect("read exported pdf");
         let imported_pages = import_pdf_to_pages(dir, &nb.id, &pdf_bytes).expect("import pages");
         assert_eq!(imported_pages.len(), nb.pages.len());
         assert!(imported_pages[0].background.is_some());
+    } else {
+        assert!(
+            export_res.is_err(),
+            "Ekspor PDF harus mengembalikan Err informatif saat PDFium tidak tersedia"
+        );
+        let err_msg = export_res.unwrap_err();
+        assert!(
+            err_msg.contains("PDFium library tidak ditemukan") || err_msg.contains("pdfium.dll"),
+            "Pesan error harus memuat diagnostik jalur PDFium: {err_msg}"
+        );
     }
+}
+
+#[test]
+fn test_export_empty_notebook_to_pdf_rejects() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+
+    let mut nb = Notebook::new("Empty Notebook", PageTemplate::Blank, Color32::WHITE);
+    nb.pages.clear();
+    let out_pdf = dir.join("empty.pdf");
+
+    let export_res = export_notebook_to_pdf(dir, &nb, &out_pdf);
+    assert!(export_res.is_err());
+    let err_msg = export_res.unwrap_err();
+    assert!(err_msg.contains("tidak memiliki halaman") || err_msg.contains("PDFium"));
+}
+
+#[test]
+fn test_render_page_to_rgba_image_in_memory() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+
+    let mut page = Page::new(PageTemplate::Grid);
+    page.width = 400.0;
+    page.height = 300.0;
+
+    let res = render_page_to_rgba_image(dir, "nb_mem", &page);
+    assert!(res.is_ok());
+    let img = res.unwrap();
+    // 2x resolution: 400 * 2 = 800, 300 * 2 = 600
+    assert_eq!(img.width(), 800);
+    assert_eq!(img.height(), 600);
 }
 
 #[test]
