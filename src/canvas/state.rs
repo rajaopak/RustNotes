@@ -371,7 +371,7 @@ impl CanvasState {
         page.objects
             .retain(|o| !ids_to_delete.contains(&o.id().to_string()));
         self.selected_ids.retain(|id| !ids_to_delete.contains(id));
-        self.spatial_grid.rebuild(&page.objects);
+        self.rebuild_spatial_grid(&page.id, &page.objects);
     }
 
     pub fn duplicate_selected(&mut self, page: &mut Page) {
@@ -409,7 +409,7 @@ impl CanvasState {
 
         page.objects.extend(duplicated);
         self.selected_ids = new_ids;
-        self.spatial_grid.rebuild(&page.objects);
+        self.rebuild_spatial_grid(&page.id, &page.objects);
     }
 
     pub fn paste_clipboard(&mut self, page: &mut Page, target_pos: Option<Pos2>) {
@@ -454,7 +454,7 @@ impl CanvasState {
 
         page.objects.extend(pasted);
         self.selected_ids = new_ids;
-        self.spatial_grid.rebuild(&page.objects);
+        self.rebuild_spatial_grid(&page.id, &page.objects);
     }
 
     /// Fase 8.2: Menghapus atau memotong objek pada titik `page_p` sesuai `self.eraser_mode`.
@@ -512,7 +512,7 @@ impl CanvasState {
                     );
                     self.mesh_cache.retain(|(k, _), _| k != &rem_id);
                     page.objects.remove(target_idx);
-                    self.spatial_grid.rebuild(&page.objects);
+                    self.rebuild_spatial_grid(&page.id, &page.objects);
                     self.last_whole_erase_pos = Some(page_p);
                     return true;
                 }
@@ -597,7 +597,7 @@ impl CanvasState {
                 }
 
                 page.objects = new_objects;
-                self.spatial_grid.rebuild(&page.objects);
+                self.rebuild_spatial_grid(&page.id, &page.objects);
                 true
             }
         }
@@ -689,7 +689,7 @@ impl CanvasState {
                     self.mesh_cache.retain(|(k, _), _| k != &id);
                 }
             }
-            self.spatial_grid.rebuild(&page.objects);
+            self.rebuild_spatial_grid(&page.id, &page.objects);
         }
     }
 
@@ -709,7 +709,7 @@ impl CanvasState {
                     self.mesh_cache.retain(|(k, _), _| k != &id);
                 }
             }
-            self.spatial_grid.rebuild(&page.objects);
+            self.rebuild_spatial_grid(&page.id, &page.objects);
         }
     }
 
