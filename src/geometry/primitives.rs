@@ -207,6 +207,38 @@ pub fn object_bounds(obj: &DrawObject) -> Rect {
     }
 }
 
+/// Menghitung bounding box objek dengan konteks seluruh objek pada halaman,
+/// sehingga Connector yang ujungnya terikat (Attached) ke Shape memiliki bounds akurat.
+pub fn object_bounds_with_context(obj: &DrawObject, all_objects: &[DrawObject]) -> Rect {
+    if let DrawObject::Connector {
+        start,
+        end,
+        control_points,
+        style,
+        ..
+    } = obj
+    {
+        let ((p_start, _), (p_end, _)) =
+            super::connectors::resolve_connector_endpoints(start, end, all_objects);
+        let mut min_x = p_start.x.min(p_end.x);
+        let mut min_y = p_start.y.min(p_end.y);
+        let mut max_x = p_start.x.max(p_end.x);
+        let mut max_y = p_start.y.max(p_end.y);
+        for cp in control_points {
+            min_x = min_x.min(cp.x);
+            min_y = min_y.min(cp.y);
+            max_x = max_x.max(cp.x);
+            max_y = max_y.max(cp.y);
+        }
+        let half = style.stroke_width * 0.5 + 4.0;
+        return Rect::from_min_max(
+            Pos2::new(min_x - half, min_y - half),
+            Pos2::new(max_x + half, max_y + half),
+        );
+    }
+    object_bounds(obj)
+}
+
 pub fn combined_bounds(objects: &[&DrawObject]) -> Option<Rect> {
     let mut combined: Option<Rect> = None;
     for obj in objects {

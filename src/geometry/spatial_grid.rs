@@ -1,4 +1,4 @@
-use super::primitives::object_bounds;
+use super::primitives::object_bounds_with_context;
 use crate::model::DrawObject;
 use eframe::egui::{Pos2, Rect};
 use std::collections::HashMap;
@@ -30,7 +30,7 @@ impl SpatialGrid {
     pub fn rebuild(&mut self, objects: &[DrawObject]) {
         self.cells.clear();
         for (idx, obj) in objects.iter().enumerate() {
-            let b = object_bounds(obj);
+            let b = object_bounds_with_context(obj, objects);
             if !b.is_finite() || b.width() <= 0.0 || b.height() <= 0.0 {
                 continue;
             }
