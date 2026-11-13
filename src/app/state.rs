@@ -7,8 +7,9 @@ use crate::model::{
     AppSettings, CustomTemplate, Library, Page, PageOrientation, PageTemplate, PaperSizePreset,
 };
 use crate::storage::{
-    LoadStatus, app_storage_dir, load_custom_templates, load_library, load_library_index_from_dir,
-    load_notebook_from_dir, load_settings_from_dir, save_library_index_to_dir,
+    LoadStatus, app_storage_dir, load_custom_templates, load_library_from_dir,
+    load_library_index_from_dir, load_notebook_from_dir, load_settings_from_dir,
+    save_library_index_to_dir,
 };
 use eframe::egui::{Color32, Rect, Vec2};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -23,6 +24,7 @@ pub struct RustNotesApp {
     pub(crate) load_status: LoadStatus,
     pub(crate) is_read_only: bool,
     pub(crate) toast_message: Option<String>,
+    pub(crate) unloaded_notebook_metas: Vec<crate::model::NotebookMeta>,
 
     // Library UI state
     pub(crate) current_nav_view: NavView,
@@ -136,24 +138,40 @@ pub struct RustNotesApp {
 
 impl Default for RustNotesApp {
     fn default() -> Self {
-        let storage_dir = app_storage_dir();
-        let index_res = load_library_index_from_dir(&storage_dir);
+        Self::load_from_dir(&app_storage_dir())
+    }
+}
+
+impl RustNotesApp {
+    pub(crate) fn load_from_dir(storage_dir: &std::path::Path) -> Self {
+        let index_res = load_library_index_from_dir(storage_dir);
 
         let mut library = Library::default();
         let mut load_errors: Vec<String> = Vec::new();
+        let mut unloaded_notebook_metas: Vec<crate::model::NotebookMeta> = Vec::new();
         for meta in &index_res.index.notebooks {
-            match load_notebook_from_dir(&storage_dir, &meta.id) {
+            match load_notebook_from_dir(storage_dir, &meta.id) {
                 Ok(nb) => library.notebooks.push(nb),
-                Err(e) => load_errors.push(e),
+                Err(e) => {
+                    load_errors.push(e);
+                    unloaded_notebook_metas.push(meta.clone());
+                }
             }
         }
         library.folders = index_res.index.folders;
+
+        let mut actual_load_status = match index_res.status {
+            crate::storage::LoadIndexStatus::RecoveredFromPrevious => {
+                LoadStatus::RecoveredFromPrevious
+            }
+            _ => LoadStatus::LoadedDirect,
+        };
 
         let (is_read_only, toast) = if !load_errors.is_empty() {
             (
                 false,
                 Some(format!(
-                    "Peringatan: {} notebook gagal dimuat (mungkin rusak).",
+                    "Peringatan: {} notebook gagal dimuat (metadata dipertahankan).",
                     load_errors.len()
                 )),
             )
@@ -172,12 +190,13 @@ impl Default for RustNotesApp {
                         if library.notebooks.is_empty()
                             && index_res.status == crate::storage::LoadIndexStatus::FreshIndex
                         {
-                            Some(load_library())
+                            Some(load_library_from_dir(storage_dir))
                         } else {
                             None
                         }
                     };
                     if let Some(lr) = legacy_res {
+                        actual_load_status = lr.status.clone();
                         match &lr.status {
                             LoadStatus::RecoveredFromPrevious => {
                                 library = lr.library;
@@ -216,14 +235,18 @@ impl Default for RustNotesApp {
             }
         };
 
-        let mut init_index = crate::model::LibraryIndex::default();
-        for nb in &library.notebooks {
-            init_index
-                .notebooks
-                .push(crate::model::NotebookMeta::from_notebook(nb));
+        // Jangan menimpa library_index.json saat startup jika ada error muat atau mode baca-saja,
+        // atau jika indeks sudah konsisten tanpa perubahan.
+        if !is_read_only && load_errors.is_empty() && !library.notebooks.is_empty() {
+            let mut init_index = crate::model::LibraryIndex::default();
+            for nb in &library.notebooks {
+                init_index
+                    .notebooks
+                    .push(crate::model::NotebookMeta::from_notebook(nb));
+            }
+            init_index.folders = library.folders.clone();
+            let _ = save_library_index_to_dir(storage_dir, &init_index);
         }
-        init_index.folders = library.folders.clone();
-        let _ = save_library_index_to_dir(&storage_dir, &init_index);
 
         Self {
             library,
@@ -231,9 +254,10 @@ impl Default for RustNotesApp {
             active_notebook_id: None,
             current_page_index: 0,
             canvas_state: CanvasState::default(),
-            load_status: LoadStatus::LoadedDirect,
+            load_status: actual_load_status,
             is_read_only,
             toast_message: toast,
+            unloaded_notebook_metas,
             current_nav_view: NavView::Documents,
             search_query: String::new(),
             show_new_notebook_modal: false,
@@ -284,11 +308,11 @@ impl Default for RustNotesApp {
             show_in_doc_search: false,
             doc_search_query: String::new(),
             doc_search_current_match: 0,
-            custom_templates: load_custom_templates(&storage_dir),
+            custom_templates: load_custom_templates(storage_dir),
             show_save_template_modal: false,
             new_template_name: String::new(),
             show_about_modal: false,
-            settings: load_settings_from_dir(&storage_dir),
+            settings: load_settings_from_dir(storage_dir),
             show_ocr_modal: false,
             show_add_page_modal: false,
             add_page_template: PageTemplate::Ruled,

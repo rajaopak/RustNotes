@@ -1,7 +1,7 @@
 use super::cover::draw_goodnotes_cover;
 use super::state::RustNotesApp;
 use super::types::{COVER_PALETTE, NavView};
-use crate::model::{Library, Notebook, PageOrientation, PageTemplate, PaperSizePreset, ThemeMode};
+use crate::model::{Notebook, PageOrientation, PageTemplate, PaperSizePreset, ThemeMode};
 use crate::storage::{app_storage_dir, save_settings_to_dir};
 use eframe::egui::{
     self, Align, Button, Color32, CornerRadius, FontId, Layout, Rect, RichText, ScrollArea, Sense,
@@ -232,19 +232,32 @@ impl RustNotesApp {
                         && let Some(path) = rfd::FileDialog::new()
                             .set_file_name("RustNotes-backup.json")
                             .save_file()
-                        && let Ok(data) = serde_json::to_string_pretty(&self.library)
                     {
-                        let _ = std::fs::write(path, data);
+                        match serde_json::to_string_pretty(&self.library) {
+                            Ok(data) => {
+                                if let Err(e) =
+                                    crate::storage::atomic_write_file(&path, &data, None)
+                                {
+                                    self.toast_message =
+                                        Some(format!("⚠ Gagal mengekspor cadangan: {e}"));
+                                } else {
+                                    self.toast_message =
+                                        Some("✅ Cadangan library berhasil diekspor.".to_string());
+                                }
+                            }
+                            Err(e) => {
+                                self.toast_message =
+                                    Some(format!("⚠ Gagal memproses data cadangan: {e}"));
+                            }
+                        }
                     }
                     if ui.button("📤 Import Library Backup (.json)").clicked()
                         && let Some(path) = rfd::FileDialog::new()
                             .add_filter("JSON", &["json"])
                             .pick_file()
-                        && let Ok(content) = std::fs::read_to_string(path)
-                        && let Ok(lib) = serde_json::from_str::<Library>(&content)
+                        && let Err(e) = self.import_library_backup_from_path(&path)
                     {
-                        self.library = lib;
-                        self.persist_library();
+                        self.toast_message = Some(format!("⚠ Gagal mengimpor cadangan: {e}"));
                     }
                 });
             });
