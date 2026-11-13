@@ -29,6 +29,11 @@ impl RustNotesApp {
             }
         };
 
+        let page_count = self.library.notebooks[nb_idx].pages.len();
+        if page_count > 0 && self.current_page_index >= page_count {
+            self.current_page_index = page_count - 1;
+        }
+
         if let Some((target_page_id, target_pos)) = self.canvas_state.request_paste_image.take() {
             let target_page_idx = self.library.notebooks[nb_idx]
                 .pages
@@ -170,8 +175,10 @@ impl RustNotesApp {
                     &self.settings.shortcuts,
                     i,
                 )
-            }) {
-                let p = &self.library.notebooks[nb_idx].pages[self.current_page_index];
+            }) && let Some(p) = self.library.notebooks[nb_idx]
+                .pages
+                .get(self.current_page_index)
+            {
                 self.canvas_state.selected_ids =
                     p.objects.iter().map(|o| o.id().to_string()).collect();
                 self.canvas_state.current_tool = ActiveTool::Lasso;
@@ -252,8 +259,12 @@ impl RustNotesApp {
             }
 
             // Ctrl+X: Cut selected objects
-            if is_cut && !self.canvas_state.selected_ids.is_empty() {
-                let p = &mut self.library.notebooks[nb_idx].pages[self.current_page_index];
+            if is_cut
+                && !self.canvas_state.selected_ids.is_empty()
+                && let Some(p) = self.library.notebooks[nb_idx]
+                    .pages
+                    .get_mut(self.current_page_index)
+            {
                 self.canvas_state.cut_selected(p);
                 self.app_clipboard_win_seq = get_windows_clipboard_sequence();
                 self.mark_dirty(&notebook_id);
@@ -264,8 +275,11 @@ impl RustNotesApp {
             }
 
             // Ctrl+D: Duplicate selected objects
-            if is_duplicate {
-                let p = &mut self.library.notebooks[nb_idx].pages[self.current_page_index];
+            if is_duplicate
+                && let Some(p) = self.library.notebooks[nb_idx]
+                    .pages
+                    .get_mut(self.current_page_index)
+            {
                 self.canvas_state.duplicate_selected(p);
                 self.mark_dirty(&notebook_id);
                 self.toast_message = Some("📄 Objek digandakan.".to_string());
@@ -349,8 +363,10 @@ impl RustNotesApp {
                         i,
                     ) || i.key_pressed(egui::Key::Delete)
                         || i.key_pressed(egui::Key::Backspace))
-            }) {
-                let p = &mut self.library.notebooks[nb_idx].pages[self.current_page_index];
+            }) && let Some(p) = self.library.notebooks[nb_idx]
+                .pages
+                .get_mut(self.current_page_index)
+            {
                 self.canvas_state.delete_selected(p);
                 self.mark_dirty(&notebook_id);
                 self.toast_message = Some("🗑 Objek dihapus.".to_string());
@@ -363,14 +379,13 @@ impl RustNotesApp {
                     &self.settings.shortcuts,
                     i,
                 )
-            }) {
-                let (toggled, is_locked) = {
-                    let p = &mut self.library.notebooks[nb_idx].pages[self.current_page_index];
-                    let ok = self.canvas_state.toggle_lock_selected(p);
-                    let locked = self.canvas_state.is_selected_locked(p);
-                    (ok, locked)
-                };
-                if toggled {
+            }) && let Some(p) = self.library.notebooks[nb_idx]
+                .pages
+                .get_mut(self.current_page_index)
+            {
+                let ok = self.canvas_state.toggle_lock_selected(p);
+                let is_locked = self.canvas_state.is_selected_locked(p);
+                if ok {
                     self.mark_dirty(&notebook_id);
                     self.toast_message = Some(if is_locked {
                         "🔒 Objek dikunci (Locked).".to_string()
