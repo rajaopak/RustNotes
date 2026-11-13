@@ -570,16 +570,7 @@ impl RustNotesApp {
                     });
 
                     if settings_changed {
-                        self.canvas_state.pressure_sensitivity_enabled =
-                            self.settings.pressure_sensitivity_enabled;
-                        self.canvas_state.pressure_min = self.settings.pressure_min;
-                        self.canvas_state.pressure_multiplier =
-                            self.settings.pressure_multiplier;
-                        self.canvas_state.highlighter_opacity =
-                            self.settings.highlighter_opacity;
-                        self.canvas_state.highlighter_pressure_enabled =
-                            self.settings.highlighter_pressure_enabled;
-                        self.canvas_state.mesh_cache.clear();
+                        self.sync_inking_settings_to_canvas();
                         let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
                     }
 
@@ -592,17 +583,165 @@ impl RustNotesApp {
                             .button(lang.tr("Reset ke Default", "Reset to Defaults"))
                             .clicked()
                         {
-                            self.settings.pressure_sensitivity_enabled = true;
-                            self.settings.pressure_min = 0.2;
-                            self.settings.pressure_multiplier = 1.0;
-                            self.canvas_state.pressure_sensitivity_enabled = true;
-                            self.canvas_state.pressure_min = 0.2;
-                            self.canvas_state.pressure_multiplier = 1.0;
+                            self.reset_inking_settings_to_defaults();
                             let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
                         }
                     });
                 }
             }
         });
+    }
+
+    pub(crate) fn sync_inking_settings_to_canvas(&mut self) {
+        self.canvas_state.pressure_sensitivity_enabled = self.settings.pressure_sensitivity_enabled;
+        self.canvas_state.pressure_min = self.settings.pressure_min;
+        self.canvas_state.pressure_multiplier = self.settings.pressure_multiplier;
+        self.canvas_state.palm_rejection_enabled = self.settings.palm_rejection;
+        self.canvas_state.highlighter_opacity = self.settings.highlighter_opacity;
+        self.canvas_state.highlighter_pressure_enabled = self.settings.highlighter_pressure_enabled;
+        self.canvas_state.mesh_cache.clear();
+    }
+
+    pub(crate) fn reset_inking_settings_to_defaults(&mut self) {
+        let defaults = crate::model::AppSettings::default();
+        self.settings.pressure_sensitivity_enabled = defaults.pressure_sensitivity_enabled;
+        self.settings.pressure_min = defaults.pressure_min;
+        self.settings.pressure_multiplier = defaults.pressure_multiplier;
+        self.settings.palm_rejection = defaults.palm_rejection;
+        self.settings.highlighter_opacity = defaults.highlighter_opacity;
+        self.settings.highlighter_pressure_enabled = defaults.highlighter_pressure_enabled;
+        self.sync_inking_settings_to_canvas();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{AppLanguage, AppSettings, ColorData, KeyBinding, ThemeMode};
+    use crate::storage::load_settings_from_dir;
+
+    #[test]
+    fn test_reset_inking_settings_resets_all_fields_to_default_and_clears_mesh_cache() {
+        let mut app = RustNotesApp::default();
+        let defaults = AppSettings::default();
+
+        // Ubah seluruh pengaturan inking menjauh dari default
+        app.settings.pressure_sensitivity_enabled = !defaults.pressure_sensitivity_enabled;
+        app.settings.pressure_min = 0.45;
+        app.settings.pressure_multiplier = 1.85;
+        app.settings.palm_rejection = !defaults.palm_rejection;
+        app.settings.highlighter_opacity = 0.65;
+        app.settings.highlighter_pressure_enabled = !defaults.highlighter_pressure_enabled;
+        app.canvas_state.pressure_sensitivity_enabled = app.settings.pressure_sensitivity_enabled;
+        app.canvas_state.pressure_min = 0.45;
+        app.canvas_state.pressure_multiplier = 1.85;
+        app.canvas_state.palm_rejection_enabled = app.settings.palm_rejection;
+        app.canvas_state.highlighter_opacity = 0.65;
+        app.canvas_state.highlighter_pressure_enabled = app.settings.highlighter_pressure_enabled;
+        app.canvas_state
+            .mesh_cache
+            .insert(("stroke-1".to_string(), 100), egui::Mesh::default());
+
+        // Ubah pengaturan non-inking untuk memastikan nilainya tetap terjaga
+        app.settings.theme_mode = ThemeMode::Light;
+        app.settings.pen_widths = vec![1.5, 9.0];
+        app.settings.color_swatches = vec![ColorData::from(Color32::from_rgb(12, 34, 56))];
+        app.settings.zoom_window_scale = 3.0;
+        app.settings.language = AppLanguage::English;
+        app.settings.auto_shape_enabled = false;
+        let custom_binding = KeyBinding {
+            key: "K".to_string(),
+            ctrl: true,
+            alt: false,
+            shift: true,
+        };
+        app.settings
+            .shortcuts
+            .set(ShortcutAction::ToolPen, custom_binding.clone());
+        let expected_pen_widths = app.settings.pen_widths.clone();
+        let expected_swatches = app.settings.color_swatches.clone();
+
+        app.reset_inking_settings_to_defaults();
+
+        assert_eq!(
+            app.settings.pressure_sensitivity_enabled,
+            defaults.pressure_sensitivity_enabled
+        );
+        assert_eq!(app.settings.pressure_min, defaults.pressure_min);
+        assert_eq!(
+            app.settings.pressure_multiplier,
+            defaults.pressure_multiplier
+        );
+        assert_eq!(app.settings.palm_rejection, defaults.palm_rejection);
+        assert_eq!(
+            app.settings.highlighter_opacity,
+            defaults.highlighter_opacity
+        );
+        assert_eq!(
+            app.settings.highlighter_pressure_enabled,
+            defaults.highlighter_pressure_enabled
+        );
+
+        assert_eq!(
+            app.canvas_state.pressure_sensitivity_enabled,
+            defaults.pressure_sensitivity_enabled
+        );
+        assert_eq!(app.canvas_state.pressure_min, defaults.pressure_min);
+        assert_eq!(
+            app.canvas_state.pressure_multiplier,
+            defaults.pressure_multiplier
+        );
+        assert_eq!(
+            app.canvas_state.palm_rejection_enabled,
+            defaults.palm_rejection
+        );
+        assert_eq!(
+            app.canvas_state.highlighter_opacity,
+            defaults.highlighter_opacity
+        );
+        assert_eq!(
+            app.canvas_state.highlighter_pressure_enabled,
+            defaults.highlighter_pressure_enabled
+        );
+        assert!(app.canvas_state.mesh_cache.is_empty());
+
+        // Non-inking settings harus tetap dipertahankan
+        assert_eq!(app.settings.theme_mode, ThemeMode::Light);
+        assert_eq!(app.settings.pen_widths, expected_pen_widths);
+        assert_eq!(app.settings.color_swatches, expected_swatches);
+        assert_eq!(app.settings.zoom_window_scale, 3.0);
+        assert_eq!(app.settings.language, AppLanguage::English);
+        assert!(!app.settings.auto_shape_enabled);
+        assert_eq!(
+            app.settings.shortcuts.get(ShortcutAction::ToolPen),
+            custom_binding
+        );
+    }
+
+    #[test]
+    fn test_reset_inking_settings_persists_defaults_cleanly_to_dir() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let defaults = AppSettings::default();
+        let mut app = RustNotesApp::default();
+
+        app.settings.pressure_min = 0.4;
+        app.settings.palm_rejection = false;
+        app.settings.highlighter_opacity = 0.6;
+        app.settings.highlighter_pressure_enabled = true;
+        app.settings.theme_mode = ThemeMode::Light;
+
+        app.reset_inking_settings_to_defaults();
+        save_settings_to_dir(dir.path(), &app.settings).expect("save reset settings");
+
+        let reloaded = load_settings_from_dir(dir.path());
+        assert_eq!(reloaded.pressure_min, defaults.pressure_min);
+        assert_eq!(reloaded.pressure_multiplier, defaults.pressure_multiplier);
+        assert_eq!(reloaded.palm_rejection, defaults.palm_rejection);
+        assert_eq!(reloaded.highlighter_opacity, defaults.highlighter_opacity);
+        assert_eq!(
+            reloaded.highlighter_pressure_enabled,
+            defaults.highlighter_pressure_enabled
+        );
+        assert_eq!(reloaded.theme_mode, ThemeMode::Light);
     }
 }
