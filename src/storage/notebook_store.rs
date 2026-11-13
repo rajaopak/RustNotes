@@ -1,19 +1,16 @@
-use super::io::{atomic_write_file, rotate_notebook_backups};
+use super::io::{atomic_write_file_with_hook, rotate_notebook_backups};
 use crate::model::{CURRENT_NOTEBOOK_SCHEMA_VERSION, Notebook};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 
 pub fn save_notebook_to_dir(dir: &Path, notebook: &Notebook) -> Result<(), String> {
-    let nb_dir = dir.join("notebooks").join(&notebook.id);
-    let _ = fs::create_dir_all(&nb_dir);
-    let _ = fs::create_dir_all(nb_dir.join("assets"));
-
-    let target_path = nb_dir.join("notebook.json");
-    let previous_path = nb_dir.join("notebook.previous.json");
-
-    // Pastikan rotasi backup 3 generasi dilakukan sebelum penulisan berkas baru
-    rotate_notebook_backups(&nb_dir, 3);
+    if notebook.schema_version > CURRENT_NOTEBOOK_SCHEMA_VERSION {
+        return Err(format!(
+            "Cannot save notebook '{}': schema version {} is newer than supported {}.",
+            notebook.id, notebook.schema_version, CURRENT_NOTEBOOK_SCHEMA_VERSION
+        ));
+    }
 
     let mut nb_to_save = notebook.clone();
     nb_to_save.schema_version = CURRENT_NOTEBOOK_SCHEMA_VERSION;
@@ -21,7 +18,31 @@ pub fn save_notebook_to_dir(dir: &Path, notebook: &Notebook) -> Result<(), Strin
     let content = serde_json::to_string_pretty(&nb_to_save)
         .map_err(|e| format!("Failed to serialize notebook {}: {e}", notebook.id))?;
 
-    atomic_write_file(&target_path, &content, Some(&previous_path))
+    let nb_dir = dir.join("notebooks").join(&notebook.id);
+    fs::create_dir_all(&nb_dir).map_err(|e| {
+        format!(
+            "Failed to create notebook directory {}: {e}",
+            nb_dir.display()
+        )
+    })?;
+    fs::create_dir_all(nb_dir.join("assets"))
+        .map_err(|e| format!("Failed to create notebook assets directory: {e}"))?;
+
+    let target_path = nb_dir.join("notebook.json");
+    let previous_path = nb_dir.join("notebook.previous.json");
+
+    // Rotasi backup 3 generasi hanya dijalankan setelah serialisasi dan penulisan
+    // berkas temporer berhasil, sehingga kegagalan save tidak menggeser histori backup valid.
+    let rotate_hook = || {
+        rotate_notebook_backups(&nb_dir, 3);
+    };
+
+    atomic_write_file_with_hook(
+        &target_path,
+        &content,
+        Some(&previous_path),
+        Some(&rotate_hook),
+    )
 }
 
 pub fn load_notebook_from_dir(dir: &Path, notebook_id: &str) -> Result<Notebook, String> {

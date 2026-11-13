@@ -57,23 +57,56 @@ pub fn atomic_write_file(
     content: &str,
     backup_path: Option<&Path>,
 ) -> Result<(), String> {
+    atomic_write_file_with_hook(target_path, content, backup_path, None)
+}
+
+/// Penulisan berkas secara atomik dengan hook opsional yang dijalankan tepat setelah
+/// berkas temporer selesai ditulis dan di-sync, sesaat sebelum penggantian target.
+pub fn atomic_write_file_with_hook(
+    target_path: &Path,
+    content: &str,
+    backup_path: Option<&Path>,
+    pre_replace_hook: Option<&dyn Fn()>,
+) -> Result<(), String> {
+    if target_path.is_dir() {
+        return Err(format!(
+            "Target path {} is a directory",
+            target_path.display()
+        ));
+    }
     if let Some(parent) = target_path.parent() {
-        let _ = fs::create_dir_all(parent);
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "Failed to create parent directory {}: {e}",
+                parent.display()
+            )
+        })?;
     }
     let unique_id = uuid::Uuid::new_v4();
     let temp_path = target_path.with_extension(format!("tmp.{}", unique_id));
 
-    let mut file = fs::File::create(&temp_path).map_err(|e| {
-        format!(
-            "Failed to create temporary file {}: {e}",
-            temp_path.display()
-        )
-    })?;
-    file.write_all(content.as_bytes())
-        .map_err(|e| format!("Failed to write temporary file: {e}"))?;
-    file.sync_all()
-        .map_err(|e| format!("Failed to sync temporary file: {e}"))?;
-    drop(file);
+    let write_res = (|| -> Result<(), String> {
+        let mut file = fs::File::create(&temp_path).map_err(|e| {
+            format!(
+                "Failed to create temporary file {}: {e}",
+                temp_path.display()
+            )
+        })?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| format!("Failed to write temporary file: {e}"))?;
+        file.sync_all()
+            .map_err(|e| format!("Failed to sync temporary file: {e}"))?;
+        Ok(())
+    })();
+
+    if let Err(e) = write_res {
+        let _ = fs::remove_file(&temp_path);
+        return Err(e);
+    }
+
+    if let Some(hook) = pre_replace_hook {
+        hook();
+    }
 
     if let Some(prev) = backup_path
         && target_path.exists()
@@ -90,9 +123,27 @@ pub fn atomic_write_file(
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 
-    if !rename_success && fs::copy(&temp_path, target_path).is_ok() {
-        let _ = fs::remove_file(&temp_path);
-        rename_success = true;
+    // Strategi penggantian dua tahap yang aman untuk Windows apabila rename langsung gagal:
+    // pindahkan target ke rollback sementara, pindahkan temp ke target, lalu hapus rollback.
+    // Jika langkah kedua gagal, pulihkan rollback agar target sebelumnya tetap utuh.
+    if !rename_success && target_path.exists() {
+        let rollback_path = target_path.with_extension(format!("rollback.{}", unique_id));
+        if fs::rename(target_path, &rollback_path).is_ok() {
+            let mut replaced = false;
+            for _ in 0..3 {
+                if fs::rename(&temp_path, target_path).is_ok() {
+                    replaced = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            }
+            if replaced {
+                let _ = fs::remove_file(&rollback_path);
+                rename_success = true;
+            } else {
+                let _ = fs::rename(&rollback_path, target_path);
+            }
+        }
     }
 
     if !rename_success {
