@@ -1,4 +1,5 @@
 pub mod gizmo;
+pub mod interaction;
 pub mod laser;
 pub mod primitives;
 pub mod render;
