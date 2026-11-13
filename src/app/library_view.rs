@@ -597,7 +597,7 @@ impl RustNotesApp {
             }
 
             // Fase 5: Smart In-Memory Search across titles, text objects, and sticky notes
-            let mut notebooks_to_show: Vec<(usize, Notebook, Option<String>)> = Vec::new();
+            let mut notebooks_to_show: Vec<(usize, Option<String>)> = Vec::new();
             for (i, n) in self.library.notebooks.iter().enumerate() {
                 let matches_view = match self.current_nav_view {
                     NavView::Documents => {
@@ -612,7 +612,7 @@ impl RustNotesApp {
                     continue;
                 }
                 if query.is_empty() || n.title.to_lowercase().contains(&query) {
-                    notebooks_to_show.push((i, n.clone(), None));
+                    notebooks_to_show.push((i, None));
                 } else {
                     let mut found_snippet = None;
                     for (p_idx, page) in n.pages.iter().enumerate() {
@@ -650,7 +650,7 @@ impl RustNotesApp {
                         }
                     }
                     if let Some(snippet) = found_snippet {
-                        notebooks_to_show.push((i, n.clone(), Some(snippet)));
+                        notebooks_to_show.push((i, Some(snippet)));
                     }
                 }
             }
@@ -705,7 +705,8 @@ impl RustNotesApp {
                         // Fase 6: Export ZIP & Import ZIP
                         let mut to_export_zip: Option<(String, String)> = None; // (nb_id, nb_title)
 
-                        for (orig_idx, note, snippet) in &notebooks_to_show {
+                        for (orig_idx, snippet) in &notebooks_to_show {
+                            let note = &self.library.notebooks[*orig_idx];
                             ui.vertical(|ui| {
                                 ui.set_width(136.0);
 
