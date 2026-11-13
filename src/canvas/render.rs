@@ -64,115 +64,16 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         }
     }
 
-    // 1. Draw Paper Background and Patterns
-    painter.rect_filled(rect, 4.0, page.paper_color.to_color32());
-
-    match page.effective_background() {
-        crate::model::PageBackground::Template(template) => {
-            draw_paper_pattern(&painter, rect, template, state.zoom);
-        }
-        crate::model::PageBackground::Image { asset_id }
-        | crate::model::PageBackground::Pdf { asset_id, .. } => {
-            if let Some(tex) = state.get_texture(&asset_id) {
-                draw_rotated_background_image(&painter, tex.id(), rect, page.rotation);
-            }
-        }
-    }
-
-    // 2. Draw existing page objects with Two-Pass Layering & Page-Space Mesh Cache:
-    // Pass 1: Highlighters (Underlay Layer) — sits beneath ink handwriting, text, and diagrams so black ink is never dimmed.
-    // Pass 2: Content Layer — Pen strokes, shapes, connectors, images, sticky notes, and text.
-    let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
-
-    for pass_is_highlighter in [true, false] {
-        for obj in &page.objects {
-            match obj {
-                DrawObject::Stroke { is_highlighter, .. }
-                    if *is_highlighter != pass_is_highlighter =>
-                {
-                    continue;
-                }
-                DrawObject::Stroke {
-                    id,
-                    points,
-                    color,
-                    width,
-                    is_highlighter,
-                    style,
-                } => {
-                    let obj_b = object_bounds(obj);
-                    let screen_b =
-                        Rect::from_min_max(page_to_screen(obj_b.min), page_to_screen(obj_b.max));
-                    if !screen_clip_rect.intersects(screen_b) {
-                        continue;
-                    }
-
-                    // Simpan mesh di dalam cache menggunakan koordinat lokal kertas (`|p| p`, skala 1.0),
-                    // lalu transformasikan ke posisi layar (`origin` + `state.zoom`) setiap frame agar
-                    // goresan tidak pernah bergeser atau hilang ketika halaman di-scroll maupun di-zoom.
-                    let style_rev: u32 = ((state.smoothing_steps as u32) << 8)
-                        | if *is_highlighter { hl_alpha as u32 } else { 0 };
-                    let key = (id.clone(), style_rev);
-                    let page_mesh = if let Some(cached) = state.mesh_cache.get(&key) {
-                        cached.clone()
-                    } else {
-                        let smoothed = smooth_stroke_points(points, state.smoothing_steps);
-                        let stroke_c = if *is_highlighter {
-                            Color32::from_rgba_unmultiplied(color.r, color.g, color.b, hl_alpha)
-                        } else {
-                            color.to_color32()
-                        };
-                        let mesh = tessellate_stroke_styled(
-                            &smoothed,
-                            *width,
-                            stroke_c,
-                            *is_highlighter,
-                            *style,
-                            |p| p,
-                        );
-                        if state.mesh_cache.len() > 1500 {
-                            let to_remove: Vec<_> =
-                                state.mesh_cache.keys().take(300).cloned().collect();
-                            for k in to_remove {
-                                state.mesh_cache.remove(&k);
-                            }
-                        }
-                        state.mesh_cache.insert(key, mesh.clone());
-                        mesh
-                    };
-                    let screen_mesh = transform_page_mesh_to_screen(&page_mesh, origin, state.zoom);
-                    painter.add(screen_mesh);
-                }
-                _ if pass_is_highlighter => {
-                    // Non-strokes are rendered in Pass 2 (Content Layer)
-                    continue;
-                }
-                _ => {
-                    let obj_b = object_bounds_with_context(obj, &page.objects);
-                    let screen_b =
-                        Rect::from_min_max(page_to_screen(obj_b.min), page_to_screen(obj_b.max));
-                    if !screen_clip_rect.intersects(screen_b) {
-                        continue;
-                    }
-
-                    // Jangan gambar teks statis jika objek sedang disunting secara inline oleh TextEdit
-                    if state.editing_text_id.as_deref() == Some(obj.id())
-                        && matches!(obj, DrawObject::Text { .. })
-                    {
-                        continue;
-                    }
-                    draw_non_stroke_object(
-                        &painter,
-                        obj,
-                        &page.objects,
-                        page_to_screen,
-                        state.zoom,
-                        |id| state.get_texture(id).map(|t| t.id()),
-                    );
-                }
-            }
-        }
-    }
+    // 1 & 2. Draw Paper Background, Patterns, and Two-Pass Page Objects
+    render_page_background_and_objects(
+        &painter,
+        rect,
+        screen_clip_rect,
+        origin,
+        page,
+        state,
+        page_to_screen,
+    );
 
     // 3. User interaction logic
     let pointer_pos = response.interact_pointer_pos();
@@ -2365,6 +2266,127 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
     });
 
     response
+}
+
+/// Merender latar belakang kertas/aset dan seluruh objek halaman dengan two-pass layering & mesh cache.
+fn render_page_background_and_objects(
+    painter: &egui::Painter,
+    rect: Rect,
+    screen_clip_rect: Rect,
+    origin: Pos2,
+    page: &Page,
+    state: &mut CanvasState,
+    page_to_screen: impl Fn(Pos2) -> Pos2 + Copy,
+) {
+    // 1. Draw Paper Background and Patterns
+    painter.rect_filled(rect, 4.0, page.paper_color.to_color32());
+
+    match page.effective_background() {
+        crate::model::PageBackground::Template(template) => {
+            draw_paper_pattern(painter, rect, template, state.zoom);
+        }
+        crate::model::PageBackground::Image { asset_id }
+        | crate::model::PageBackground::Pdf { asset_id, .. } => {
+            if let Some(tex) = state.get_texture(&asset_id) {
+                draw_rotated_background_image(painter, tex.id(), rect, page.rotation);
+            }
+        }
+    }
+
+    // 2. Draw existing page objects with Two-Pass Layering & Page-Space Mesh Cache:
+    // Pass 1: Highlighters (Underlay Layer) — sits beneath ink handwriting, text, and diagrams so black ink is never dimmed.
+    // Pass 2: Content Layer — Pen strokes, shapes, connectors, images, sticky notes, and text.
+    let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
+
+    for pass_is_highlighter in [true, false] {
+        for obj in &page.objects {
+            match obj {
+                DrawObject::Stroke { is_highlighter, .. }
+                    if *is_highlighter != pass_is_highlighter =>
+                {
+                    continue;
+                }
+                DrawObject::Stroke {
+                    id,
+                    points,
+                    color,
+                    width,
+                    is_highlighter,
+                    style,
+                } => {
+                    let obj_b = object_bounds(obj);
+                    let screen_b =
+                        Rect::from_min_max(page_to_screen(obj_b.min), page_to_screen(obj_b.max));
+                    if !screen_clip_rect.intersects(screen_b) {
+                        continue;
+                    }
+
+                    // Simpan mesh di dalam cache menggunakan koordinat lokal kertas (`|p| p`, skala 1.0),
+                    // lalu transformasikan ke posisi layar (`origin` + `state.zoom`) setiap frame agar
+                    // goresan tidak pernah bergeser atau hilang ketika halaman di-scroll maupun di-zoom.
+                    let style_rev: u32 = ((state.smoothing_steps as u32) << 8)
+                        | if *is_highlighter { hl_alpha as u32 } else { 0 };
+                    let key = (id.clone(), style_rev);
+                    let page_mesh = if let Some(cached) = state.mesh_cache.get(&key) {
+                        cached.clone()
+                    } else {
+                        let smoothed = smooth_stroke_points(points, state.smoothing_steps);
+                        let stroke_c = if *is_highlighter {
+                            Color32::from_rgba_unmultiplied(color.r, color.g, color.b, hl_alpha)
+                        } else {
+                            color.to_color32()
+                        };
+                        let mesh = tessellate_stroke_styled(
+                            &smoothed,
+                            *width,
+                            stroke_c,
+                            *is_highlighter,
+                            *style,
+                            |p| p,
+                        );
+                        if state.mesh_cache.len() > 1500 {
+                            let to_remove: Vec<_> =
+                                state.mesh_cache.keys().take(300).cloned().collect();
+                            for k in to_remove {
+                                state.mesh_cache.remove(&k);
+                            }
+                        }
+                        state.mesh_cache.insert(key, mesh.clone());
+                        mesh
+                    };
+                    let screen_mesh = transform_page_mesh_to_screen(&page_mesh, origin, state.zoom);
+                    painter.add(screen_mesh);
+                }
+                _ if pass_is_highlighter => {
+                    // Non-strokes are rendered in Pass 2 (Content Layer)
+                    continue;
+                }
+                _ => {
+                    let obj_b = object_bounds_with_context(obj, &page.objects);
+                    let screen_b =
+                        Rect::from_min_max(page_to_screen(obj_b.min), page_to_screen(obj_b.max));
+                    if !screen_clip_rect.intersects(screen_b) {
+                        continue;
+                    }
+
+                    // Jangan gambar teks statis jika objek sedang disunting secara inline oleh TextEdit
+                    if state.editing_text_id.as_deref() == Some(obj.id())
+                        && matches!(obj, DrawObject::Text { .. })
+                    {
+                        continue;
+                    }
+                    draw_non_stroke_object(
+                        painter,
+                        obj,
+                        &page.objects,
+                        page_to_screen,
+                        state.zoom,
+                        |id| state.get_texture(id).map(|t| t.id()),
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// Mengambil TouchId dan gaya tekanan (pressure/force) dari daftar event egui.
