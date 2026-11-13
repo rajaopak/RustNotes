@@ -1493,221 +1493,8 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         }
     }
 
-    // 4. Render Active Draft Stroke / Shape with live smooth tessellation
-    if state.active_stroke_page_id.as_deref() == Some(&page.id) {
-        if let Some(recognized) = &state.recognized_draft_shape {
-            let stroke = Stroke::new(state.stroke_width * state.zoom, state.stroke_color);
-            let corner_radius = 0.0;
-            draw_shape_primitive(
-                &painter,
-                recognized.kind,
-                recognized.x,
-                recognized.y,
-                recognized.width,
-                recognized.height,
-                0.0,
-                corner_radius,
-                &[],
-                Color32::TRANSPARENT,
-                stroke,
-                page_to_screen,
-            );
-
-            // Fase G4.1: Visual feedback snap flash halus saat baru saja snap (< 220 ms)
-            if let Some(flash_t) = state.snap_flash_time {
-                let flash_elapsed = now.saturating_duration_since(flash_t).as_millis();
-                if flash_elapsed < 220 {
-                    let flash_alpha = ((220 - flash_elapsed) as f32 / 220.0 * 180.0) as u8;
-                    let flash_col = Color32::from_rgba_unmultiplied(0, 180, 255, flash_alpha);
-                    let flash_stroke =
-                        Stroke::new((state.stroke_width + 2.5) * state.zoom, flash_col);
-                    draw_shape_primitive(
-                        &painter,
-                        recognized.kind,
-                        recognized.x,
-                        recognized.y,
-                        recognized.width,
-                        recognized.height,
-                        0.0,
-                        corner_radius,
-                        &[],
-                        Color32::TRANSPARENT,
-                        flash_stroke,
-                        page_to_screen,
-                    );
-                    ui.ctx().request_repaint();
-                }
-            }
-
-            if recognized.kind == ShapeKind::Line {
-                let s_start = page_to_screen(Pos2::new(recognized.x, recognized.y));
-                let s_end = page_to_screen(Pos2::new(
-                    recognized.x + recognized.width,
-                    recognized.y + recognized.height,
-                ));
-                let handle_stroke = Stroke::new(2.0_f32, Color32::from_rgb(0, 114, 206));
-                painter.circle(s_start, 6.5, Color32::WHITE, handle_stroke);
-                painter.circle_filled(s_start, 3.0, Color32::from_rgb(0, 114, 206));
-                painter.circle(s_end, 6.0, Color32::WHITE, handle_stroke);
-            }
-        } else if let Some(pts) = &state.draft_stroke {
-            let is_highlighter = state.current_tool == ActiveTool::Highlighter;
-            let stroke_width = if is_highlighter {
-                state.stroke_width * 6.0 * state.zoom
-            } else {
-                state.stroke_width * state.zoom
-            };
-            let color = if is_highlighter {
-                let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
-                Color32::from_rgba_unmultiplied(
-                    state.stroke_color.r(),
-                    state.stroke_color.g(),
-                    state.stroke_color.b(),
-                    hl_alpha,
-                )
-            } else {
-                state.stroke_color
-            };
-            let smoothed = smooth_stroke_points(pts, state.smoothing_steps);
-            let mesh = tessellate_stroke_styled(
-                &smoothed,
-                stroke_width,
-                color,
-                is_highlighter,
-                state.stroke_style,
-                page_to_screen,
-            );
-            painter.add(mesh);
-        }
-
-        if let (Some(start), Some(curr)) = (state.draft_shape_start, state.draft_shape_current) {
-            let stroke = Stroke::new(state.stroke_width * state.zoom, state.stroke_color);
-            if let ActiveTool::Shape(kind) = state.current_tool {
-                let w = curr.x - start.x;
-                let h = curr.y - start.y;
-                let corner_radius = 0.0;
-                draw_shape_primitive(
-                    &painter,
-                    kind,
-                    start.x,
-                    start.y,
-                    w,
-                    h,
-                    0.0,
-                    corner_radius,
-                    &[],
-                    Color32::TRANSPARENT,
-                    stroke,
-                    page_to_screen,
-                );
-                if kind == ShapeKind::Line {
-                    let s_start = page_to_screen(start);
-                    let s_end = page_to_screen(curr);
-                    let handle_stroke = Stroke::new(2.0_f32, Color32::from_rgb(0, 114, 206));
-                    painter.circle(s_start, 6.5, Color32::WHITE, handle_stroke);
-                    painter.circle_filled(s_start, 3.0, Color32::from_rgb(0, 114, 206));
-                    painter.circle(s_end, 6.0, Color32::WHITE, handle_stroke);
-                }
-            }
-        }
-
-        // Preview Draft Connector saat ditarik (Task 7.1)
-        if let (Some(start_end), Some(curr_pt)) =
-            (&state.draft_connector_start, &state.draft_connector_current)
-        {
-            let start_pos = match start_end {
-                ConnectorEnd::Attached { shape_id, site } => {
-                    if let Some(s) = page.objects.iter().find(|o| o.id() == shape_id) {
-                        shape_connection_point(s, *site, None).0
-                    } else {
-                        *curr_pt
-                    }
-                }
-                ConnectorEnd::Free { x, y } => Point2D::new(*x, *y),
-            };
-            let path = crate::geometry::route_orthogonal(
-                start_pos,
-                crate::geometry::Direction::Right,
-                *curr_pt,
-                crate::geometry::Direction::Left,
-                16.0,
-            );
-            if path.len() >= 2 {
-                let stroke = Stroke::new(
-                    (state.stroke_width * state.zoom).max(1.5),
-                    Color32::from_rgb(0, 114, 206),
-                );
-                for i in 0..path.len() - 1 {
-                    let p1 = page_to_screen(path[i].to_pos2());
-                    let p2 = page_to_screen(path[i + 1].to_pos2());
-                    painter.line_segment([p1, p2], stroke);
-                }
-                let last = path[path.len() - 1];
-                let prev = path[path.len() - 2];
-                let dir = last - prev;
-                let arrow = crate::geometry::arrowhead_geometry(last, dir, 12.0, 8.0);
-                let p_tip = page_to_screen(arrow[0].to_pos2());
-                let p_l = page_to_screen(arrow[1].to_pos2());
-                let p_r = page_to_screen(arrow[2].to_pos2());
-                painter.add(egui::Shape::convex_polygon(
-                    vec![p_tip, p_l, p_r],
-                    Color32::from_rgb(0, 114, 206),
-                    Stroke::NONE,
-                ));
-            }
-        }
-    }
-
-    // Visual feedback titik sambung pada bentuk saat alat Connector aktif atau saat re-anchor (Task 7.1, 7.3)
-    if state.current_tool == ActiveTool::Connector
-        || state.draft_connector_start.is_some()
-        || matches!(
-            state.resize_corner,
-            Some(ResizeCorner::ConnectorStart | ResizeCorner::ConnectorEnd)
-        )
-    {
-        for obj in &page.objects {
-            if let DrawObject::Shape { locked, .. } = obj
-                && !*locked
-            {
-                for &site in &[
-                    ConnectionSite::Top,
-                    ConnectionSite::Right,
-                    ConnectionSite::Bottom,
-                    ConnectionSite::Left,
-                ] {
-                    let (anchor, _) = shape_connection_point(obj, site, None);
-                    let s_pt = page_to_screen(anchor.to_pos2());
-                    let is_candidate = state
-                        .connector_snap_candidate
-                        .as_ref()
-                        .is_some_and(|(_, _, pt)| pt.dist_sq(anchor) < 1.0);
-
-                    if is_candidate {
-                        painter.circle_filled(s_pt, 7.0, Color32::from_rgb(40, 167, 69));
-                        painter.circle_stroke(s_pt, 9.0, Stroke::new(2.0_f32, Color32::WHITE));
-                    } else {
-                        painter.circle_filled(
-                            s_pt,
-                            4.5,
-                            Color32::from_rgba_unmultiplied(0, 114, 206, 160),
-                        );
-                        painter.circle_stroke(s_pt, 4.5, Stroke::new(1.2_f32, Color32::WHITE));
-                    }
-                }
-            }
-        }
-    }
-
-    // 5. Render Active Lasso Loop (hanya pada halaman tempat Lasso sedang ditarik)
-    if state.active_stroke_page_id.as_deref() == Some(&page.id) && state.lasso_points.len() > 1 {
-        let stroke = Stroke::new(1.5_f32, Color32::from_rgb(0, 114, 206));
-        for i in 1..state.lasso_points.len() {
-            let p1 = page_to_screen(state.lasso_points[i - 1]);
-            let p2 = page_to_screen(state.lasso_points[i]);
-            painter.line_segment([p1, p2], stroke);
-        }
-    }
+    // 4 & 5. Render Active Draft Stroke/Shape, Connector Snap Sites, and Active Lasso Loop
+    render_active_draft_and_lasso(ui, &painter, page, state, now, page_to_screen);
 
     // 6. Render Selection Bounding Box, Handles & Floating Toolbars (recomputed after drag mutations)
     let updated_sel = SelectionData::compute(page, state);
@@ -2385,6 +2172,232 @@ fn render_page_background_and_objects(
                     );
                 }
             }
+        }
+    }
+}
+
+/// Merender pratinjau goresan aktif, bentuk hasil pengenalan, draft shape, konektor, dan loop lasso.
+fn render_active_draft_and_lasso(
+    ui: &Ui,
+    painter: &egui::Painter,
+    page: &Page,
+    state: &CanvasState,
+    now: Instant,
+    page_to_screen: impl Fn(Pos2) -> Pos2 + Copy,
+) {
+    // 4. Render Active Draft Stroke / Shape with live smooth tessellation
+    if state.active_stroke_page_id.as_deref() == Some(&page.id) {
+        if let Some(recognized) = &state.recognized_draft_shape {
+            let stroke = Stroke::new(state.stroke_width * state.zoom, state.stroke_color);
+            let corner_radius = 0.0;
+            draw_shape_primitive(
+                painter,
+                recognized.kind,
+                recognized.x,
+                recognized.y,
+                recognized.width,
+                recognized.height,
+                0.0,
+                corner_radius,
+                &[],
+                Color32::TRANSPARENT,
+                stroke,
+                page_to_screen,
+            );
+
+            // Fase G4.1: Visual feedback snap flash halus saat baru saja snap (< 220 ms)
+            if let Some(flash_t) = state.snap_flash_time {
+                let flash_elapsed = now.saturating_duration_since(flash_t).as_millis();
+                if flash_elapsed < 220 {
+                    let flash_alpha = ((220 - flash_elapsed) as f32 / 220.0 * 180.0) as u8;
+                    let flash_col = Color32::from_rgba_unmultiplied(0, 180, 255, flash_alpha);
+                    let flash_stroke =
+                        Stroke::new((state.stroke_width + 2.5) * state.zoom, flash_col);
+                    draw_shape_primitive(
+                        painter,
+                        recognized.kind,
+                        recognized.x,
+                        recognized.y,
+                        recognized.width,
+                        recognized.height,
+                        0.0,
+                        corner_radius,
+                        &[],
+                        Color32::TRANSPARENT,
+                        flash_stroke,
+                        page_to_screen,
+                    );
+                    ui.ctx().request_repaint();
+                }
+            }
+
+            if recognized.kind == ShapeKind::Line {
+                let s_start = page_to_screen(Pos2::new(recognized.x, recognized.y));
+                let s_end = page_to_screen(Pos2::new(
+                    recognized.x + recognized.width,
+                    recognized.y + recognized.height,
+                ));
+                let handle_stroke = Stroke::new(2.0_f32, Color32::from_rgb(0, 114, 206));
+                painter.circle(s_start, 6.5, Color32::WHITE, handle_stroke);
+                painter.circle_filled(s_start, 3.0, Color32::from_rgb(0, 114, 206));
+                painter.circle(s_end, 6.0, Color32::WHITE, handle_stroke);
+            }
+        } else if let Some(pts) = &state.draft_stroke {
+            let is_highlighter = state.current_tool == ActiveTool::Highlighter;
+            let stroke_width = if is_highlighter {
+                state.stroke_width * 6.0 * state.zoom
+            } else {
+                state.stroke_width * state.zoom
+            };
+            let color = if is_highlighter {
+                let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
+                Color32::from_rgba_unmultiplied(
+                    state.stroke_color.r(),
+                    state.stroke_color.g(),
+                    state.stroke_color.b(),
+                    hl_alpha,
+                )
+            } else {
+                state.stroke_color
+            };
+            let smoothed = smooth_stroke_points(pts, state.smoothing_steps);
+            let mesh = tessellate_stroke_styled(
+                &smoothed,
+                stroke_width,
+                color,
+                is_highlighter,
+                state.stroke_style,
+                page_to_screen,
+            );
+            painter.add(mesh);
+        }
+
+        if let (Some(start), Some(curr)) = (state.draft_shape_start, state.draft_shape_current) {
+            let stroke = Stroke::new(state.stroke_width * state.zoom, state.stroke_color);
+            if let ActiveTool::Shape(kind) = state.current_tool {
+                let w = curr.x - start.x;
+                let h = curr.y - start.y;
+                let corner_radius = 0.0;
+                draw_shape_primitive(
+                    painter,
+                    kind,
+                    start.x,
+                    start.y,
+                    w,
+                    h,
+                    0.0,
+                    corner_radius,
+                    &[],
+                    Color32::TRANSPARENT,
+                    stroke,
+                    page_to_screen,
+                );
+                if kind == ShapeKind::Line {
+                    let s_start = page_to_screen(start);
+                    let s_end = page_to_screen(curr);
+                    let handle_stroke = Stroke::new(2.0_f32, Color32::from_rgb(0, 114, 206));
+                    painter.circle(s_start, 6.5, Color32::WHITE, handle_stroke);
+                    painter.circle_filled(s_start, 3.0, Color32::from_rgb(0, 114, 206));
+                    painter.circle(s_end, 6.0, Color32::WHITE, handle_stroke);
+                }
+            }
+        }
+
+        // Preview Draft Connector saat ditarik (Task 7.1)
+        if let (Some(start_end), Some(curr_pt)) =
+            (&state.draft_connector_start, &state.draft_connector_current)
+        {
+            let start_pos = match start_end {
+                ConnectorEnd::Attached { shape_id, site } => {
+                    if let Some(s) = page.objects.iter().find(|o| o.id() == shape_id) {
+                        shape_connection_point(s, *site, None).0
+                    } else {
+                        *curr_pt
+                    }
+                }
+                ConnectorEnd::Free { x, y } => Point2D::new(*x, *y),
+            };
+            let path = crate::geometry::route_orthogonal(
+                start_pos,
+                crate::geometry::Direction::Right,
+                *curr_pt,
+                crate::geometry::Direction::Left,
+                16.0,
+            );
+            if path.len() >= 2 {
+                let stroke = Stroke::new(
+                    (state.stroke_width * state.zoom).max(1.5),
+                    Color32::from_rgb(0, 114, 206),
+                );
+                for i in 0..path.len() - 1 {
+                    let p1 = page_to_screen(path[i].to_pos2());
+                    let p2 = page_to_screen(path[i + 1].to_pos2());
+                    painter.line_segment([p1, p2], stroke);
+                }
+                let last = path[path.len() - 1];
+                let prev = path[path.len() - 2];
+                let dir = last - prev;
+                let arrow = crate::geometry::arrowhead_geometry(last, dir, 12.0, 8.0);
+                let p_tip = page_to_screen(arrow[0].to_pos2());
+                let p_l = page_to_screen(arrow[1].to_pos2());
+                let p_r = page_to_screen(arrow[2].to_pos2());
+                painter.add(egui::Shape::convex_polygon(
+                    vec![p_tip, p_l, p_r],
+                    Color32::from_rgb(0, 114, 206),
+                    Stroke::NONE,
+                ));
+            }
+        }
+    }
+
+    // Visual feedback titik sambung pada bentuk saat alat Connector aktif atau saat re-anchor (Task 7.1, 7.3)
+    if state.current_tool == ActiveTool::Connector
+        || state.draft_connector_start.is_some()
+        || matches!(
+            state.resize_corner,
+            Some(ResizeCorner::ConnectorStart | ResizeCorner::ConnectorEnd)
+        )
+    {
+        for obj in &page.objects {
+            if let DrawObject::Shape { locked, .. } = obj
+                && !*locked
+            {
+                for &site in &[
+                    ConnectionSite::Top,
+                    ConnectionSite::Right,
+                    ConnectionSite::Bottom,
+                    ConnectionSite::Left,
+                ] {
+                    let (anchor, _) = shape_connection_point(obj, site, None);
+                    let s_pt = page_to_screen(anchor.to_pos2());
+                    let is_candidate = state
+                        .connector_snap_candidate
+                        .as_ref()
+                        .is_some_and(|(_, _, pt)| pt.dist_sq(anchor) < 1.0);
+
+                    if is_candidate {
+                        painter.circle_filled(s_pt, 7.0, Color32::from_rgb(40, 167, 69));
+                        painter.circle_stroke(s_pt, 9.0, Stroke::new(2.0_f32, Color32::WHITE));
+                    } else {
+                        painter.circle_filled(
+                            s_pt,
+                            4.5,
+                            Color32::from_rgba_unmultiplied(0, 114, 206, 160),
+                        );
+                        painter.circle_stroke(s_pt, 4.5, Stroke::new(1.2_f32, Color32::WHITE));
+                    }
+                }
+            }
+        }
+    }
+
+    // 5. Render Active Lasso Loop (hanya pada halaman tempat Lasso sedang ditarik)
+    if state.active_stroke_page_id.as_deref() == Some(&page.id) && state.lasso_points.len() > 1 {
+        let stroke = Stroke::new(1.5_f32, Color32::from_rgb(0, 114, 206));
+        for i in 1..state.lasso_points.len() {
+            let p1 = page_to_screen(state.lasso_points[i - 1]);
+            let p2 = page_to_screen(state.lasso_points[i]);
+            painter.line_segment([p1, p2], stroke);
         }
     }
 }
