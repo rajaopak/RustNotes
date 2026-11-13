@@ -2256,3 +2256,419 @@ fn test_handle_drag_start_preserves_canvas_updates_and_last_interacted_page() {
         other => panic!("Expected Shape object, got {other:?}"),
     }
 }
+
+#[test]
+fn test_autoshape_release_undo_depth_and_draft_cleanup() {
+    fn step_canvas(
+        ctx: &eframe::egui::Context,
+        page: &mut Page,
+        state: &mut CanvasState,
+        events: Vec<eframe::egui::Event>,
+    ) -> Pos2 {
+        let mut origin = Pos2::ZERO;
+        let input = eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                Pos2::ZERO,
+                Vec2::new(1000.0, 1000.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            eframe::egui::CentralPanel::default()
+                .frame(eframe::egui::Frame::NONE)
+                .show(ctx, |ui| {
+                    origin = ui.next_widget_position();
+                    let _ = render_page_canvas(ui, page, state);
+                });
+        });
+        origin
+    }
+
+    let ctx = eframe::egui::Context::default();
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Pen,
+        auto_shape_enabled: true,
+        zoom: 1.0,
+        ..Default::default()
+    };
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "autoshape-undo-test".to_string();
+
+    let origin = step_canvas(&ctx, &mut page, &mut state, vec![]);
+    let to_screen = |x: f32, y: f32| origin + Vec2::new(x, y);
+
+    // Gambar persegi panjang tertutup secara bertahap agar dikenali oleh recognize_shape
+    let mut pts = Vec::new();
+    for i in 0..=8 {
+        pts.push(to_screen(100.0 + (i as f32) * 15.0, 100.0));
+    }
+    for i in 1..=6 {
+        pts.push(to_screen(220.0, 100.0 + (i as f32) * 15.0));
+    }
+    for i in 1..=8 {
+        pts.push(to_screen(220.0 - (i as f32) * 15.0, 190.0));
+    }
+    for i in 1..=6 {
+        pts.push(to_screen(100.0, 190.0 - (i as f32) * 15.0));
+    }
+
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(pts[0])],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: pts[0],
+            button: eframe::egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }],
+    );
+    for &pt in &pts[1..] {
+        step_canvas(
+            &ctx,
+            &mut page,
+            &mut state,
+            vec![eframe::egui::Event::PointerMoved(pt)],
+        );
+    }
+
+    // Simulasikan pena diam >500ms sehingga hold-to-snap aktif
+    state.last_stroke_move_time =
+        Some(std::time::Instant::now() - std::time::Duration::from_millis(650));
+    step_canvas(&ctx, &mut page, &mut state, vec![]);
+    assert!(
+        state.recognized_draft_shape.is_some(),
+        "Expected hold-to-snap to recognize closed rectangle"
+    );
+    assert!(state.snap_initial_shape.is_some());
+    assert!(state.snap_flash_time.is_some());
+
+    // Lepaskan pointer -> commit shape & bersihkan seluruh draft state
+    let last_pt = *pts.last().expect("points non-empty");
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: last_pt,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    assert_eq!(page.objects.len(), 1);
+    assert!(matches!(page.objects[0], DrawObject::Shape { .. }));
+    assert!(state.active_stroke_page_id.is_none());
+    assert!(state.draft_stroke.is_none());
+    assert!(state.last_stroke_move_time.is_none());
+    assert!(state.recognized_draft_shape.is_none());
+    assert!(state.snap_initial_shape.is_none());
+    assert!(state.snap_flash_time.is_none());
+    assert!(state.active_touch_id.is_none());
+
+    // Undo #1 -> goresan asli sebelum snap
+    state.undo(&mut page);
+    assert_eq!(page.objects.len(), 1);
+    assert!(matches!(page.objects[0], DrawObject::Stroke { .. }));
+
+    // Undo #2 -> halaman kosong, tanpa langkah undo duplikat ke-3
+    state.undo(&mut page);
+    assert!(page.objects.is_empty());
+    assert!(
+        !state.can_undo(&page.id),
+        "AutoShape release must produce exactly 2 undo steps, not 3"
+    );
+}
+
+#[test]
+fn test_connector_line_segment_drag_pushes_single_undo() {
+    fn step_canvas(
+        ctx: &eframe::egui::Context,
+        page: &mut Page,
+        state: &mut CanvasState,
+        events: Vec<eframe::egui::Event>,
+    ) -> Pos2 {
+        let mut origin = Pos2::ZERO;
+        let input = eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                Pos2::ZERO,
+                Vec2::new(1000.0, 1000.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            eframe::egui::CentralPanel::default()
+                .frame(eframe::egui::Frame::NONE)
+                .show(ctx, |ui| {
+                    origin = ui.next_widget_position();
+                    let _ = render_page_canvas(ui, page, state);
+                });
+        });
+        origin
+    }
+
+    let ctx = eframe::egui::Context::default();
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Lasso,
+        zoom: 1.0,
+        ..Default::default()
+    };
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "conn-seg-undo".to_string();
+    page.objects.push(DrawObject::Shape {
+        id: "s1".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: 100.0,
+        y: 100.0,
+        width: 80.0,
+        height: 60.0,
+        color: ColorData::from(Color32::BLACK),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    });
+    page.objects.push(DrawObject::Shape {
+        id: "s2".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: 340.0,
+        y: 100.0,
+        width: 80.0,
+        height: 60.0,
+        color: ColorData::from(Color32::BLACK),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    });
+    page.objects.push(DrawObject::Connector {
+        id: "c1".to_string(),
+        start: ConnectorEnd::Attached {
+            shape_id: "s1".to_string(),
+            site: ConnectionSite::Right,
+        },
+        end: ConnectorEnd::Attached {
+            shape_id: "s2".to_string(),
+            site: ConnectionSite::Left,
+        },
+        route: ConnectorRoute::Orthogonal,
+        control_points: Vec::new(),
+        style: ConnectorStyle::default(),
+        locked: false,
+    });
+    state.selected_ids = vec!["c1".to_string()];
+
+    let origin = step_canvas(&ctx, &mut page, &mut state, vec![]);
+    let to_screen = |x: f32, y: f32| origin + Vec2::new(x, y);
+
+    // Hit pada LineSegment (220, 130) — cukup jauh dari StartHandle (180,130) maupun midpoint (260,130)
+    let seg_hit = to_screen(220.0, 130.0);
+    let drag_to = to_screen(220.0, 185.0);
+
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(seg_hit)],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: seg_hit,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(drag_to)],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: drag_to,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    match &page.objects[2] {
+        DrawObject::Connector { control_points, .. } => {
+            assert!(
+                !control_points.is_empty(),
+                "Dragging connector LineSegment should insert a control point"
+            );
+        }
+        other => panic!("Expected Connector, got {other:?}"),
+    }
+
+    assert!(state.can_undo(&page.id));
+    state.undo(&mut page);
+    match &page.objects[2] {
+        DrawObject::Connector { control_points, .. } => {
+            assert!(
+                control_points.is_empty(),
+                "Single undo must restore original straight connector"
+            );
+        }
+        other => panic!("Expected Connector, got {other:?}"),
+    }
+    assert!(
+        !state.can_undo(&page.id),
+        "Connector LineSegment drag must push only 1 undo snapshot"
+    );
+}
+
+#[test]
+fn test_pen_primary_click_and_escape_clear_stale_draft_state() {
+    fn step_canvas(
+        ctx: &eframe::egui::Context,
+        page: &mut Page,
+        state: &mut CanvasState,
+        events: Vec<eframe::egui::Event>,
+    ) -> Pos2 {
+        let mut origin = Pos2::ZERO;
+        let input = eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                Pos2::ZERO,
+                Vec2::new(1000.0, 1000.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            eframe::egui::CentralPanel::default()
+                .frame(eframe::egui::Frame::NONE)
+                .show(ctx, |ui| {
+                    origin = ui.next_widget_position();
+                    let _ = render_page_canvas(ui, page, state);
+                });
+        });
+        origin
+    }
+
+    fn seed_stale_draft(state: &mut CanvasState, page_id: &str) {
+        let dummy_shape = crate::geometry::RecognizedShape {
+            kind: ShapeKind::Rectangle,
+            x: 10.0,
+            y: 10.0,
+            width: 40.0,
+            height: 40.0,
+        };
+        state.active_stroke_page_id = Some(page_id.to_string());
+        state.last_stroke_move_time = Some(std::time::Instant::now());
+        state.recognized_draft_shape = Some(dummy_shape.clone());
+        state.snap_initial_shape = Some(dummy_shape);
+        state.snap_flash_time = Some(std::time::Instant::now());
+        state.active_touch_id = Some(eframe::egui::TouchId(7));
+        state.draft_connector_start = Some(ConnectorEnd::Free { x: 1.0, y: 2.0 });
+        state.draft_connector_current = Some(Point2D::new(3.0, 4.0));
+        state.lasso_points = vec![Pos2::new(5.0, 6.0)];
+    }
+
+    fn assert_draft_cleared(state: &CanvasState) {
+        assert!(state.active_stroke_page_id.is_none());
+        assert!(state.draft_stroke.is_none());
+        assert!(state.draft_shape_start.is_none());
+        assert!(state.draft_shape_current.is_none());
+        assert!(state.last_stroke_move_time.is_none());
+        assert!(state.recognized_draft_shape.is_none());
+        assert!(state.snap_initial_shape.is_none());
+        assert!(state.snap_flash_time.is_none());
+        assert!(state.active_touch_id.is_none());
+        assert!(state.draft_connector_start.is_none());
+        assert!(state.draft_connector_current.is_none());
+        assert!(state.connector_snap_candidate.is_none());
+        assert!(state.lasso_points.is_empty());
+    }
+
+    let ctx = eframe::egui::Context::default();
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Pen,
+        zoom: 1.0,
+        ..Default::default()
+    };
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "draft-cleanup-test".to_string();
+
+    let origin = step_canvas(&ctx, &mut page, &mut state, vec![]);
+    let click_pos = origin + Vec2::new(140.0, 140.0);
+
+    // 1. Klik tunggal Pen membersihkan sisa state draft lama setelah membuat titik
+    seed_stale_draft(&mut state, &page.id);
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(click_pos)],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: click_pos,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: click_pos,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    assert_eq!(page.objects.len(), 1);
+    assert!(matches!(page.objects[0], DrawObject::Stroke { .. }));
+    assert_draft_cleared(&state);
+
+    // 2. Escape membatalkan seleksi dan state draft yang tersisa
+    seed_stale_draft(&mut state, &page.id);
+    state.selected_ids = vec![page.objects[0].id().to_string()];
+    state.editing_text_id = None;
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::Key {
+            key: eframe::egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    assert!(state.selected_ids.is_empty());
+    assert_draft_cleared(&state);
+}

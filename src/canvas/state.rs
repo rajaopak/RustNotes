@@ -861,4 +861,21 @@ impl CanvasState {
             self.rebuild_spatial_grid(&page.id, &page.objects);
         }
     }
+
+    /// Membersihkan seluruh state draft sementara alat kanvas tanpa memengaruhi zoom window atau undo history.
+    pub fn clear_active_draft_state(&mut self) {
+        self.active_stroke_page_id = None;
+        self.draft_stroke = None;
+        self.draft_shape_start = None;
+        self.draft_shape_current = None;
+        self.last_stroke_move_time = None;
+        self.recognized_draft_shape = None;
+        self.snap_initial_shape = None;
+        self.snap_flash_time = None;
+        self.active_touch_id = None;
+        self.draft_connector_start = None;
+        self.draft_connector_current = None;
+        self.connector_snap_candidate = None;
+        self.lasso_points.clear();
+    }
 }

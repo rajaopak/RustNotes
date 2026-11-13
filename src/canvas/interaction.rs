@@ -107,6 +107,7 @@ fn handle_drag_started(
             return;
         }
     } else if let Some((source_id, site)) = hit_test_quick_diagram_dot(sel, state, page_p) {
+        state.clear_active_draft_state();
         state.active_stroke_page_id = Some(page.id.clone());
         state.resize_corner = Some(ResizeCorner::QuickDiagramDot(site));
         state.drag_start_pos = Some(page_p);
@@ -115,7 +116,6 @@ fn handle_drag_started(
             site,
         });
         state.draft_connector_current = Some(Point2D::new(page_p.x, page_p.y));
-        state.connector_snap_candidate = None;
         return;
     }
 
@@ -147,6 +147,7 @@ fn handle_drag_started(
             } else if let Some(target) =
                 hit_test_connector_details(Point2D::new(page_p.x, page_p.y), poly, handle_dist)
             {
+                state.push_undo(&page.id, &page.objects);
                 let corner = match target {
                     crate::geometry::ConnectorHitTarget::StartHandle => {
                         ResizeCorner::ConnectorStart
@@ -157,7 +158,6 @@ fn handle_drag_started(
                         ResizeCorner::ConnectorControl(cp_idx)
                     }
                     crate::geometry::ConnectorHitTarget::LineSegment(_seg_idx) => {
-                        state.push_undo(&page.id, &page.objects);
                         let mut new_idx = 0;
                         for obj in &mut page.objects {
                             if obj.id() == conn_id
@@ -176,7 +176,6 @@ fn handle_drag_started(
                 };
                 state.resize_corner = Some(corner);
                 state.drag_start_pos = Some(page_p);
-                state.push_undo(&page.id, &page.objects);
                 return;
             }
         }
@@ -226,6 +225,7 @@ fn handle_drag_started(
             // Fase 8.5: Palm Rejection — tolak awal goresan jika multi-touch terdeteksi
             let multi_touch = ui.input(|i| i.multi_touch().is_some());
             if !(state.palm_rejection_enabled && multi_touch) {
+                state.clear_active_draft_state();
                 let (touch_id, touch_force) =
                     ui.input(|i| extract_touch_pressure(&i.raw.events, None, Some(pos)));
                 state.active_touch_id = touch_id;
@@ -243,11 +243,11 @@ fn handle_drag_started(
                     pressure,
                 }]);
                 state.last_stroke_move_time = Some(Instant::now());
-                state.recognized_draft_shape = None;
                 state.selected_ids.clear();
             }
         }
         ActiveTool::Shape(_) => {
+            state.clear_active_draft_state();
             state.active_stroke_page_id = Some(page.id.clone());
             let mut start_p = page_p;
             if state.snap_to_grid {
@@ -263,6 +263,7 @@ fn handle_drag_started(
             state.selected_ids.clear();
         }
         ActiveTool::Connector => {
+            state.clear_active_draft_state();
             state.active_stroke_page_id = Some(page.id.clone());
             let snap = find_connector_snap_site(
                 &page.objects,
@@ -280,7 +281,6 @@ fn handle_drag_started(
             };
             state.draft_connector_start = Some(start_end);
             state.draft_connector_current = Some(Point2D::new(page_p.x, page_p.y));
-            state.connector_snap_candidate = None;
             state.selected_ids.clear();
         }
         ActiveTool::Eraser => {
@@ -293,6 +293,7 @@ fn handle_drag_started(
             state.erase_at(page, page_p, erase_radius);
         }
         ActiveTool::Lasso => {
+            state.clear_active_draft_state();
             state.active_stroke_page_id = Some(page.id.clone());
             state.selected_ids.clear();
             state.lasso_points = vec![page_p];
@@ -1056,7 +1057,6 @@ fn handle_drag_stopped(
                     // Fase G4.3: Simpan stroke asli ke snapshot pertama, lalu ganti dengan shape terkoreksi
                     // Undo #1 -> kembali ke goresan asli pengguna
                     // Undo #2 -> hapus goresan (kertas kosong)
-                    state.push_undo(&page.id, &page.objects);
                     let orig_stroke = DrawObject::Stroke {
                         id: Uuid::new_v4().to_string(),
                         points: pts.clone(),
@@ -1223,8 +1223,8 @@ fn handle_drag_stopped(
                 state.selected_ids = selected;
             }
             state.lasso_points.clear();
-            state.active_stroke_page_id = None;
         }
+        state.clear_active_draft_state();
     }
 }
 
@@ -1466,7 +1466,6 @@ fn handle_primary_click(
         // Task 1: Dukung click-only / tap tunggal untuk menghasilkan titik goresan yang valid
         let (_touch_id, touch_force) =
             ui.input(|i| extract_touch_pressure(&i.raw.events, state.active_touch_id, Some(pos)));
-        state.active_touch_id = None;
         let raw_pressure = touch_force.unwrap_or(1.0).clamp(0.0, 1.0);
         let is_highlighter = state.current_tool == ActiveTool::Highlighter;
         let pressure = if is_highlighter && !state.highlighter_pressure_enabled {
@@ -1481,6 +1480,7 @@ fn handle_primary_click(
                 pressure,
             }]
         });
+        state.clear_active_draft_state();
         state.push_undo(&page.id, &page.objects);
         let stroke_width = if is_highlighter {
             state.stroke_width * 6.0
@@ -1563,6 +1563,7 @@ fn handle_canvas_keyboard_shortcuts(ui: &Ui, page: &mut Page, state: &mut Canvas
     // Escape key: membatalkan seleksi saat tidak sedang menyunting teks (Task 5.4)
     if ui.input(|i| i.key_pressed(Key::Escape)) && state.editing_text_id.is_none() {
         state.selected_ids.clear();
+        state.clear_active_draft_state();
     }
 
     // Shortcut Ctrl+L: Lock / Unlock selected shape(s) & connector(s) (Fase G10)
@@ -1748,12 +1749,7 @@ pub(crate) fn complete_quick_diagram_dot_interaction(
             }
         }
     }
-    state.draft_connector_start = None;
-    state.draft_connector_current = None;
-    state.connector_snap_candidate = None;
-    if state.active_stroke_page_id.as_deref() == Some(&page.id) {
-        state.active_stroke_page_id = None;
-    }
+    state.clear_active_draft_state();
 }
 
 /// Membuat connector standar untuk fitur Quick Diagramming.
