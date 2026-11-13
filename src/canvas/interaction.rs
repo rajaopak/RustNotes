@@ -7,7 +7,7 @@ use crate::geometry::{
     hit_test_connector_details, hit_test_connector_midpoint, hit_test_connector_with_objects,
     hit_test_object, hit_test_transform_handles, insert_control_point_at, next_shape_rect,
     object_bounds, object_in_lasso_mode_with_context, point_in_polygon,
-    prune_collinear_control_points, prune_invalid_connector_control_points,
+    prune_all_invalid_connector_control_points, prune_collinear_control_points,
     recognize_handwriting_from_strokes, recognize_shape, resolve_connector_endpoints, scale_object,
     shape_connection_point, should_reject_palm_input, snap_point_to_grid, snap_value_to_grid,
     translate_object,
@@ -532,93 +532,112 @@ fn handle_drag_moved(
                     | ResizeCorner::ConnectorEnd
                     | ResizeCorner::ConnectorControl(_)
             ) {
-                let shapes_snapshot: Vec<DrawObject> = page
-                    .objects
-                    .iter()
-                    .filter(|o| matches!(o, DrawObject::Shape { .. }))
-                    .cloned()
-                    .collect();
                 let snap = find_connector_snap_site(
-                    &shapes_snapshot,
+                    &page.objects,
                     Point2D::new(page_p.x, page_p.y),
                     24.0 / state.zoom,
                     None,
                 );
                 state.connector_snap_candidate = snap.clone();
-                for obj in &mut page.objects {
-                    if state.selected_ids.contains(&obj.id().to_string())
-                        && let DrawObject::Connector {
-                            start,
-                            end,
-                            route,
-                            control_points,
-                            ..
-                        } = obj
-                    {
-                        match corner {
-                            ResizeCorner::ConnectorStart => {
-                                if let Some((shape_id, site, _)) = &snap {
-                                    *start = ConnectorEnd::Attached {
-                                        shape_id: shape_id.clone(),
-                                        site: *site,
-                                    };
+                if let ResizeCorner::ConnectorControl(idx) = corner {
+                    let endpoints: Vec<(usize, Point2D, Point2D)> = page
+                        .objects
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(obj_idx, obj)| {
+                            if state.selected_ids.iter().any(|id| id == obj.id())
+                                && let DrawObject::Connector {
+                                    start,
+                                    end,
+                                    route: ConnectorRoute::Orthogonal,
+                                    ..
+                                } = obj
+                            {
+                                let ((start_pt, _), (end_pt, _)) =
+                                    resolve_connector_endpoints(start, end, &page.objects);
+                                Some((obj_idx, start_pt, end_pt))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    for (obj_idx, obj) in page.objects.iter_mut().enumerate() {
+                        if state.selected_ids.iter().any(|id| id == obj.id())
+                            && let DrawObject::Connector {
+                                route,
+                                control_points,
+                                ..
+                            } = obj
+                        {
+                            let mut target_pt = Point2D::new(page_p.x, page_p.y);
+                            if *route == ConnectorRoute::Orthogonal
+                                && let Some(&(_, start_pt, end_pt)) =
+                                    endpoints.iter().find(|&&(i, _, _)| i == obj_idx)
+                            {
+                                let prev = if idx == 0 {
+                                    start_pt
+                                } else if idx - 1 < control_points.len() {
+                                    control_points[idx - 1]
                                 } else {
-                                    *start = ConnectorEnd::Free {
-                                        x: page_p.x,
-                                        y: page_p.y,
-                                    };
+                                    target_pt
+                                };
+                                let next = if idx + 1 < control_points.len() {
+                                    control_points[idx + 1]
+                                } else {
+                                    end_pt
+                                };
+                                if (target_pt.x - prev.x).abs() < 8.0 {
+                                    target_pt.x = prev.x;
+                                } else if (target_pt.x - next.x).abs() < 8.0 {
+                                    target_pt.x = next.x;
+                                }
+                                if (target_pt.y - prev.y).abs() < 8.0 {
+                                    target_pt.y = prev.y;
+                                } else if (target_pt.y - next.y).abs() < 8.0 {
+                                    target_pt.y = next.y;
                                 }
                             }
-                            ResizeCorner::ConnectorEnd => {
-                                if let Some((shape_id, site, _)) = &snap {
-                                    *end = ConnectorEnd::Attached {
-                                        shape_id: shape_id.clone(),
-                                        site: *site,
-                                    };
-                                } else {
-                                    *end = ConnectorEnd::Free {
-                                        x: page_p.x,
-                                        y: page_p.y,
-                                    };
-                                }
+                            if idx < control_points.len() {
+                                control_points[idx] = target_pt;
+                            } else {
+                                control_points.push(target_pt);
                             }
-                            ResizeCorner::ConnectorControl(idx) => {
-                                let mut target_pt = Point2D::new(page_p.x, page_p.y);
-                                if *route == ConnectorRoute::Orthogonal {
-                                    let prev = if idx == 0 {
-                                        resolve_connector_endpoints(start, end, &shapes_snapshot)
-                                            .0
-                                            .0
-                                    } else if idx - 1 < control_points.len() {
-                                        control_points[idx - 1]
+                        }
+                    }
+                } else {
+                    for obj in &mut page.objects {
+                        if state.selected_ids.iter().any(|id| id == obj.id())
+                            && let DrawObject::Connector { start, end, .. } = obj
+                        {
+                            match corner {
+                                ResizeCorner::ConnectorStart => {
+                                    if let Some((shape_id, site, _)) = &snap {
+                                        *start = ConnectorEnd::Attached {
+                                            shape_id: shape_id.clone(),
+                                            site: *site,
+                                        };
                                     } else {
-                                        target_pt
-                                    };
-                                    let next = if idx + 1 < control_points.len() {
-                                        control_points[idx + 1]
+                                        *start = ConnectorEnd::Free {
+                                            x: page_p.x,
+                                            y: page_p.y,
+                                        };
+                                    }
+                                }
+                                ResizeCorner::ConnectorEnd => {
+                                    if let Some((shape_id, site, _)) = &snap {
+                                        *end = ConnectorEnd::Attached {
+                                            shape_id: shape_id.clone(),
+                                            site: *site,
+                                        };
                                     } else {
-                                        resolve_connector_endpoints(start, end, &shapes_snapshot)
-                                            .1
-                                            .0
-                                    };
-                                    if (target_pt.x - prev.x).abs() < 8.0 {
-                                        target_pt.x = prev.x;
-                                    } else if (target_pt.x - next.x).abs() < 8.0 {
-                                        target_pt.x = next.x;
-                                    }
-                                    if (target_pt.y - prev.y).abs() < 8.0 {
-                                        target_pt.y = prev.y;
-                                    } else if (target_pt.y - next.y).abs() < 8.0 {
-                                        target_pt.y = next.y;
+                                        *end = ConnectorEnd::Free {
+                                            x: page_p.x,
+                                            y: page_p.y,
+                                        };
                                     }
                                 }
-                                if idx < control_points.len() {
-                                    control_points[idx] = target_pt;
-                                } else {
-                                    control_points.push(target_pt);
-                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
                     }
                 }
@@ -626,14 +645,8 @@ fn handle_drag_moved(
                 ui.ctx().request_repaint();
             } else if matches!(corner, ResizeCorner::QuickDiagramDot(_)) {
                 state.draft_connector_current = Some(Point2D::new(page_p.x, page_p.y));
-                let shapes_snapshot: Vec<DrawObject> = page
-                    .objects
-                    .iter()
-                    .filter(|o| matches!(o, DrawObject::Shape { .. }))
-                    .cloned()
-                    .collect();
                 let snap = find_connector_snap_site(
-                    &shapes_snapshot,
+                    &page.objects,
                     Point2D::new(page_p.x, page_p.y),
                     24.0 / state.zoom,
                     state.draft_connector_start.as_ref().and_then(|s| match s {
@@ -946,38 +959,37 @@ fn handle_drag_stopped(
     if state.is_dragging_selection {
         state.is_dragging_selection = false;
         state.drag_start_pos = None;
-        // Task 8.5: Periksa bila ada shape bergerak yang menimpa control points pada connector
-        let shapes_snapshot: Vec<DrawObject> = page
-            .objects
-            .iter()
-            .filter(|o| matches!(o, DrawObject::Shape { .. }))
-            .cloned()
-            .collect();
-        for obj in &mut page.objects {
-            prune_invalid_connector_control_points(obj, &shapes_snapshot);
-        }
+        // Task 8.5: Periksa bila ada shape bergerak yang menimpa control points pada connector tanpa clone objek
+        prune_all_invalid_connector_control_points(&mut page.objects);
         state.rebuild_spatial_grid(&page.id, &page.objects);
     } else if let Some(corner) = state.resize_corner.take() {
         let drag_start_pos = state.drag_start_pos.take();
-        // Task 8.3: Jika selesai drag control point, bersihkan jika hampir segaris
+        // Task 8.3: Jika selesai drag control point, bersihkan jika hampir segaris tanpa clone objek
         if matches!(corner, ResizeCorner::ConnectorControl(_)) {
-            let shapes_snapshot: Vec<DrawObject> = page
+            let endpoints: Vec<(usize, Point2D, Point2D)> = page
                 .objects
                 .iter()
-                .filter(|o| matches!(o, DrawObject::Shape { .. }))
-                .cloned()
+                .enumerate()
+                .filter_map(|(i, obj)| {
+                    if state.selected_ids.iter().any(|id| id == obj.id())
+                        && let DrawObject::Connector {
+                            start,
+                            end,
+                            control_points,
+                            ..
+                        } = obj
+                        && !control_points.is_empty()
+                    {
+                        let ((start_pt, _), (end_pt, _)) =
+                            resolve_connector_endpoints(start, end, &page.objects);
+                        Some((i, start_pt, end_pt))
+                    } else {
+                        None
+                    }
+                })
                 .collect();
-            for obj in &mut page.objects {
-                if state.selected_ids.contains(&obj.id().to_string())
-                    && let DrawObject::Connector {
-                        start,
-                        end,
-                        control_points,
-                        ..
-                    } = obj
-                {
-                    let ((start_pt, _), (end_pt, _)) =
-                        resolve_connector_endpoints(start, end, &shapes_snapshot);
+            for (i, start_pt, end_pt) in endpoints {
+                if let DrawObject::Connector { control_points, .. } = &mut page.objects[i] {
                     prune_collinear_control_points(control_points, start_pt, end_pt, 6.0);
                 }
             }

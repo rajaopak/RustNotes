@@ -489,47 +489,73 @@ pub fn prune_invalid_connector_control_points(
     connector: &mut DrawObject,
     all_objects: &[DrawObject],
 ) -> bool {
-    if let DrawObject::Connector {
+    prune_invalid_connector_control_points_in_slices(connector, &[all_objects])
+}
+
+/// Memeriksa dan membuang titik kontrol yang berada di dalam bentuk terhubung untuk seluruh konektor
+/// pada irisan objek tanpa menyalin (`clone`) objek bentuk apa pun.
+pub fn prune_all_invalid_connector_control_points(objects: &mut [DrawObject]) -> bool {
+    let mut changed = false;
+    for i in 0..objects.len() {
+        if !matches!(
+            &objects[i],
+            DrawObject::Connector {
+                control_points, ..
+            } if !control_points.is_empty()
+        ) {
+            continue;
+        }
+        let (left, mid_right) = objects.split_at_mut(i);
+        let (curr_slice, right) = mid_right.split_at_mut(1);
+        if prune_invalid_connector_control_points_in_slices(&mut curr_slice[0], &[left, right]) {
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn prune_invalid_connector_control_points_in_slices(
+    connector: &mut DrawObject,
+    object_slices: &[&[DrawObject]],
+) -> bool {
+    let DrawObject::Connector {
         start,
         end,
         control_points,
         ..
     } = connector
-    {
-        if control_points.is_empty() {
-            return false;
-        }
-
-        let mut attached_shapes: Vec<&DrawObject> = Vec::new();
-        if let crate::model::ConnectorEnd::Attached { shape_id, .. } = start
-            && let Some(s) = all_objects.iter().find(|o| o.id() == shape_id)
-        {
-            attached_shapes.push(s);
-        }
-        if let crate::model::ConnectorEnd::Attached { shape_id, .. } = end
-            && let Some(s) = all_objects.iter().find(|o| o.id() == shape_id)
-        {
-            attached_shapes.push(s);
-        }
-
-        if attached_shapes.is_empty() {
-            return false;
-        }
-
-        let initial_len = control_points.len();
-        control_points.retain(|cp| {
-            for shape in &attached_shapes {
-                if hit_test_rotated_shape(*cp, shape, 0.0) {
-                    return false;
-                }
-            }
-            true
-        });
-
-        initial_len != control_points.len()
-    } else {
-        false
+    else {
+        return false;
+    };
+    if control_points.is_empty() {
+        return false;
     }
+
+    let find_shape = |shape_id: &str| {
+        object_slices
+            .iter()
+            .find_map(|slice| slice.iter().find(|o| o.id() == shape_id))
+    };
+
+    let start_shape = match start {
+        crate::model::ConnectorEnd::Attached { shape_id, .. } => find_shape(shape_id),
+        crate::model::ConnectorEnd::Free { .. } => None,
+    };
+    let end_shape = match end {
+        crate::model::ConnectorEnd::Attached { shape_id, .. } => find_shape(shape_id),
+        crate::model::ConnectorEnd::Free { .. } => None,
+    };
+    if start_shape.is_none() && end_shape.is_none() {
+        return false;
+    }
+
+    let initial_len = control_points.len();
+    control_points.retain(|cp| {
+        !start_shape.is_some_and(|shape| hit_test_rotated_shape(*cp, shape, 0.0))
+            && !end_shape.is_some_and(|shape| hit_test_rotated_shape(*cp, shape, 0.0))
+    });
+
+    initial_len != control_points.len()
 }
 
 /// Menguji apakah titik `p` mendekati titik tengah salah satu segmen jalur connector

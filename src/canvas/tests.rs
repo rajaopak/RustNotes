@@ -2672,3 +2672,345 @@ fn test_pen_primary_click_and_escape_clear_stale_draft_state() {
     assert!(state.selected_ids.is_empty());
     assert_draft_cleared(&state);
 }
+
+#[test]
+fn test_connector_snap_orthogonal_alignment_and_collinear_prune_without_clones() {
+    fn step_canvas(
+        ctx: &eframe::egui::Context,
+        page: &mut Page,
+        state: &mut CanvasState,
+        events: Vec<eframe::egui::Event>,
+    ) -> Pos2 {
+        let mut origin = Pos2::ZERO;
+        let input = eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                Pos2::ZERO,
+                Vec2::new(1000.0, 1000.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            eframe::egui::CentralPanel::default()
+                .frame(eframe::egui::Frame::NONE)
+                .show(ctx, |ui| {
+                    origin = ui.next_widget_position();
+                    let _ = render_page_canvas(ui, page, state);
+                });
+        });
+        origin
+    }
+
+    let ctx = eframe::egui::Context::default();
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Lasso,
+        zoom: 1.0,
+        ..Default::default()
+    };
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "conn-no-clone".to_string();
+    page.objects.push(DrawObject::Shape {
+        id: "s1".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: 100.0,
+        y: 100.0,
+        width: 80.0,
+        height: 60.0,
+        color: ColorData::from(Color32::BLACK),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    });
+    page.objects.push(DrawObject::Shape {
+        id: "s2".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: 340.0,
+        y: 100.0,
+        width: 80.0,
+        height: 60.0,
+        color: ColorData::from(Color32::BLACK),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    });
+    page.objects.push(DrawObject::Connector {
+        id: "c1".to_string(),
+        start: ConnectorEnd::Attached {
+            shape_id: "s1".to_string(),
+            site: ConnectionSite::Right,
+        },
+        end: ConnectorEnd::Free { x: 280.0, y: 130.0 },
+        route: ConnectorRoute::Orthogonal,
+        control_points: Vec::new(),
+        style: ConnectorStyle::default(),
+        locked: false,
+    });
+    state.selected_ids = vec!["c1".to_string()];
+
+    let origin = step_canvas(&ctx, &mut page, &mut state, vec![]);
+    let to_screen = |x: f32, y: f32| origin + Vec2::new(x, y);
+
+    // 1. Seret EndHandle (280, 130) ke Left anchor s2 (340, 130) -> attach
+    let end_start = to_screen(280.0, 130.0);
+    let end_snap = to_screen(340.0, 130.0);
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(end_start)],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: end_start,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(end_snap)],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: end_snap,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+    match &page.objects[2] {
+        DrawObject::Connector { end, .. } => {
+            assert_eq!(
+                end,
+                &ConnectorEnd::Attached {
+                    shape_id: "s2".to_string(),
+                    site: ConnectionSite::Left,
+                }
+            );
+        }
+        other => panic!("Expected Connector, got {other:?}"),
+    }
+
+    // 2. Tarik segmen garis (220, 130) ke (250, 175) -> lalu mendekati sumbu y=130 -> orthogonal snap -> prune collinear saat lepas
+    let cp_start = to_screen(220.0, 130.0);
+    let cp_bend = to_screen(250.0, 175.0);
+    let cp_near_line = to_screen(250.0, 134.0);
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(cp_start)],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: cp_start,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(cp_bend)],
+    );
+    match &page.objects[2] {
+        DrawObject::Connector { control_points, .. } => {
+            assert_eq!(control_points.len(), 1);
+            assert!((control_points[0].y - 175.0).abs() < 0.01);
+        }
+        other => panic!("Expected Connector, got {other:?}"),
+    }
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(cp_near_line)],
+    );
+    match &page.objects[2] {
+        DrawObject::Connector { control_points, .. } => {
+            assert_eq!(control_points.len(), 1);
+            assert!(
+                (control_points[0].y - 130.0).abs() < 0.01,
+                "Orthogonal control point drag should snap y to endpoint y=130, got {}",
+                control_points[0].y
+            );
+        }
+        other => panic!("Expected Connector, got {other:?}"),
+    }
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: cp_near_line,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+    match &page.objects[2] {
+        DrawObject::Connector { control_points, .. } => {
+            assert!(
+                control_points.is_empty(),
+                "Collinear control point should be pruned on release"
+            );
+        }
+        other => panic!("Expected Connector, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_moving_shape_prunes_covered_connector_control_points_through_canvas() {
+    fn step_canvas(
+        ctx: &eframe::egui::Context,
+        page: &mut Page,
+        state: &mut CanvasState,
+        events: Vec<eframe::egui::Event>,
+    ) -> Pos2 {
+        let mut origin = Pos2::ZERO;
+        let input = eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                Pos2::ZERO,
+                Vec2::new(1000.0, 1000.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            eframe::egui::CentralPanel::default()
+                .frame(eframe::egui::Frame::NONE)
+                .show(ctx, |ui| {
+                    origin = ui.next_widget_position();
+                    let _ = render_page_canvas(ui, page, state);
+                });
+        });
+        origin
+    }
+
+    let ctx = eframe::egui::Context::default();
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Lasso,
+        zoom: 1.0,
+        ..Default::default()
+    };
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "prune-covered-cp".to_string();
+    page.objects.push(DrawObject::Shape {
+        id: "s1".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: 100.0,
+        y: 100.0,
+        width: 80.0,
+        height: 60.0,
+        color: ColorData::from(Color32::BLACK),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    });
+    page.objects.push(DrawObject::Shape {
+        id: "s2".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: 340.0,
+        y: 100.0,
+        width: 80.0,
+        height: 60.0,
+        color: ColorData::from(Color32::BLACK),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    });
+    page.objects.push(DrawObject::Connector {
+        id: "c1".to_string(),
+        start: ConnectorEnd::Attached {
+            shape_id: "s1".to_string(),
+            site: ConnectionSite::Right,
+        },
+        end: ConnectorEnd::Attached {
+            shape_id: "s2".to_string(),
+            site: ConnectionSite::Left,
+        },
+        route: ConnectorRoute::Orthogonal,
+        control_points: vec![Point2D::new(260.0, 130.0), Point2D::new(260.0, 210.0)],
+        style: ConnectorStyle::default(),
+        locked: false,
+    });
+    state.selected_ids = vec!["s2".to_string()];
+
+    let origin = step_canvas(&ctx, &mut page, &mut state, vec![]);
+    let to_screen = |x: f32, y: f32| origin + Vec2::new(x, y);
+
+    // Pindahkan s2 ke kiri sehingga menutupi control point pertama (260, 130) tetapi bukan (260, 210)
+    let drag_start = to_screen(380.0, 130.0);
+    let drag_dest = to_screen(260.0, 130.0);
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(drag_start)],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: drag_start,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(drag_dest)],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: drag_dest,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    match &page.objects[2] {
+        DrawObject::Connector { control_points, .. } => {
+            assert_eq!(control_points, &vec![Point2D::new(260.0, 210.0)]);
+        }
+        other => panic!("Expected Connector, got {other:?}"),
+    }
+}
