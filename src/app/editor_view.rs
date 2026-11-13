@@ -126,6 +126,10 @@ impl RustNotesApp {
             || self.show_new_folder_modal
             || self.show_add_outline_modal
             || self.show_new_notebook_modal
+            || self.show_shortcut_modal
+            || self.show_ocr_modal
+            || self.show_about_modal
+            || self.canvas_state.show_equation_dialog
             || self.canvas_state.editing_text_id.is_some()
             || ctx.wants_keyboard_input();
 
@@ -150,9 +154,18 @@ impl RustNotesApp {
             if ctx.input(|i| {
                 crate::app::is_action_triggered(ShortcutAction::Save, &self.settings.shortcuts, i)
             }) {
-                let nb_id = notebook_id.clone();
-                self.force_save_notebook(&nb_id);
-                self.toast_message = Some("💾 Dokumen berhasil disimpan.".to_string());
+                if self.is_read_only {
+                    self.toast_message =
+                        Some("⚠ Mode Baca-Saja: tidak dapat menyimpan perubahan.".to_string());
+                } else {
+                    let nb_id = notebook_id.clone();
+                    if self.force_save_notebook(&nb_id) {
+                        self.toast_message = Some("💾 Dokumen berhasil disimpan.".to_string());
+                    } else {
+                        self.toast_message =
+                            Some("⚠ Gagal menyimpan dokumen. Periksa izin/ruang disk.".to_string());
+                    }
+                }
             }
 
             // Reset zoom to 100% & center pan
