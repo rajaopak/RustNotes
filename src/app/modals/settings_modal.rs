@@ -20,15 +20,16 @@ impl RustNotesApp {
                 crate::app::capture_rebinding_key(&ctx.input(|i| i.clone()))
             {
                 self.settings.shortcuts.set(target_action, new_binding);
-                let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
                 self.rebinding_shortcut = None;
-                self.toast_message = Some(
-                    lang.tr(
-                        "✅ Pintasan keyboard berhasil diperbarui!",
-                        "✅ Keyboard shortcut updated successfully!",
-                    )
-                    .to_string(),
-                );
+                if self.persist_settings() {
+                    self.toast_message = Some(
+                        lang.tr(
+                            "✅ Pintasan keyboard berhasil diperbarui!",
+                            "✅ Keyboard shortcut updated successfully!",
+                        )
+                        .to_string(),
+                    );
+                }
             }
         }
 
@@ -206,10 +207,7 @@ impl RustNotesApp {
                                             self.settings
                                                 .shortcuts
                                                 .set(act, act.default_binding());
-                                            let _ = save_settings_to_dir(
-                                                &app_storage_dir(),
-                                                &self.settings,
-                                            );
+                                            self.persist_settings();
                                         }
                                     } else {
                                         ui.label(
@@ -234,16 +232,7 @@ impl RustNotesApp {
                             ))
                             .clicked()
                         {
-                            self.settings.shortcuts.reset_all();
-                            let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
-                            self.rebinding_shortcut = None;
-                            self.toast_message = Some(
-                                lang.tr(
-                                    "↺ Seluruh pintasan dikembalikan ke bawaan.",
-                                    "↺ All shortcuts restored to defaults.",
-                                )
-                                .to_string(),
-                            );
+                            self.reset_all_shortcuts_to_dir(&app_storage_dir());
                         }
 
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -265,16 +254,7 @@ impl RustNotesApp {
                                 )
                                 .clicked()
                             {
-                                let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
-                                self.rebinding_shortcut = None;
-                                self.show_shortcut_modal = false;
-                                self.toast_message = Some(
-                                    lang.tr(
-                                        "💾 Pengaturan pintasan keyboard disimpan.",
-                                        "💾 Keyboard shortcut settings saved.",
-                                    )
-                                    .to_string(),
-                                );
+                                self.save_shortcut_settings_to_dir(&app_storage_dir());
                             }
                         });
                     });
@@ -571,7 +551,7 @@ impl RustNotesApp {
 
                     if settings_changed {
                         self.sync_inking_settings_to_canvas();
-                        let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
+                        self.persist_settings();
                     }
 
                     ui.add_space(10.0);
@@ -584,12 +564,69 @@ impl RustNotesApp {
                             .clicked()
                         {
                             self.reset_inking_settings_to_defaults();
-                            let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
+                            self.persist_settings();
                         }
                     });
                 }
             }
         });
+    }
+
+    pub(crate) fn persist_settings(&mut self) -> bool {
+        self.persist_settings_to_dir(&app_storage_dir())
+    }
+
+    pub(crate) fn persist_settings_to_dir(&mut self, base_dir: &std::path::Path) -> bool {
+        let lang = self.settings.language;
+        match save_settings_to_dir(base_dir, &self.settings) {
+            Ok(()) => true,
+            Err(err) => {
+                self.toast_message = Some(format!(
+                    "{}: {err}",
+                    lang.tr(
+                        "⚠️ Gagal menyimpan pengaturan",
+                        "⚠️ Failed to save settings",
+                    )
+                ));
+                false
+            }
+        }
+    }
+
+    pub(crate) fn save_shortcut_settings_to_dir(&mut self, base_dir: &std::path::Path) -> bool {
+        let lang = self.settings.language;
+        if self.persist_settings_to_dir(base_dir) {
+            self.rebinding_shortcut = None;
+            self.show_shortcut_modal = false;
+            self.toast_message = Some(
+                lang.tr(
+                    "💾 Pengaturan pintasan keyboard disimpan.",
+                    "💾 Keyboard shortcut settings saved.",
+                )
+                .to_string(),
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn reset_all_shortcuts_to_dir(&mut self, base_dir: &std::path::Path) -> bool {
+        let lang = self.settings.language;
+        self.settings.shortcuts.reset_all();
+        self.rebinding_shortcut = None;
+        if self.persist_settings_to_dir(base_dir) {
+            self.toast_message = Some(
+                lang.tr(
+                    "↺ Seluruh pintasan dikembalikan ke bawaan.",
+                    "↺ All shortcuts restored to defaults.",
+                )
+                .to_string(),
+            );
+            true
+        } else {
+            false
+        }
     }
 
     pub(crate) fn sync_inking_settings_to_canvas(&mut self) {
@@ -743,5 +780,87 @@ mod tests {
             defaults.highlighter_pressure_enabled
         );
         assert_eq!(reloaded.theme_mode, ThemeMode::Light);
+    }
+
+    #[test]
+    fn test_persist_settings_success_and_failure_preserves_prior_file_and_reports_toast() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut app = RustNotesApp::default();
+        app.settings.theme_mode = ThemeMode::Light;
+        assert!(app.persist_settings_to_dir(dir.path()));
+        assert!(app.toast_message.is_none());
+
+        let reloaded = load_settings_from_dir(dir.path());
+        assert_eq!(reloaded.theme_mode, ThemeMode::Light);
+
+        // Gunakan file biasa sebagai base_dir agar save gagal di semua platform/izin
+        let blocker_file = dir.path().join("not_a_directory");
+        std::fs::write(&blocker_file, b"occupied").expect("create regular file blocker");
+        app.settings.theme_mode = ThemeMode::Dark;
+        assert!(!app.persist_settings_to_dir(&blocker_file));
+
+        let toast = app
+            .toast_message
+            .as_deref()
+            .expect("error toast must be set");
+        assert!(toast.contains("⚠️"));
+
+        // File settings.json lama pada dir yang valid harus tetap utuh
+        assert_eq!(
+            load_settings_from_dir(dir.path()).theme_mode,
+            ThemeMode::Light
+        );
+    }
+
+    #[test]
+    fn test_shortcut_save_and_reset_all_failure_preserve_modal_and_suppress_success_toast() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let blocker_file = dir.path().join("not_a_directory");
+        std::fs::write(&blocker_file, b"occupied").expect("create regular file blocker");
+
+        let custom_binding = KeyBinding {
+            key: "J".to_string(),
+            ctrl: true,
+            alt: false,
+            shift: false,
+        };
+        let mut app = RustNotesApp {
+            show_shortcut_modal: true,
+            rebinding_shortcut: Some(ShortcutAction::ToolPen),
+            ..Default::default()
+        };
+        app.settings
+            .shortcuts
+            .set(ShortcutAction::ToolPen, custom_binding);
+
+        // Kegagalan simpan tidak boleh menutup modal atau menampilkan toast sukses palsu
+        assert!(!app.save_shortcut_settings_to_dir(&blocker_file));
+        assert!(app.show_shortcut_modal);
+        let save_err_toast = app
+            .toast_message
+            .as_deref()
+            .expect("error toast on save failure");
+        assert!(save_err_toast.contains("⚠️"));
+        assert!(!save_err_toast.contains("💾"));
+
+        // Kegagalan reset-all tidak boleh menampilkan toast sukses palsu
+        app.toast_message = None;
+        assert!(!app.reset_all_shortcuts_to_dir(&blocker_file));
+        assert!(app.rebinding_shortcut.is_none());
+        let reset_err_toast = app
+            .toast_message
+            .as_deref()
+            .expect("error toast on reset failure");
+        assert!(reset_err_toast.contains("⚠️"));
+        assert!(!reset_err_toast.contains("↺"));
+
+        // Penyimpanan ke direktori yang valid harus berhasil, menutup modal, dan memberi toast sukses
+        assert!(app.save_shortcut_settings_to_dir(dir.path()));
+        assert!(!app.show_shortcut_modal);
+        assert!(
+            app.toast_message
+                .as_deref()
+                .is_some_and(|t| t.contains("💾"))
+        );
     }
 }

@@ -4,7 +4,6 @@ use crate::canvas::{ActiveTool, EraserMode};
 use crate::model::{ShapeKind, ThemeMode};
 use crate::storage::{
     app_storage_dir, export_notebook_to_pdf, export_page_to_png, export_page_to_svg_file,
-    save_settings_to_dir,
 };
 use eframe::egui::{
     self, Align, Button, Color32, FontId, Layout, Pos2, Rect, RichText, Sense, Stroke, StrokeKind,
@@ -939,7 +938,7 @@ impl RustNotesApp {
                         }
                         if let Some(rem) = remove_width_idx {
                             self.settings.pen_widths.remove(rem);
-                            let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
+                            self.persist_settings();
                         }
                         if ui
                             .small_button("+")
@@ -956,7 +955,7 @@ impl RustNotesApp {
                                 .any(|&x| (x - next_w).abs() < 0.1)
                             {
                                 self.settings.pen_widths.push(next_w);
-                                let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
+                                self.persist_settings();
                             }
                         }
                     });
@@ -1039,7 +1038,7 @@ impl RustNotesApp {
                         }
                         if let Some(rem) = remove_swatch_idx {
                             self.settings.color_swatches.remove(rem);
-                            let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
+                            self.persist_settings();
                         }
                         ui.color_edit_button_srgba(&mut self.canvas_state.stroke_color);
                         if ui
@@ -1051,7 +1050,7 @@ impl RustNotesApp {
                                 self.canvas_state.stroke_color.into();
                             if !self.settings.color_swatches.contains(&new_sw) {
                                 self.settings.color_swatches.push(new_sw);
-                                let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
+                                self.persist_settings();
                             }
                         }
                     });
@@ -1190,7 +1189,7 @@ impl RustNotesApp {
                             .changed()
                         {
                             self.canvas_state.auto_shape_enabled = self.settings.auto_shape_enabled;
-                            let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
+                            self.persist_settings();
                         }
                     });
 
@@ -1582,7 +1581,7 @@ impl RustNotesApp {
                             if ui.checkbox(&mut self.settings.palm_rejection, "").changed() {
                                 self.canvas_state.palm_rejection_enabled =
                                     self.settings.palm_rejection;
-                                let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
+                                self.persist_settings();
                             }
                         });
                     });
@@ -1663,7 +1662,7 @@ impl RustNotesApp {
                             };
                             if ui.small_button(theme_icon).clicked() {
                                 self.settings.theme_mode = self.settings.theme_mode.next();
-                                let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
+                                self.persist_settings();
                             }
                         });
                     });
@@ -1673,7 +1672,7 @@ impl RustNotesApp {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui.small_button(lang.badge()).clicked() {
                                 self.settings.language = self.settings.language.toggle();
-                                let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
+                                self.persist_settings();
                             }
                         });
                     });

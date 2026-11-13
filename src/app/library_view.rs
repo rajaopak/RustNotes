@@ -2,7 +2,7 @@ use super::cover::draw_goodnotes_cover;
 use super::state::RustNotesApp;
 use super::types::{COVER_PALETTE, NavView};
 use crate::model::{Notebook, PageOrientation, PageTemplate, PaperSizePreset, ThemeMode};
-use crate::storage::{app_storage_dir, save_settings_to_dir};
+use crate::storage::app_storage_dir;
 use eframe::egui::{
     self, Align, Button, Color32, CornerRadius, FontId, Layout, Rect, RichText, ScrollArea, Sense,
     Stroke, StrokeKind, Ui, Vec2,
@@ -309,7 +309,7 @@ impl RustNotesApp {
                     .clicked()
                 {
                     self.settings.theme_mode = self.settings.theme_mode.next();
-                    let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
+                    self.persist_settings();
                 }
 
                 // Fase 8.8: Language Switcher (Bahasa Indonesia / Bahasa Inggris)
@@ -327,7 +327,7 @@ impl RustNotesApp {
                     .clicked()
                 {
                     self.settings.language = self.settings.language.toggle();
-                    let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
+                    self.persist_settings();
                 }
 
                 // Fase 7: "About" button

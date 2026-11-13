@@ -3,7 +3,6 @@ use super::theme::resolve_theme_mode;
 use super::types::{ViewMode, get_windows_clipboard_sequence, is_v_key_physically_pressed};
 use crate::canvas::{ActiveTool, render_page_canvas, render_zoom_window_canvas};
 use crate::model::{ShapeKind, ShortcutAction, ThemeMode};
-use crate::storage::{app_storage_dir, save_settings_to_dir};
 use eframe::egui::{
     self, Align, Button, Color32, Layout, Pos2, Rect, RichText, ScrollArea, Stroke, Vec2,
 };
@@ -655,7 +654,7 @@ impl RustNotesApp {
                             let is_sel = (self.settings.zoom_window_scale - s).abs() < 0.1;
                             if ui.selectable_label(is_sel, format!("{s:.1}x")).clicked() {
                                 self.settings.zoom_window_scale = s;
-                                let _ = save_settings_to_dir(&app_storage_dir(), &self.settings);
+                                self.persist_settings();
                             }
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

@@ -789,34 +789,7 @@ impl RustNotesApp {
                         if ui.button("Simpan Template").clicked()
                             && !self.new_template_name.trim().is_empty()
                         {
-                            if let Some(cur_p) = self.library.notebooks.get(nb_idx).and_then(|nb| {
-                                nb.pages
-                                    .get(self.current_page_index)
-                                    .or_else(|| nb.pages.last())
-                            }) {
-                                let tmpl = CustomTemplate {
-                                    id: uuid::Uuid::new_v4().to_string(),
-                                    name: self.new_template_name.trim().to_string(),
-                                    template: cur_p.template,
-                                    background: cur_p.background.clone(),
-                                    paper_color: cur_p.paper_color.clone(),
-                                    width: cur_p.width,
-                                    height: cur_p.height,
-                                };
-                                let storage_dir = app_storage_dir();
-                                if let Ok(()) = save_custom_template(&storage_dir, &tmpl) {
-                                    self.custom_templates.push(tmpl);
-                                    self.toast_message =
-                                        Some("✅ Template kustom berhasil disimpan!".to_string());
-                                }
-                            } else {
-                                self.toast_message = Some(
-                                    "⚠️ Halaman aktif tidak ditemukan untuk disimpan sebagai template."
-                                        .to_string(),
-                                );
-                            }
-                            self.show_save_template_modal = false;
-                            self.new_template_name.clear();
+                            self.save_custom_template_from_page_to_dir(nb_idx, &app_storage_dir());
                         }
                         if ui.button("Batal").clicked() {
                             self.show_save_template_modal = false;
@@ -824,6 +797,68 @@ impl RustNotesApp {
                     });
                 });
             });
+    }
+
+    pub(crate) fn save_custom_template_from_page_to_dir(
+        &mut self,
+        nb_idx: usize,
+        base_dir: &std::path::Path,
+    ) -> bool {
+        let lang = self.settings.language;
+        let trimmed_name = self.new_template_name.trim().to_string();
+        if trimmed_name.is_empty() {
+            return false;
+        }
+        let Some(cur_p) = self.library.notebooks.get(nb_idx).and_then(|nb| {
+            nb.pages
+                .get(self.current_page_index)
+                .or_else(|| nb.pages.last())
+        }) else {
+            self.show_save_template_modal = false;
+            self.toast_message = Some(
+                lang.tr(
+                    "⚠️ Halaman aktif tidak ditemukan untuk disimpan sebagai template.",
+                    "⚠️ Active page not found to save as template.",
+                )
+                .to_string(),
+            );
+            return false;
+        };
+
+        let tmpl = CustomTemplate {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: trimmed_name,
+            template: cur_p.template,
+            background: cur_p.background.clone(),
+            paper_color: cur_p.paper_color.clone(),
+            width: cur_p.width,
+            height: cur_p.height,
+        };
+        match save_custom_template(base_dir, &tmpl) {
+            Ok(()) => {
+                self.custom_templates.push(tmpl);
+                self.toast_message = Some(
+                    lang.tr(
+                        "✅ Template kustom berhasil disimpan!",
+                        "✅ Custom template saved successfully!",
+                    )
+                    .to_string(),
+                );
+                self.show_save_template_modal = false;
+                self.new_template_name.clear();
+                true
+            }
+            Err(err) => {
+                self.toast_message = Some(format!(
+                    "{}: {err}",
+                    lang.tr(
+                        "⚠️ Gagal menyimpan template kustom",
+                        "⚠️ Failed to save custom template",
+                    )
+                ));
+                false
+            }
+        }
     }
 }
 
@@ -845,5 +880,65 @@ pub(super) fn apply_page_resize_and_template(
         ) {
             p.background = Some(crate::model::PageBackground::Template(template));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Notebook;
+    use crate::storage::load_custom_templates;
+
+    #[test]
+    fn test_save_custom_template_success_and_no_duplication() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut app = RustNotesApp {
+            show_save_template_modal: true,
+            new_template_name: "  My Grid  ".to_string(),
+            ..Default::default()
+        };
+        app.library
+            .notebooks
+            .push(Notebook::new("NB", PageTemplate::Grid, Color32::WHITE));
+
+        assert!(app.save_custom_template_from_page_to_dir(0, dir.path()));
+        assert!(!app.show_save_template_modal);
+        assert!(app.new_template_name.is_empty());
+        assert_eq!(app.custom_templates.len(), 1);
+        assert_eq!(app.custom_templates[0].name, "My Grid");
+        assert!(
+            app.toast_message
+                .as_deref()
+                .is_some_and(|t| t.contains('✅'))
+        );
+        assert_eq!(load_custom_templates(dir.path()).len(), 1);
+    }
+
+    #[test]
+    fn test_save_custom_template_failure_reports_error_and_preserves_modal_state() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let blocker_file = dir.path().join("not_a_directory");
+        std::fs::write(&blocker_file, b"occupied").expect("create regular file blocker");
+
+        let mut app = RustNotesApp {
+            show_save_template_modal: true,
+            new_template_name: "Custom Note".to_string(),
+            ..Default::default()
+        };
+        app.library
+            .notebooks
+            .push(Notebook::new("NB", PageTemplate::Ruled, Color32::WHITE));
+
+        let saved = app.save_custom_template_from_page_to_dir(0, &blocker_file);
+        assert!(!saved);
+        assert!(app.show_save_template_modal);
+        assert_eq!(app.new_template_name, "Custom Note");
+        assert!(app.custom_templates.is_empty());
+        let toast = app
+            .toast_message
+            .as_deref()
+            .expect("error toast must be set");
+        assert!(toast.contains("⚠️"));
+        assert!(!toast.contains('✅'));
     }
 }
