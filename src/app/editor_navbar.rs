@@ -57,7 +57,16 @@ impl RustNotesApp {
     /// Render navbar editor (bilah atas Goodnotes navy) beserta pop-up bawaannya.
     /// Mengembalikan alse jika pengguna memilih kembali ke perpustakaan.
     pub fn render_editor_navbar(&mut self, ctx: &egui::Context, nb_idx: usize) -> bool {
-        let notebook_id = self.library.notebooks[nb_idx].id.clone();
+        let Some(nb) = self.library.notebooks.get(nb_idx) else {
+            return false;
+        };
+        if nb.pages.is_empty() {
+            return false;
+        }
+        if self.current_page_index >= nb.pages.len() {
+            self.current_page_index = nb.pages.len() - 1;
+        }
+        let notebook_id = nb.id.clone();
         let lang = self.settings.language;
 
         // Modern Floating GoodNotes Navy Navbar (#223e62) hovering above the workspace
