@@ -1558,3 +1558,92 @@ fn test_equation_modal_dialog_lifecycle_and_validation() {
     assert!(layout.width > 0.0);
     assert!(layout.height > 0.0);
 }
+
+#[test]
+fn test_spatial_grid_page_id_sync_and_reorder_consistency() {
+    let mut state = CanvasState {
+        eraser_mode: EraserMode::WholeStroke,
+        ..Default::default()
+    };
+
+    let mut page_a = Page::new(PageTemplate::Blank);
+    page_a.objects.push(DrawObject::Stroke {
+        id: "stroke-a".to_string(),
+        points: vec![
+            StrokePoint::new(50.0, 50.0, 1.0),
+            StrokePoint::new(100.0, 50.0, 1.0),
+        ],
+        color: ColorData {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+        width: 3.0,
+        is_highlighter: false,
+        style: StrokeStyle::Solid,
+    });
+
+    let mut page_b = Page::new(PageTemplate::Blank);
+    page_b.objects.push(DrawObject::Stroke {
+        id: "stroke-b".to_string(),
+        points: vec![
+            StrokePoint::new(300.0, 300.0, 1.0),
+            StrokePoint::new(360.0, 300.0, 1.0),
+        ],
+        color: ColorData {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+        width: 3.0,
+        is_highlighter: false,
+        style: StrokeStyle::Solid,
+    });
+
+    // Rebuild grid untuk page_b lalu page_a; erase_at pada page_b harus tetap mendeteksi stroke-b
+    state.rebuild_spatial_grid(&page_b.id, &page_b.objects);
+    assert_eq!(
+        state.spatial_grid_page_id.as_deref(),
+        Some(page_b.id.as_str())
+    );
+    state.rebuild_spatial_grid(&page_a.id, &page_a.objects);
+    assert_eq!(
+        state.spatial_grid_page_id.as_deref(),
+        Some(page_a.id.as_str())
+    );
+
+    let erased = state.erase_at(&mut page_b, Pos2::new(330.0, 300.0), 10.0);
+    assert!(
+        erased,
+        "erase_at on page_b must rebuild spatial grid for page_b"
+    );
+    assert!(page_b.objects.is_empty());
+
+    // Reorder objek pada page_a harus memperbarui spatial_grid tanpa indeks usang
+    page_a.objects.push(DrawObject::Stroke {
+        id: "stroke-a2".to_string(),
+        points: vec![
+            StrokePoint::new(200.0, 200.0, 1.0),
+            StrokePoint::new(240.0, 200.0, 1.0),
+        ],
+        color: ColorData {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+        width: 3.0,
+        is_highlighter: false,
+        style: StrokeStyle::Solid,
+    });
+    state.selected_ids = vec!["stroke-a".to_string()];
+    state.bring_selected_to_front(&mut page_a);
+    assert_eq!(page_a.objects.last().unwrap().id(), "stroke-a");
+    let hits = state.spatial_grid.query_point(Pos2::new(75.0, 50.0), 5.0);
+    assert!(
+        hits.contains(&1),
+        "spatial_grid must reflect new index 1 after bring_to_front"
+    );
+}

@@ -3646,7 +3646,10 @@ fn test_rotated_text_hit_test_precision() {
 
     // A point along the rotated text axis:
     // With w approx 150, at 45 deg, center of text is roughly (100 + 75*cos45, 100 + 75*sin45) ~ (153, 153)
-    let center_along = Pos2::new(100.0 + 50.0 * 0.7071, 100.0 + 50.0 * 0.7071);
+    let center_along = Pos2::new(
+        100.0 + 50.0 * std::f32::consts::FRAC_1_SQRT_2,
+        100.0 + 50.0 * std::f32::consts::FRAC_1_SQRT_2,
+    );
     assert!(hit_test_object(&text_obj, center_along, 4.0));
     assert_eq!(distance_to_object(&text_obj, center_along), Some(0.0));
 
@@ -3960,7 +3963,7 @@ fn test_tessellate_single_point_pressure_mesh() {
         Color32::BLACK,
         false,
         StrokeStyle::Solid,
-        &|p| p,
+        |p| p,
     );
     let mesh_heavy = tessellate_stroke_styled(
         &pt_heavy,
@@ -3968,7 +3971,7 @@ fn test_tessellate_single_point_pressure_mesh() {
         Color32::BLACK,
         false,
         StrokeStyle::Solid,
-        &|p| p,
+        |p| p,
     );
 
     let max_dist = |mesh: &eframe::egui::Mesh| {
@@ -4249,4 +4252,79 @@ fn test_lasso_rotated_shape_containment_no_aabb_false_rejection() {
         &tight_enclosing_lasso
     ));
     assert!(object_in_lasso(&rotated_rect, &tight_enclosing_lasso));
+}
+
+#[test]
+fn test_attached_connector_bounds_with_context_and_spatial_grid() {
+    use crate::model::{ConnectionSite, ConnectorEnd, ConnectorRoute, ConnectorStyle};
+    let shape_a = DrawObject::Shape {
+        id: "s-a".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: 400.0,
+        y: 500.0,
+        width: 100.0,
+        height: 80.0,
+        color: ColorData {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    let shape_b = DrawObject::Shape {
+        id: "s-b".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: 700.0,
+        y: 500.0,
+        width: 100.0,
+        height: 80.0,
+        color: ColorData {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    let conn = DrawObject::Connector {
+        id: "c-attached".to_string(),
+        start: ConnectorEnd::Attached {
+            shape_id: "s-a".to_string(),
+            site: ConnectionSite::Right,
+        },
+        end: ConnectorEnd::Attached {
+            shape_id: "s-b".to_string(),
+            site: ConnectionSite::Left,
+        },
+        control_points: Vec::new(),
+        route: ConnectorRoute::Straight,
+        style: ConnectorStyle::default(),
+        locked: false,
+    };
+
+    let objects = vec![shape_a, shape_b, conn.clone()];
+    let b = super::primitives::object_bounds_with_context(&conn, &objects);
+    assert!(b.min.x >= 490.0 && b.max.x <= 710.0);
+    assert!(b.min.y >= 530.0 && b.max.y <= 550.0);
+
+    let mut grid = SpatialGrid::new(100.0);
+    grid.rebuild(&objects);
+    let hits = grid.query_point(Pos2::new(600.0, 540.0), 10.0);
+    assert!(
+        hits.contains(&2),
+        "Attached connector must be indexed at its actual coordinates, not (0,0)"
+    );
 }
