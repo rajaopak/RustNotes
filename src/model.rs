@@ -777,13 +777,13 @@ impl Page {
             })
             .collect();
 
-        for i in 0..self.objects.len() {
+        for obj in &mut self.objects {
             if let DrawObject::Connector {
-                ref start,
-                ref end,
-                ref control_points,
+                start,
+                end,
+                control_points,
                 ..
-            } = self.objects[i]
+            } = obj
             {
                 let start_orphan = match start {
                     ConnectorEnd::Attached { shape_id, .. } => !valid_shape_ids.contains(shape_id),
@@ -798,7 +798,7 @@ impl Page {
                     let fallback_start = if let Some(first_cp) = control_points.first() {
                         (first_cp.x, first_cp.y)
                     } else if let ConnectorEnd::Free { x, y } = end {
-                        (x - 80.0, *y)
+                        (*x - 80.0, *y)
                     } else {
                         (100.0, 100.0)
                     };
@@ -806,31 +806,24 @@ impl Page {
                     let fallback_end = if let Some(last_cp) = control_points.last() {
                         (last_cp.x, last_cp.y)
                     } else if let ConnectorEnd::Free { x, y } = start {
-                        (x + 80.0, *y)
+                        (*x + 80.0, *y)
                     } else {
                         (fallback_start.0 + 80.0, fallback_start.1)
                     };
 
-                    if let DrawObject::Connector {
-                        ref mut start,
-                        ref mut end,
-                        ..
-                    } = self.objects[i]
-                    {
-                        if start_orphan {
-                            *start = ConnectorEnd::Free {
-                                x: fallback_start.0,
-                                y: fallback_start.1,
-                            };
-                            fixed += 1;
-                        }
-                        if end_orphan {
-                            *end = ConnectorEnd::Free {
-                                x: fallback_end.0,
-                                y: fallback_end.1,
-                            };
-                            fixed += 1;
-                        }
+                    if start_orphan {
+                        *start = ConnectorEnd::Free {
+                            x: fallback_start.0,
+                            y: fallback_start.1,
+                        };
+                        fixed += 1;
+                    }
+                    if end_orphan {
+                        *end = ConnectorEnd::Free {
+                            x: fallback_end.0,
+                            y: fallback_end.1,
+                        };
+                        fixed += 1;
                     }
                 }
             }
