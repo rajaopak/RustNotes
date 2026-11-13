@@ -72,7 +72,9 @@ fn handle_drag_started(
     pos: Pos2,
     screen_to_page: impl Fn(Pos2) -> Pos2 + Copy,
 ) -> PointerInteractionOutcome {
-    let page_p = screen_to_page(pos);
+    // Gunakan titik tekan awal (press_origin) untuk hit-test handle agar seretan cepat tidak meleset
+    let press_pos = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+    let page_p = screen_to_page(press_pos);
 
     // Check if clicking resize/rotation handles on selection
     if let Some((line_start, line_end)) = sel.single_line {
@@ -115,21 +117,17 @@ fn handle_drag_started(
             state.push_undo(&page.id, &page.objects);
             return PointerInteractionOutcome::EarlyReturn;
         }
-    } else if let Some((source_id, dots)) = &sel.single_shape_quick_dots {
-        let dot_hit_dist = 14.0 / state.zoom;
-        if let Some(&(site, _, _)) = dots
-            .iter()
-            .find(|(_, dpos, _)| page_p.distance(*dpos) <= dot_hit_dist)
-        {
-            state.resize_corner = Some(ResizeCorner::QuickDiagramDot(site));
-            state.drag_start_pos = Some(page_p);
-            state.draft_connector_start = Some(ConnectorEnd::Attached {
-                shape_id: source_id.clone(),
-                site,
-            });
-            state.draft_connector_current = Some(Point2D::new(page_p.x, page_p.y));
-            return PointerInteractionOutcome::EarlyReturn;
-        }
+    } else if let Some((source_id, site)) = hit_test_quick_diagram_dot(sel, state, page_p) {
+        state.active_stroke_page_id = Some(page.id.clone());
+        state.resize_corner = Some(ResizeCorner::QuickDiagramDot(site));
+        state.drag_start_pos = Some(page_p);
+        state.draft_connector_start = Some(ConnectorEnd::Attached {
+            shape_id: source_id,
+            site,
+        });
+        state.draft_connector_current = Some(Point2D::new(page_p.x, page_p.y));
+        state.connector_snap_candidate = None;
+        return PointerInteractionOutcome::EarlyReturn;
     }
 
     if let Some((conn_id, Some(poly))) = &sel.single_connector {
@@ -972,7 +970,7 @@ fn handle_drag_stopped(
         }
         state.rebuild_spatial_grid(&page.id, &page.objects);
     } else if let Some(corner) = state.resize_corner.take() {
-        state.drag_start_pos = None;
+        let drag_start_pos = state.drag_start_pos.take();
         // Task 8.3: Jika selesai drag control point, bersihkan jika hampir segaris
         if matches!(corner, ResizeCorner::ConnectorControl(_)) {
             let shapes_snapshot: Vec<DrawObject> = page
@@ -1001,208 +999,10 @@ fn handle_drag_stopped(
         if let ResizeCorner::QuickDiagramDot(site) = corner {
             let stop_page_p = pointer_pos
                 .map(screen_to_page)
-                .unwrap_or(Pos2::new(0.0, 0.0));
-            let drag_dist = state
-                .drag_start_pos
-                .map_or(0.0, |p| (stop_page_p - p).length());
-            if let Some(ConnectorEnd::Attached {
-                shape_id: source_id,
-                ..
-            }) = state.draft_connector_start.take()
-            {
-                if drag_dist <= 6.0 {
-                    // Task 9.2: Ketuk / Klik titik -> buat bentuk baru terhubung searah titik
-                    if let Some(source_obj) =
-                        page.objects.iter().find(|o| o.id() == source_id).cloned()
-                        && let DrawObject::Shape {
-                            x: sx,
-                            y: sy,
-                            width: sw,
-                            height: sh,
-                            shape_type,
-                            color,
-                            stroke_width,
-                            fill,
-                            corner_radius,
-                            ..
-                        } = source_obj
-                    {
-                        state.push_undo(&page.id, &page.objects);
-                        let (nx, ny, nw, nh, opp_site) = next_shape_rect(
-                            (sx, sy, sw, sh),
-                            site,
-                            60.0,
-                            &page.objects,
-                            (page.width, page.height),
-                        );
-                        let new_shape_id = Uuid::new_v4().to_string();
-                        let new_shape = DrawObject::Shape {
-                            id: new_shape_id.clone(),
-                            x: nx,
-                            y: ny,
-                            width: nw,
-                            height: nh,
-                            color: color.clone(),
-                            stroke_width,
-                            fill,
-                            shape_type,
-                            rotation: 0.0,
-                            corner_radius,
-                            curve_points: Vec::new(),
-                            label: Some(crate::model::ShapeLabel {
-                                text: String::new(),
-                                font_size: 16.0,
-                                color,
-                                alignment: crate::model::TextAlign::Center,
-                                vertical_alignment: crate::model::VerticalAlign::Middle,
-                            }),
-                            locked: false,
-                        };
-                        let new_conn = DrawObject::Connector {
-                            id: Uuid::new_v4().to_string(),
-                            start: ConnectorEnd::Attached {
-                                shape_id: source_id,
-                                site,
-                            },
-                            end: ConnectorEnd::Attached {
-                                shape_id: new_shape_id.clone(),
-                                site: opp_site,
-                            },
-                            route: ConnectorRoute::Orthogonal,
-                            control_points: Vec::new(),
-                            style: ConnectorStyle {
-                                stroke_color: ColorData {
-                                    r: 40,
-                                    g: 45,
-                                    b: 55,
-                                    a: 255,
-                                },
-                                stroke_width: 2.0,
-                                start_marker: MarkerKind::None,
-                                end_marker: MarkerKind::Arrow,
-                            },
-                            locked: false,
-                        };
-                        page.objects.push(new_shape);
-                        page.objects.push(new_conn);
-                        state.selected_ids = vec![new_shape_id.clone()];
-                        state.editing_text_id = Some(new_shape_id);
-                        state.focus_text_edit = true;
-                    }
-                } else if let Some((target_id, target_site, _)) =
-                    state.connector_snap_candidate.take()
-                {
-                    // Task 9.3: Lepas pada bentuk lain -> sambungkan konektor
-                    state.push_undo(&page.id, &page.objects);
-                    let new_conn = DrawObject::Connector {
-                        id: Uuid::new_v4().to_string(),
-                        start: ConnectorEnd::Attached {
-                            shape_id: source_id,
-                            site,
-                        },
-                        end: ConnectorEnd::Attached {
-                            shape_id: target_id,
-                            site: target_site,
-                        },
-                        route: ConnectorRoute::Orthogonal,
-                        control_points: Vec::new(),
-                        style: ConnectorStyle {
-                            stroke_color: ColorData {
-                                r: 40,
-                                g: 45,
-                                b: 55,
-                                a: 255,
-                            },
-                            stroke_width: 2.0,
-                            start_marker: MarkerKind::None,
-                            end_marker: MarkerKind::Arrow,
-                        },
-                        locked: false,
-                    };
-                    page.objects.push(new_conn);
-                } else {
-                    // Task 9.3: Lepas di ruang kosong -> buat bentuk baru di sana
-                    if let Some(source_obj) =
-                        page.objects.iter().find(|o| o.id() == source_id).cloned()
-                        && let DrawObject::Shape {
-                            width: sw,
-                            height: sh,
-                            shape_type,
-                            color,
-                            stroke_width,
-                            fill,
-                            corner_radius,
-                            ..
-                        } = source_obj
-                    {
-                        state.push_undo(&page.id, &page.objects);
-                        let margin = 16.0_f32;
-                        let nw = sw.abs();
-                        let nh = sh.abs();
-                        let nx = (stop_page_p.x - nw * 0.5)
-                            .clamp(margin, (page.width - nw - margin).max(margin));
-                        let ny = (stop_page_p.y - nh * 0.5)
-                            .clamp(margin, (page.height - nh - margin).max(margin));
-
-                        let new_shape_id = Uuid::new_v4().to_string();
-                        let new_shape = DrawObject::Shape {
-                            id: new_shape_id.clone(),
-                            x: nx,
-                            y: ny,
-                            width: nw,
-                            height: nh,
-                            color: color.clone(),
-                            stroke_width,
-                            fill,
-                            shape_type,
-                            rotation: 0.0,
-                            corner_radius,
-                            curve_points: Vec::new(),
-                            label: Some(crate::model::ShapeLabel {
-                                text: String::new(),
-                                font_size: 16.0,
-                                color,
-                                alignment: crate::model::TextAlign::Center,
-                                vertical_alignment: crate::model::VerticalAlign::Middle,
-                            }),
-                            locked: false,
-                        };
-                        let new_conn = DrawObject::Connector {
-                            id: Uuid::new_v4().to_string(),
-                            start: ConnectorEnd::Attached {
-                                shape_id: source_id,
-                                site,
-                            },
-                            end: ConnectorEnd::Attached {
-                                shape_id: new_shape_id.clone(),
-                                site: ConnectionSite::Auto,
-                            },
-                            route: ConnectorRoute::Orthogonal,
-                            control_points: Vec::new(),
-                            style: ConnectorStyle {
-                                stroke_color: ColorData {
-                                    r: 40,
-                                    g: 45,
-                                    b: 55,
-                                    a: 255,
-                                },
-                                stroke_width: 2.0,
-                                start_marker: MarkerKind::None,
-                                end_marker: MarkerKind::Arrow,
-                            },
-                            locked: false,
-                        };
-                        page.objects.push(new_shape);
-                        page.objects.push(new_conn);
-                        state.selected_ids = vec![new_shape_id.clone()];
-                        state.editing_text_id = Some(new_shape_id);
-                        state.focus_text_edit = true;
-                    }
-                }
-            }
-            state.draft_connector_start = None;
-            state.draft_connector_current = None;
-            state.connector_snap_candidate = None;
+                .or_else(|| state.draft_connector_current.map(|p| p.to_pos2()))
+                .or(drag_start_pos)
+                .unwrap_or(Pos2::ZERO);
+            complete_quick_diagram_dot_interaction(page, state, site, drag_start_pos, stop_page_p);
         }
         state.rebuild_spatial_grid(&page.id, &page.objects);
     } else if state.active_stroke_page_id.as_deref() == Some(&page.id) {
@@ -1463,7 +1263,7 @@ pub(crate) fn handle_post_render_pointer_interaction(
     if response.clicked()
         && let Some(pos) = pointer_pos
     {
-        handle_primary_click(ui, page, state, pos, screen_to_page);
+        handle_primary_click(ui, page, state, updated_sel, pos, screen_to_page);
     }
 
     handle_canvas_keyboard_shortcuts(ui, page, state);
@@ -1548,6 +1348,7 @@ fn handle_primary_click(
     ui: &Ui,
     page: &mut Page,
     state: &mut CanvasState,
+    updated_sel: &SelectionData,
     pos: Pos2,
     screen_to_page: impl Fn(Pos2) -> Pos2 + Copy,
 ) {
@@ -1727,6 +1528,19 @@ fn handle_primary_click(
         state.current_tool,
         ActiveTool::Lasso | ActiveTool::Shape(_) | ActiveTool::Connector
     ) {
+        if let Some((source_id, site)) = hit_test_quick_diagram_dot(updated_sel, state, page_p)
+            && append_quick_diagram_connected_shape(
+                page,
+                state,
+                &source_id,
+                site,
+                QuickDiagramPlacement::Directional,
+            )
+        {
+            state.rebuild_spatial_grid(&page.id, &page.objects);
+            ui.ctx().request_repaint();
+            return;
+        }
         let hit = page.objects.iter().rev().find(|obj| {
             if let DrawObject::Connector { .. } = obj {
                 hit_test_connector_with_objects(
@@ -1843,6 +1657,242 @@ fn update_hold_to_snap(ui: &Ui, page: &Page, state: &mut CanvasState, now: Insta
     }
 }
 
+/// Mode penempatan bentuk baru untuk aksi Quick Diagramming.
+#[derive(Clone, Copy, Debug)]
+enum QuickDiagramPlacement {
+    Directional,
+    AtPosition(Pos2),
+}
+
+/// Hasil hit-test titik tepi Quick Diagram dengan memprioritaskan handle transformasi jika lebih dekat.
+pub(crate) fn hit_test_quick_diagram_dot(
+    sel: &SelectionData,
+    state: &CanvasState,
+    page_p: Pos2,
+) -> Option<(String, ConnectionSite)> {
+    let (source_id, dots) = sel.single_shape_quick_dots.as_ref()?;
+    let dot_hit_dist = 14.0 / state.zoom;
+    let (site, best_dot_dist) = dots
+        .iter()
+        .filter_map(|&(site, dpos, _)| {
+            let dist = page_p.distance(dpos);
+            (dist <= dot_hit_dist).then_some((site, dist))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))?;
+
+    // Hindari menangkap handle resize tepi atau rotasi ketika kursor lebih dekat ke handle tersebut
+    if matches!(state.current_tool, ActiveTool::Lasso | ActiveTool::Shape(_))
+        && !sel.is_selection_fully_locked
+        && let Some(frame) = &sel.frame
+    {
+        let handle_dist = 14.0 / state.zoom;
+        let nearest_handle_dist = frame
+            .handles
+            .iter()
+            .filter_map(|h| {
+                let dist = page_p.distance(h.pos.to_pos2());
+                (dist <= handle_dist).then_some(dist)
+            })
+            .min_by(|a, b| a.total_cmp(b));
+        if let Some(h_dist) = nearest_handle_dist
+            && h_dist <= best_dot_dist
+        {
+            return None;
+        }
+    }
+
+    Some((source_id.clone(), site))
+}
+
+/// Menyelesaikan pelepasan gesture drag Quick Diagram Dot (tap -> bentuk baru, drag ke target -> konektor, drag ke kosong -> bentuk di posisi lepas).
+pub(crate) fn complete_quick_diagram_dot_interaction(
+    page: &mut Page,
+    state: &mut CanvasState,
+    site: ConnectionSite,
+    drag_start_pos: Option<Pos2>,
+    stop_page_p: Pos2,
+) {
+    let drag_dist = drag_start_pos.map_or(0.0, |p| (stop_page_p - p).length());
+    if let Some(ConnectorEnd::Attached {
+        shape_id: source_id,
+        ..
+    }) = state.draft_connector_start.take()
+    {
+        if drag_dist <= 6.0 {
+            append_quick_diagram_connected_shape(
+                page,
+                state,
+                &source_id,
+                site,
+                QuickDiagramPlacement::Directional,
+            );
+        } else {
+            let snap_target = state.connector_snap_candidate.take().or_else(|| {
+                find_connector_snap_site(
+                    &page.objects,
+                    Point2D::new(stop_page_p.x, stop_page_p.y),
+                    24.0 / state.zoom,
+                    Some(source_id.as_str()),
+                )
+            });
+            if let Some((target_id, target_site, _)) = snap_target {
+                // Task 9.3: Lepas pada bentuk lain -> sambungkan konektor
+                state.push_undo(&page.id, &page.objects);
+                let new_conn = make_quick_diagram_connector(
+                    ConnectorEnd::Attached {
+                        shape_id: source_id,
+                        site,
+                    },
+                    ConnectorEnd::Attached {
+                        shape_id: target_id,
+                        site: target_site,
+                    },
+                );
+                page.objects.push(new_conn);
+            } else {
+                // Task 9.3: Lepas di ruang kosong -> buat bentuk baru di sana
+                append_quick_diagram_connected_shape(
+                    page,
+                    state,
+                    &source_id,
+                    site,
+                    QuickDiagramPlacement::AtPosition(stop_page_p),
+                );
+            }
+        }
+    }
+    state.draft_connector_start = None;
+    state.draft_connector_current = None;
+    state.connector_snap_candidate = None;
+    if state.active_stroke_page_id.as_deref() == Some(&page.id) {
+        state.active_stroke_page_id = None;
+    }
+}
+
+/// Membuat connector standar untuk fitur Quick Diagramming.
+fn make_quick_diagram_connector(start: ConnectorEnd, end: ConnectorEnd) -> DrawObject {
+    DrawObject::Connector {
+        id: Uuid::new_v4().to_string(),
+        start,
+        end,
+        route: ConnectorRoute::Orthogonal,
+        control_points: Vec::new(),
+        style: ConnectorStyle {
+            stroke_color: ColorData {
+                r: 40,
+                g: 45,
+                b: 55,
+                a: 255,
+            },
+            stroke_width: 2.0,
+            start_marker: MarkerKind::None,
+            end_marker: MarkerKind::Arrow,
+        },
+        locked: false,
+    }
+}
+
+/// Menambahkan bentuk baru yang terhubung ke bentuk sumber beserta connector penghubungnya.
+fn append_quick_diagram_connected_shape(
+    page: &mut Page,
+    state: &mut CanvasState,
+    source_id: &str,
+    site: ConnectionSite,
+    placement: QuickDiagramPlacement,
+) -> bool {
+    let Some((sx, sy, sw, sh, shape_type, color, stroke_width, fill, corner_radius)) =
+        page.objects.iter().find_map(|obj| match obj {
+            DrawObject::Shape {
+                id,
+                x,
+                y,
+                width,
+                height,
+                shape_type,
+                color,
+                stroke_width,
+                fill,
+                corner_radius,
+                ..
+            } if id == source_id => Some((
+                *x,
+                *y,
+                *width,
+                *height,
+                *shape_type,
+                color.clone(),
+                *stroke_width,
+                fill.clone(),
+                *corner_radius,
+            )),
+            _ => None,
+        })
+    else {
+        return false;
+    };
+
+    state.push_undo(&page.id, &page.objects);
+    let (nx, ny, nw, nh, end_site) = match placement {
+        QuickDiagramPlacement::Directional => next_shape_rect(
+            (sx, sy, sw, sh),
+            site,
+            60.0,
+            &page.objects,
+            (page.width, page.height),
+        ),
+        QuickDiagramPlacement::AtPosition(stop_page_p) => {
+            let margin = 16.0_f32;
+            let nw = sw.abs();
+            let nh = sh.abs();
+            let nx =
+                (stop_page_p.x - nw * 0.5).clamp(margin, (page.width - nw - margin).max(margin));
+            let ny =
+                (stop_page_p.y - nh * 0.5).clamp(margin, (page.height - nh - margin).max(margin));
+            (nx, ny, nw, nh, ConnectionSite::Auto)
+        }
+    };
+
+    let new_shape_id = Uuid::new_v4().to_string();
+    let new_shape = DrawObject::Shape {
+        id: new_shape_id.clone(),
+        x: nx,
+        y: ny,
+        width: nw,
+        height: nh,
+        color: color.clone(),
+        stroke_width,
+        fill,
+        shape_type,
+        rotation: 0.0,
+        corner_radius,
+        curve_points: Vec::new(),
+        label: Some(crate::model::ShapeLabel {
+            text: String::new(),
+            font_size: 16.0,
+            color,
+            alignment: crate::model::TextAlign::Center,
+            vertical_alignment: crate::model::VerticalAlign::Middle,
+        }),
+        locked: false,
+    };
+    let new_conn = make_quick_diagram_connector(
+        ConnectorEnd::Attached {
+            shape_id: source_id.to_string(),
+            site,
+        },
+        ConnectorEnd::Attached {
+            shape_id: new_shape_id.clone(),
+            site: end_site,
+        },
+    );
+    page.objects.push(new_shape);
+    page.objects.push(new_conn);
+    state.selected_ids = vec![new_shape_id.clone()];
+    state.editing_text_id = Some(new_shape_id);
+    state.focus_text_edit = true;
+    true
+}
+
 /// Menangani pintasan keyboard Quick Diagramming (`Tab` untuk child kanan, `Enter` untuk sibling bawah).
 fn handle_quick_diagramming_shortcuts(
     ui: &Ui,
@@ -1861,81 +1911,13 @@ fn handle_quick_diagramming_shortcuts(
             } else {
                 ConnectionSite::Bottom
             };
-            if let Some(source_obj) = page.objects.iter().find(|o| o.id() == source_id).cloned()
-                && let DrawObject::Shape {
-                    x: sx,
-                    y: sy,
-                    width: sw,
-                    height: sh,
-                    shape_type,
-                    color,
-                    stroke_width,
-                    fill,
-                    corner_radius,
-                    ..
-                } = source_obj
-            {
-                state.push_undo(&page.id, &page.objects);
-                let (nx, ny, nw, nh, opp_site) = next_shape_rect(
-                    (sx, sy, sw, sh),
-                    target_site,
-                    60.0,
-                    &page.objects,
-                    (page.width, page.height),
-                );
-                let new_shape_id = Uuid::new_v4().to_string();
-                let new_shape = DrawObject::Shape {
-                    id: new_shape_id.clone(),
-                    x: nx,
-                    y: ny,
-                    width: nw,
-                    height: nh,
-                    color: color.clone(),
-                    stroke_width,
-                    fill,
-                    shape_type,
-                    rotation: 0.0,
-                    corner_radius,
-                    curve_points: Vec::new(),
-                    label: Some(crate::model::ShapeLabel {
-                        text: String::new(),
-                        font_size: 16.0,
-                        color,
-                        alignment: crate::model::TextAlign::Center,
-                        vertical_alignment: crate::model::VerticalAlign::Middle,
-                    }),
-                    locked: false,
-                };
-                let new_conn = DrawObject::Connector {
-                    id: Uuid::new_v4().to_string(),
-                    start: ConnectorEnd::Attached {
-                        shape_id: source_id.clone(),
-                        site: target_site,
-                    },
-                    end: ConnectorEnd::Attached {
-                        shape_id: new_shape_id.clone(),
-                        site: opp_site,
-                    },
-                    route: ConnectorRoute::Orthogonal,
-                    control_points: Vec::new(),
-                    style: ConnectorStyle {
-                        stroke_color: ColorData {
-                            r: 40,
-                            g: 45,
-                            b: 55,
-                            a: 255,
-                        },
-                        stroke_width: 2.0,
-                        start_marker: MarkerKind::None,
-                        end_marker: MarkerKind::Arrow,
-                    },
-                    locked: false,
-                };
-                page.objects.push(new_shape);
-                page.objects.push(new_conn);
-                state.selected_ids = vec![new_shape_id.clone()];
-                state.editing_text_id = Some(new_shape_id);
-                state.focus_text_edit = true;
+            if append_quick_diagram_connected_shape(
+                page,
+                state,
+                source_id,
+                target_site,
+                QuickDiagramPlacement::Directional,
+            ) {
                 state.rebuild_spatial_grid(&page.id, &page.objects);
                 ui.ctx().request_repaint();
             }

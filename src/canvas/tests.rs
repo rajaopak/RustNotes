@@ -1771,3 +1771,349 @@ fn test_multi_page_spatial_grid_sync_after_paste_and_delete() {
         Some(page_b.id.as_str())
     );
 }
+
+#[test]
+fn test_quick_diagram_dot_vs_transform_handle_priority() {
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Lasso,
+        zoom: 1.0,
+        ..Default::default()
+    };
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "qd-priority".to_string();
+    page.objects.push(DrawObject::Shape {
+        id: "s1".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: 100.0,
+        y: 100.0,
+        width: 80.0,
+        height: 60.0,
+        color: ColorData::from(Color32::BLACK),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    });
+    state.selected_ids = vec!["s1".to_string()];
+
+    let sel = super::gizmo::SelectionData::compute(&page, &state);
+    // North edge handle at (140, 100), Top quick dot at (140, 88), Rotation at (140, 80)
+    assert_eq!(
+        super::interaction::hit_test_quick_diagram_dot(&sel, &state, Pos2::new(140.0, 100.0)),
+        None,
+        "North resize edge handle must keep priority over Top quick dot"
+    );
+    assert_eq!(
+        super::interaction::hit_test_quick_diagram_dot(&sel, &state, Pos2::new(140.0, 80.0)),
+        None,
+        "Rotation handle must keep priority over Top quick dot"
+    );
+    assert_eq!(
+        super::interaction::hit_test_quick_diagram_dot(&sel, &state, Pos2::new(140.0, 88.0)),
+        Some(("s1".to_string(), ConnectionSite::Top)),
+        "Clicking directly on Top quick dot must hit QuickDiagramDot"
+    );
+    // East edge handle at (180, 130), Right quick dot at (192, 130)
+    assert_eq!(
+        super::interaction::hit_test_quick_diagram_dot(&sel, &state, Pos2::new(180.0, 130.0)),
+        None,
+        "East resize edge handle must keep priority over Right quick dot"
+    );
+    assert_eq!(
+        super::interaction::hit_test_quick_diagram_dot(&sel, &state, Pos2::new(192.0, 130.0)),
+        Some(("s1".to_string(), ConnectionSite::Right)),
+        "Clicking directly on Right quick dot must hit QuickDiagramDot"
+    );
+}
+
+#[test]
+fn test_quick_diagram_drag_and_stationary_click_through_canvas() {
+    fn step_canvas(
+        ctx: &eframe::egui::Context,
+        page: &mut Page,
+        state: &mut CanvasState,
+        events: Vec<eframe::egui::Event>,
+    ) -> Pos2 {
+        let mut origin = Pos2::ZERO;
+        let input = eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                Pos2::ZERO,
+                Vec2::new(1000.0, 1000.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            eframe::egui::CentralPanel::default()
+                .frame(eframe::egui::Frame::NONE)
+                .show(ctx, |ui| {
+                    origin = ui.next_widget_position();
+                    let _ = render_page_canvas(ui, page, state);
+                });
+        });
+        origin
+    }
+
+    let ctx = eframe::egui::Context::default();
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Lasso,
+        zoom: 1.0,
+        ..Default::default()
+    };
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "qd-canvas".to_string();
+    page.objects.push(DrawObject::Shape {
+        id: "s1".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: 100.0,
+        y: 100.0,
+        width: 80.0,
+        height: 60.0,
+        color: ColorData::from(Color32::BLACK),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    });
+    page.objects.push(DrawObject::Shape {
+        id: "s2".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: 340.0,
+        y: 100.0,
+        width: 80.0,
+        height: 60.0,
+        color: ColorData::from(Color32::BLUE),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    });
+    state.selected_ids = vec!["s1".to_string()];
+
+    // Frame 0: establish layout origin; Frame 1: hover at start_pos; Frame 2: press; Frame 3: drag past threshold
+    let origin = step_canvas(&ctx, &mut page, &mut state, vec![]);
+    let to_screen = |x: f32, y: f32| origin + Vec2::new(x, y);
+
+    // 1. Drag from s1's Right dot (192, 130) to s2's Left snap point (340, 130)
+    let start_pos = to_screen(192.0, 130.0);
+    let mid_pos = to_screen(250.0, 130.0);
+    let target_pos = to_screen(340.0, 130.0);
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(start_pos)],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: start_pos,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(mid_pos)],
+    );
+    assert!(
+        matches!(
+            state.resize_corner,
+            Some(ResizeCorner::QuickDiagramDot(ConnectionSite::Right))
+        ),
+        "Drag must engage QuickDiagramDot(Right), got {:?}",
+        state.resize_corner
+    );
+    assert_eq!(state.active_stroke_page_id.as_deref(), Some("qd-canvas"));
+
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(target_pos)],
+    );
+    assert!(
+        state
+            .connector_snap_candidate
+            .as_ref()
+            .is_some_and(|(id, site, _)| id == "s2" && *site == ConnectionSite::Left),
+        "Dragging near s2's Left anchor must produce snap candidate"
+    );
+
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: target_pos,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    assert_eq!(
+        page.objects.len(),
+        3,
+        "Drag-to-connect must add 1 connector"
+    );
+    match &page.objects[2] {
+        DrawObject::Connector { start, end, .. } => {
+            assert_eq!(
+                start,
+                &ConnectorEnd::Attached {
+                    shape_id: "s1".to_string(),
+                    site: ConnectionSite::Right
+                }
+            );
+            assert_eq!(
+                end,
+                &ConnectorEnd::Attached {
+                    shape_id: "s2".to_string(),
+                    site: ConnectionSite::Left
+                }
+            );
+        }
+        other => panic!("Expected Connector object, got {other:?}"),
+    }
+    assert_eq!(state.drag_start_pos, None);
+    assert_eq!(state.draft_connector_start, None);
+    assert_eq!(state.active_stroke_page_id, None);
+
+    // 2. Drag from s1's Bottom dot (140, 172) into empty space (140, 320) -> new shape at drop pos
+    state.selected_ids = vec!["s1".to_string()];
+    state.editing_text_id = None;
+    let bot_dot = to_screen(140.0, 172.0);
+    let drop_empty = to_screen(140.0, 320.0);
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(bot_dot)],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: bot_dot,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(drop_empty)],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: drop_empty,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    assert_eq!(
+        page.objects.len(),
+        5,
+        "Drag-to-empty must create new shape + connector"
+    );
+    let created_shape_id = page.objects[3].id().to_string();
+    match &page.objects[3] {
+        DrawObject::Shape {
+            x,
+            y,
+            width,
+            height,
+            ..
+        } => {
+            let center_x = *x + *width * 0.5;
+            let center_y = *y + *height * 0.5;
+            assert!(
+                (center_x - 140.0).abs() < 2.0 && (center_y - 320.0).abs() < 2.0,
+                "New shape must be placed around drop position (140, 320), got ({center_x}, {center_y})"
+            );
+        }
+        other => panic!("Expected Shape object, got {other:?}"),
+    }
+    match &page.objects[4] {
+        DrawObject::Connector { start, end, .. } => {
+            assert_eq!(
+                start,
+                &ConnectorEnd::Attached {
+                    shape_id: "s1".to_string(),
+                    site: ConnectionSite::Bottom
+                }
+            );
+            assert_eq!(
+                end,
+                &ConnectorEnd::Attached {
+                    shape_id: created_shape_id,
+                    site: ConnectionSite::Auto
+                }
+            );
+        }
+        other => panic!("Expected Connector object, got {other:?}"),
+    }
+
+    // 3. Stationary click (tap without drag) on s2's Right dot (432, 130) -> directional connected shape
+    state.selected_ids = vec!["s2".to_string()];
+    state.editing_text_id = None;
+    let s2_right_dot = to_screen(432.0, 130.0);
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(s2_right_dot)],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: s2_right_dot,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }],
+    );
+    step_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: s2_right_dot,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    assert_eq!(
+        page.objects.len(),
+        7,
+        "Stationary click on quick dot must create directional connected shape + connector instead of deselecting"
+    );
+    assert_eq!(state.selected_ids, vec![page.objects[5].id().to_string()]);
+}
