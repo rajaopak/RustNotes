@@ -97,6 +97,8 @@ pub struct RustNotesApp {
 
     // Fase 7: About dialog modal
     pub(crate) show_about_modal: bool,
+    pub(crate) confirm_delete_notebook: Option<(String, String)>,
+    pub(crate) confirm_empty_trash: bool,
 
     // Fase 8.3, 8.4, 8.5, 8.7, 8.8: User settings
     pub(crate) settings: AppSettings,
@@ -312,6 +314,8 @@ impl RustNotesApp {
             show_save_template_modal: false,
             new_template_name: String::new(),
             show_about_modal: false,
+            confirm_delete_notebook: None,
+            confirm_empty_trash: false,
             settings: load_settings_from_dir(storage_dir),
             show_ocr_modal: false,
             show_add_page_modal: false,

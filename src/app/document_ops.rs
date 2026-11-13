@@ -358,6 +358,83 @@ impl RustNotesApp {
         Ok(())
     }
 
+    /// Menghapus permanen satu buku catatan yang berada di Sampah beserta direktori disknya.
+    pub(crate) fn permanently_delete_notebook(&mut self, nb_id: &str) -> Result<(), String> {
+        self.permanently_delete_notebook_from_dir(nb_id, &app_storage_dir())
+    }
+
+    pub(crate) fn permanently_delete_notebook_from_dir(
+        &mut self,
+        nb_id: &str,
+        storage_dir: &std::path::Path,
+    ) -> Result<(), String> {
+        if self.is_read_only {
+            return Err("Mode Baca-Saja aktif: tidak dapat menghapus buku catatan.".to_string());
+        }
+        let Some(pos) = self.library.notebooks.iter().position(|n| n.id == nb_id) else {
+            return Err(format!("Buku catatan '{nb_id}' tidak ditemukan."));
+        };
+        if !self.library.notebooks[pos].trashed {
+            return Err(
+                "Hanya buku catatan di dalam Sampah yang dapat dihapus permanen.".to_string(),
+            );
+        }
+
+        let safe_id = crate::storage::sanitize_path_component(nb_id)?;
+        let nb_dir = storage_dir.join("notebooks").join(safe_id);
+        if nb_dir.exists() {
+            std::fs::remove_dir_all(&nb_dir)
+                .map_err(|e| format!("Gagal menghapus berkas buku catatan di disk: {e}"))?;
+        }
+
+        self.library.notebooks.remove(pos);
+        self.open_notebook_ids.retain(|id| id != nb_id);
+        if self.active_notebook_id.as_deref() == Some(nb_id) {
+            self.active_notebook_id = self.open_notebook_ids.last().cloned();
+            self.current_page_index = 0;
+        }
+        self.dirty_notebooks.remove(nb_id);
+        self.last_modified.remove(nb_id);
+        self.doc_undo_stacks.remove(nb_id);
+        self.doc_redo_stacks.remove(nb_id);
+        self.canvas_state
+            .texture_cache
+            .retain(|(nid, _), _| nid != nb_id);
+        self.canvas_state
+            .failed_texture_loads
+            .retain(|(nid, _)| nid != nb_id);
+
+        self.sync_library_index_to_dir(storage_dir);
+        Ok(())
+    }
+
+    /// Mengosongkan seluruh buku catatan yang berada di Sampah secara permanen.
+    pub(crate) fn empty_trash(&mut self) -> Result<usize, String> {
+        self.empty_trash_from_dir(&app_storage_dir())
+    }
+
+    pub(crate) fn empty_trash_from_dir(
+        &mut self,
+        storage_dir: &std::path::Path,
+    ) -> Result<usize, String> {
+        if self.is_read_only {
+            return Err("Mode Baca-Saja aktif: tidak dapat mengosongkan Sampah.".to_string());
+        }
+        let trashed_ids: Vec<String> = self
+            .library
+            .notebooks
+            .iter()
+            .filter(|n| n.trashed)
+            .map(|n| n.id.clone())
+            .collect();
+        let mut deleted = 0usize;
+        for id in trashed_ids {
+            self.permanently_delete_notebook_from_dir(&id, storage_dir)?;
+            deleted += 1;
+        }
+        Ok(deleted)
+    }
+
     /// Lama: persist seluruh library sekaligus (dipakai untuk operasi metadata non-notebook).
     pub(crate) fn persist_library(&mut self) {
         if self.is_read_only {
@@ -1085,5 +1162,40 @@ mod tests {
                 .exists(),
             "imported notebook must be persisted to disk"
         );
+    }
+
+    #[test]
+    fn test_permanent_delete_and_empty_trash() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
+
+        let mut app = RustNotesApp::load_from_dir(dir);
+        let mut nb_trash = Notebook::new("Trashed NB", PageTemplate::Blank, Color32::WHITE);
+        nb_trash.trashed = true;
+        let trash_id = nb_trash.id.clone();
+        save_notebook_to_dir(dir, &nb_trash).unwrap();
+
+        let nb_keep = Notebook::new("Active NB", PageTemplate::Blank, Color32::WHITE);
+        let keep_id = nb_keep.id.clone();
+        save_notebook_to_dir(dir, &nb_keep).unwrap();
+
+        app.library.notebooks.push(nb_trash);
+        app.library.notebooks.push(nb_keep);
+        app.sync_library_index_to_dir(dir);
+
+        // Notebook yang tidak di-trash tidak boleh dihapus permanen
+        assert!(
+            app.permanently_delete_notebook_from_dir(&keep_id, dir)
+                .is_err()
+        );
+        assert!(dir.join("notebooks").join(&keep_id).exists());
+
+        // Kosongkan sampah harus menghapus nb_trash di memori & disk, mempertahankan nb_keep
+        let count = app.empty_trash_from_dir(dir).expect("empty trash");
+        assert_eq!(count, 1);
+        assert!(!dir.join("notebooks").join(&trash_id).exists());
+        assert!(dir.join("notebooks").join(&keep_id).exists());
+        assert_eq!(app.library.notebooks.len(), 1);
+        assert_eq!(app.library.notebooks[0].id, keep_id);
     }
 }

@@ -345,7 +345,27 @@ impl RustNotesApp {
             });
 
             // Baris 2 Header: Bilah Aksi Responsif (Wrap otomatis jika jendela kecil, tidak menabrak judul)
-            if self.current_nav_view != NavView::Trash {
+            if self.current_nav_view == NavView::Trash {
+                let has_trash = self.library.notebooks.iter().any(|n| n.trashed);
+                if has_trash {
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(20.0);
+                        let empty_btn = Button::new(
+                            RichText::new(lang.tr("🗑 Kosongkan Sampah", "🗑 Empty Trash"))
+                                .size(13.0)
+                                .strong()
+                                .color(Color32::WHITE),
+                        )
+                        .fill(Color32::from_rgb(175, 55, 55))
+                        .corner_radius(18.0)
+                        .min_size(Vec2::new(140.0, 32.0));
+                        if ui.add(empty_btn).clicked() {
+                            self.confirm_empty_trash = true;
+                        }
+                    });
+                }
+            } else {
                 ui.add_space(10.0);
                 ui.horizontal_wrapped(|ui| {
                     ui.add_space(20.0);
@@ -679,6 +699,7 @@ impl RustNotesApp {
                         let mut to_toggle_fav = None;
                         let mut to_trash = None;
                         let mut to_restore = None;
+                        let mut to_delete_perm: Option<(String, String)> = None;
                         let mut to_duplicate = None;
                         let mut action_move_nb = None;
                         // Fase 6: Export ZIP & Import ZIP
@@ -724,6 +745,17 @@ impl RustNotesApp {
                                     if note.trashed {
                                         if ui.button("↩ Restore Notebook").clicked() {
                                             to_restore = Some(*orig_idx);
+                                            ui.close_menu();
+                                        }
+                                        if ui
+                                            .button(
+                                                RichText::new("❌ Delete Permanently")
+                                                    .color(Color32::from_rgb(255, 110, 110)),
+                                            )
+                                            .clicked()
+                                        {
+                                            to_delete_perm =
+                                                Some((note.id.clone(), note.title.clone()));
                                             ui.close_menu();
                                         }
                                     } else {
@@ -850,6 +882,9 @@ impl RustNotesApp {
                             self.library.notebooks[idx].trashed = false;
                             self.persist_library();
                         }
+                        if let Some(target) = to_delete_perm {
+                            self.confirm_delete_notebook = Some(target);
+                        }
                         // Fase 6: Handle Export ZIP
                         if let Some((nb_id, nb_title)) = to_export_zip {
                             let storage_dir = app_storage_dir();
@@ -887,6 +922,88 @@ impl RustNotesApp {
                 });
             }
         });
+
+        // Dialog Konfirmasi Hapus Permanen / Kosongkan Sampah
+        if let Some((del_id, del_title)) = self.confirm_delete_notebook.clone() {
+            let lang = self.settings.language;
+            egui::Window::new(lang.tr("Hapus Permanen", "Delete Permanently"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.label(lang.tr(
+                        &format!("Yakin ingin menghapus permanen '{del_title}'? Tindakan ini tidak dapat dibatalkan."),
+                        &format!("Permanently delete '{del_title}'? This action cannot be undone."),
+                    ));
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        if ui.button(lang.tr("Batal", "Cancel")).clicked() {
+                            self.confirm_delete_notebook = None;
+                        }
+                        if ui
+                            .add(
+                                Button::new(
+                                    RichText::new(lang.tr("Hapus Permanen", "Delete Forever"))
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(Color32::from_rgb(185, 50, 50)),
+                            )
+                            .clicked()
+                        {
+                            match self.permanently_delete_notebook(&del_id) {
+                                Ok(()) => {
+                                    self.toast_message = Some(format!(
+                                        "🗑 Buku catatan '{del_title}' dihapus permanen."
+                                    ));
+                                }
+                                Err(e) => {
+                                    self.toast_message = Some(format!("⚠ {e}"));
+                                }
+                            }
+                            self.confirm_delete_notebook = None;
+                        }
+                    });
+                });
+        } else if self.confirm_empty_trash {
+            let lang = self.settings.language;
+            egui::Window::new(lang.tr("Kosongkan Sampah", "Empty Trash"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.label(lang.tr(
+                        "Yakin ingin menghapus permanen seluruh buku catatan di Sampah? Tindakan ini tidak dapat dibatalkan.",
+                        "Permanently delete all notebooks in Trash? This action cannot be undone.",
+                    ));
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        if ui.button(lang.tr("Batal", "Cancel")).clicked() {
+                            self.confirm_empty_trash = false;
+                        }
+                        if ui
+                            .add(
+                                Button::new(
+                                    RichText::new(lang.tr("Kosongkan", "Empty Trash"))
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(Color32::from_rgb(185, 50, 50)),
+                            )
+                            .clicked()
+                        {
+                            match self.empty_trash() {
+                                Ok(n) => {
+                                    self.toast_message =
+                                        Some(format!("🗑 {n} buku catatan dihapus permanen."));
+                                }
+                                Err(e) => {
+                                    self.toast_message = Some(format!("⚠ {e}"));
+                                }
+                            }
+                            self.confirm_empty_trash = false;
+                        }
+                    });
+                });
+        }
 
         // Goodnotes 2-Column New Notebook Modal Dialog
         if self.show_new_notebook_modal {
