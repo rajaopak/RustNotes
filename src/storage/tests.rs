@@ -1207,3 +1207,39 @@ fn test_archive_import_rejects_future_schema_version_and_migrates_legacy() {
         load_notebook_from_dir(dir, "nb-legacy-zip-1").expect("reload migrated notebook");
     assert_eq!(reloaded.schema_version, CURRENT_NOTEBOOK_SCHEMA_VERSION);
 }
+
+#[test]
+fn test_export_svg_renders_page_background_image_and_ignores_traversal() {
+    let dir = super::io::app_storage_dir();
+    let nb = Notebook::new("SVG BG NB", PageTemplate::Blank, Color32::WHITE);
+    save_notebook_to_dir(&dir, &nb).unwrap();
+
+    // Buat PNG 1x1 valid di folder assets notebook
+    let mut png_bytes = Vec::new();
+    let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]));
+    image::DynamicImage::ImageRgba8(img)
+        .write_to(
+            &mut std::io::Cursor::new(&mut png_bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+    let asset_id = save_asset_to_notebook(&dir, &nb.id, &png_bytes, "png").unwrap();
+
+    let mut page = Page::new(PageTemplate::Blank);
+    page.background = Some(PageBackground::Image {
+        asset_id: asset_id.clone(),
+    });
+    let svg = export_page_to_svg(&page);
+    assert!(
+        svg.contains("href=\"data:image/png;base64,"),
+        "SVG export must embed PageBackground::Image"
+    );
+
+    // Path traversal asset_id harus diabaikan dengan aman
+    let mut bad_page = Page::new(PageTemplate::Blank);
+    bad_page.background = Some(PageBackground::Image {
+        asset_id: "../../etc/passwd".to_string(),
+    });
+    let bad_svg = export_page_to_svg(&bad_page);
+    assert!(!bad_svg.contains("<image"));
+}

@@ -32,6 +32,30 @@ fn base64_encode(data: &[u8]) -> String {
     result
 }
 
+fn load_asset_data_uri(asset_id: &str) -> Option<(&'static str, String)> {
+    let safe_asset_id = super::notebook_store::sanitize_path_component(asset_id).ok()?;
+    let base_dir = super::io::app_storage_dir();
+    let entries = std::fs::read_dir(base_dir.join("notebooks")).ok()?;
+    for entry in entries.flatten() {
+        let potential_asset = entry.path().join("assets").join(safe_asset_id);
+        if potential_asset.is_file()
+            && let Ok(bytes) = std::fs::read(&potential_asset)
+        {
+            let mime = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+                "image/png"
+            } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+                "image/jpeg"
+            } else if bytes.starts_with(b"RIFF") {
+                "image/webp"
+            } else {
+                "image/png"
+            };
+            return Some((mime, base64_encode(&bytes)));
+        }
+    }
+    None
+}
+
 pub fn export_page_to_svg(page: &Page) -> String {
     let mut out = String::with_capacity(4096);
     let w = page.width;
@@ -53,135 +77,155 @@ pub fn export_page_to_svg(page: &Page) -> String {
         "<rect width=\"{w}\" height=\"{h}\" fill=\"{bg_color}\"/>\n"
     ));
 
-    // 2. Template Pattern
+    // 2. Background Image/PDF or Template Pattern
     let spacing = 28.0;
-    match page.template {
-        crate::model::PageTemplate::Blank => {}
-        crate::model::PageTemplate::Ruled => {
-            let mut y = 48.0;
-            while y < h {
+    match page.effective_background() {
+        crate::model::PageBackground::Image { asset_id }
+        | crate::model::PageBackground::Pdf { asset_id, .. } => {
+            if let Some((mime, b64)) = load_asset_data_uri(&asset_id) {
+                let rot_attr = if page.rotation != 0 {
+                    format!(
+                        " transform=\"rotate({} {:.1} {:.1})\"",
+                        page.rotation,
+                        w * 0.5,
+                        h * 0.5
+                    )
+                } else {
+                    String::new()
+                };
                 out.push_str(&format!(
+                    "<image x=\"0\" y=\"0\" width=\"{w:.1}\" height=\"{h:.1}\" preserveAspectRatio=\"none\" href=\"data:{mime};base64,{b64}\"{rot_attr}/>\n"
+                ));
+            }
+        }
+        crate::model::PageBackground::Template(template) => match template {
+            crate::model::PageTemplate::Blank => {}
+            crate::model::PageTemplate::Ruled => {
+                let mut y = 48.0;
+                while y < h {
+                    out.push_str(&format!(
                     "<line x1=\"0\" y1=\"{y:.1}\" x2=\"{w:.1}\" y2=\"{y:.1}\" stroke=\"#E6EBF0\" stroke-width=\"0.8\"/>\n"
                 ));
-                y += spacing;
+                    y += spacing;
+                }
             }
-        }
-        crate::model::PageTemplate::RuledNarrow => {
-            let sp = 20.0;
-            let mut y = 30.0;
-            while y < h {
-                out.push_str(&format!(
+            crate::model::PageTemplate::RuledNarrow => {
+                let sp = 20.0;
+                let mut y = 30.0;
+                while y < h {
+                    out.push_str(&format!(
                     "<line x1=\"0\" y1=\"{y:.1}\" x2=\"{w:.1}\" y2=\"{y:.1}\" stroke=\"#E6EBF0\" stroke-width=\"0.7\"/>\n"
                 ));
-                y += sp;
+                    y += sp;
+                }
             }
-        }
-        crate::model::PageTemplate::RuledWide => {
-            let sp = 40.0;
-            let mut y = 50.0;
-            while y < h {
-                out.push_str(&format!(
+            crate::model::PageTemplate::RuledWide => {
+                let sp = 40.0;
+                let mut y = 50.0;
+                while y < h {
+                    out.push_str(&format!(
                     "<line x1=\"0\" y1=\"{y:.1}\" x2=\"{w:.1}\" y2=\"{y:.1}\" stroke=\"#E6EBF0\" stroke-width=\"0.85\"/>\n"
                 ));
-                y += sp;
+                    y += sp;
+                }
             }
-        }
-        crate::model::PageTemplate::Grid => {
-            let mut y = spacing;
-            while y < h {
-                out.push_str(&format!(
+            crate::model::PageTemplate::Grid => {
+                let mut y = spacing;
+                while y < h {
+                    out.push_str(&format!(
                     "<line x1=\"0\" y1=\"{y:.1}\" x2=\"{w:.1}\" y2=\"{y:.1}\" stroke=\"#EDF0F3\" stroke-width=\"0.8\"/>\n"
                 ));
-                y += spacing;
-            }
-            let mut x = spacing;
-            while x < w {
-                out.push_str(&format!(
-                    "<line x1=\"{x:.1}\" y1=\"0\" x2=\"{x:.1}\" y2=\"{h:.1}\" stroke=\"#EDF0F3\" stroke-width=\"0.8\"/>\n"
-                ));
-                x += spacing;
-            }
-        }
-        crate::model::PageTemplate::GridFine => {
-            let sp = 15.0;
-            let mut y = sp;
-            while y < h {
-                out.push_str(&format!(
-                    "<line x1=\"0\" y1=\"{y:.1}\" x2=\"{w:.1}\" y2=\"{y:.1}\" stroke=\"#EDF0F3\" stroke-width=\"0.6\"/>\n"
-                ));
-                y += sp;
-            }
-            let mut x = sp;
-            while x < w {
-                out.push_str(&format!(
-                    "<line x1=\"{x:.1}\" y1=\"0\" x2=\"{x:.1}\" y2=\"{h:.1}\" stroke=\"#EDF0F3\" stroke-width=\"0.6\"/>\n"
-                ));
-                x += sp;
-            }
-        }
-        crate::model::PageTemplate::Dotted => {
-            let mut y = spacing;
-            while y < h {
+                    y += spacing;
+                }
                 let mut x = spacing;
                 while x < w {
                     out.push_str(&format!(
-                        "<circle cx=\"{x:.1}\" cy=\"{y:.1}\" r=\"1.0\" fill=\"#CCD3DA\"/>\n"
-                    ));
+                    "<line x1=\"{x:.1}\" y1=\"0\" x2=\"{x:.1}\" y2=\"{h:.1}\" stroke=\"#EDF0F3\" stroke-width=\"0.8\"/>\n"
+                ));
                     x += spacing;
                 }
-                y += spacing;
             }
-        }
-        crate::model::PageTemplate::DottedFine => {
-            let sp = 15.0;
-            let mut y = sp;
-            while y < h {
+            crate::model::PageTemplate::GridFine => {
+                let sp = 15.0;
+                let mut y = sp;
+                while y < h {
+                    out.push_str(&format!(
+                    "<line x1=\"0\" y1=\"{y:.1}\" x2=\"{w:.1}\" y2=\"{y:.1}\" stroke=\"#EDF0F3\" stroke-width=\"0.6\"/>\n"
+                ));
+                    y += sp;
+                }
                 let mut x = sp;
                 while x < w {
                     out.push_str(&format!(
-                        "<circle cx=\"{x:.1}\" cy=\"{y:.1}\" r=\"0.75\" fill=\"#CCD3DA\"/>\n"
-                    ));
+                    "<line x1=\"{x:.1}\" y1=\"0\" x2=\"{x:.1}\" y2=\"{h:.1}\" stroke=\"#EDF0F3\" stroke-width=\"0.6\"/>\n"
+                ));
                     x += sp;
                 }
-                y += sp;
             }
-        }
-        crate::model::PageTemplate::Isometric => {
-            let dx = 30.0;
-            let dy = 30.0 * 0.8660254;
-            let mut row = 0usize;
-            let mut y = dy;
-            while y < h {
-                let x_offset = if row % 2 == 1 { dx * 0.5 } else { 0.0 };
-                let mut x = x_offset + dx;
-                while x < w {
-                    out.push_str(&format!(
-                        "<circle cx=\"{x:.1}\" cy=\"{y:.1}\" r=\"0.9\" fill=\"#CCD3DA\"/>\n"
-                    ));
-                    x += dx;
+            crate::model::PageTemplate::Dotted => {
+                let mut y = spacing;
+                while y < h {
+                    let mut x = spacing;
+                    while x < w {
+                        out.push_str(&format!(
+                            "<circle cx=\"{x:.1}\" cy=\"{y:.1}\" r=\"1.0\" fill=\"#CCD3DA\"/>\n"
+                        ));
+                        x += spacing;
+                    }
+                    y += spacing;
                 }
-                y += dy;
-                row += 1;
             }
-        }
-        crate::model::PageTemplate::Cornell => {
-            let summary_y = h * 0.84;
-            let cue_x = w * 0.28;
-            let mut y = spacing * 1.5;
-            while y < summary_y {
-                out.push_str(&format!(
+            crate::model::PageTemplate::DottedFine => {
+                let sp = 15.0;
+                let mut y = sp;
+                while y < h {
+                    let mut x = sp;
+                    while x < w {
+                        out.push_str(&format!(
+                            "<circle cx=\"{x:.1}\" cy=\"{y:.1}\" r=\"0.75\" fill=\"#CCD3DA\"/>\n"
+                        ));
+                        x += sp;
+                    }
+                    y += sp;
+                }
+            }
+            crate::model::PageTemplate::Isometric => {
+                let dx = 30.0;
+                let dy = 30.0 * 0.8660254;
+                let mut row = 0usize;
+                let mut y = dy;
+                while y < h {
+                    let x_offset = if row % 2 == 1 { dx * 0.5 } else { 0.0 };
+                    let mut x = x_offset + dx;
+                    while x < w {
+                        out.push_str(&format!(
+                            "<circle cx=\"{x:.1}\" cy=\"{y:.1}\" r=\"0.9\" fill=\"#CCD3DA\"/>\n"
+                        ));
+                        x += dx;
+                    }
+                    y += dy;
+                    row += 1;
+                }
+            }
+            crate::model::PageTemplate::Cornell => {
+                let summary_y = h * 0.84;
+                let cue_x = w * 0.28;
+                let mut y = spacing * 1.5;
+                while y < summary_y {
+                    out.push_str(&format!(
                     "<line x1=\"0\" y1=\"{y:.1}\" x2=\"{w:.1}\" y2=\"{y:.1}\" stroke=\"#E6EBF0\" stroke-width=\"0.8\"/>\n"
                 ));
-                y += spacing;
-            }
-            out.push_str(&format!(
+                    y += spacing;
+                }
+                out.push_str(&format!(
                 "<line x1=\"{cue_x:.1}\" y1=\"{:.1}\" x2=\"{cue_x:.1}\" y2=\"{summary_y:.1}\" stroke=\"#CCD3DA\" stroke-width=\"1.5\"/>\n",
                 h * 0.04
             ));
-            out.push_str(&format!(
+                out.push_str(&format!(
                 "<line x1=\"0\" y1=\"{summary_y:.1}\" x2=\"{w:.1}\" y2=\"{summary_y:.1}\" stroke=\"#CCD3DA\" stroke-width=\"1.5\"/>\n"
             ));
-        }
+            }
+        },
     }
 
     // 3. DrawObjects Two-Pass Layering:
@@ -726,43 +770,22 @@ pub fn export_page_to_svg(page: &Page) -> String {
                 rotation,
                 ..
             } => {
-                // Cari berkas aset dari storage direktori aplikasi
-                let base_dir = super::io::app_storage_dir();
-                // Cari di semua folder notebook
-                if let Ok(entries) = std::fs::read_dir(base_dir.join("notebooks")) {
-                    for entry in entries.flatten() {
-                        let potential_asset = entry.path().join("assets").join(asset_id);
-                        if potential_asset.exists()
-                            && let Ok(bytes) = std::fs::read(&potential_asset)
-                        {
-                            let mime = if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
-                                "image/png"
-                            } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
-                                "image/jpeg"
-                            } else if bytes.starts_with(b"RIFF") {
-                                "image/webp"
-                            } else {
-                                "image/png"
-                            };
-                            let b64 = base64_encode(&bytes);
-                            let rot_attr = if rotation.abs() > 0.001 {
-                                let cx = *x + *width / 2.0;
-                                let cy = *y + *height / 2.0;
-                                format!(
-                                    " transform=\"rotate({:.2} {:.1} {:.1})\"",
-                                    rotation.to_degrees(),
-                                    cx,
-                                    cy
-                                )
-                            } else {
-                                String::new()
-                            };
-                            out.push_str(&format!(
-                                "<image x=\"{x:.1}\" y=\"{y:.1}\" width=\"{width:.1}\" height=\"{height:.1}\" href=\"data:{mime};base64,{b64}\"{rot_attr}/>\n"
-                            ));
-                            break;
-                        }
-                    }
+                if let Some((mime, b64)) = load_asset_data_uri(asset_id) {
+                    let rot_attr = if rotation.abs() > 0.001 {
+                        let cx = *x + *width / 2.0;
+                        let cy = *y + *height / 2.0;
+                        format!(
+                            " transform=\"rotate({:.2} {:.1} {:.1})\"",
+                            rotation.to_degrees(),
+                            cx,
+                            cy
+                        )
+                    } else {
+                        String::new()
+                    };
+                    out.push_str(&format!(
+                        "<image x=\"{x:.1}\" y=\"{y:.1}\" width=\"{width:.1}\" height=\"{height:.1}\" href=\"data:{mime};base64,{b64}\"{rot_attr}/>\n"
+                    ));
                 }
             }
             crate::model::DrawObject::Equation {
