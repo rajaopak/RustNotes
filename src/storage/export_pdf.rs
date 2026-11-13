@@ -169,8 +169,8 @@ pub fn import_pdf_to_pages(
         return Err("Dokumen PDF tidak memiliki halaman.".to_string());
     }
 
-    // Simpan aset PDF hanya setelah dokumen PDF berhasil divalidasi
-    let pdf_asset_id = save_asset_to_notebook(dir, notebook_id, pdf_data, "pdf")?;
+    // Simpan aset PDF secara malas (lazy) hanya jika ada halaman yang gagal di-render ke gambar
+    let mut pdf_asset_id: Option<String> = None;
 
     let mut pages = Vec::with_capacity(count as usize);
 
@@ -184,10 +184,7 @@ pub fn import_pdf_to_pages(
 
         let render_config = PdfRenderConfig::new().set_target_width((width * 2.0).round() as i32);
 
-        let mut bg = PageBackground::Pdf {
-            asset_id: pdf_asset_id.clone(),
-            page_index: idx as usize,
-        };
+        let mut bg = None;
 
         if let Ok(rendered) = page.render_with_config(&render_config) {
             let dyn_img = rendered.as_image();
@@ -196,11 +193,29 @@ pub fn import_pdf_to_pages(
                 && let Ok(img_asset) =
                     save_asset_to_notebook(dir, notebook_id, &buf.into_inner(), "jpg")
             {
-                bg = PageBackground::Image {
+                bg = Some(PageBackground::Image {
                     asset_id: img_asset,
-                };
+                });
             }
         }
+
+        let bg = match bg {
+            Some(img_bg) => img_bg,
+            None => {
+                let asset_id = match &pdf_asset_id {
+                    Some(id) => id.clone(),
+                    None => {
+                        let id = save_asset_to_notebook(dir, notebook_id, pdf_data, "pdf")?;
+                        pdf_asset_id = Some(id.clone());
+                        id
+                    }
+                };
+                PageBackground::Pdf {
+                    asset_id,
+                    page_index: idx as usize,
+                }
+            }
+        };
 
         let mut new_page = Page::with_size(PageTemplate::Blank, width, height);
         new_page.background = Some(bg);
