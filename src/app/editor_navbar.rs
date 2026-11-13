@@ -834,6 +834,15 @@ impl RustNotesApp {
             return false;
         }
 
+        self.render_doc_title_popup(ctx, nb_idx, &notebook_id);
+        self.render_tool_popup(ctx, nb_idx, &notebook_id);
+        self.render_more_menu_popup(ctx, nb_idx, &notebook_id);
+
+        true
+    }
+
+    fn render_doc_title_popup(&mut self, ctx: &egui::Context, nb_idx: usize, notebook_id: &str) {
+        let lang = self.settings.language;
         // =====================================================================
         // GOODNOTES POP-UP 1: Document Title & Info Pop-up (`[Title] ▾`)
         // =====================================================================
@@ -853,7 +862,7 @@ impl RustNotesApp {
                         .text_edit_singleline(&mut self.library.notebooks[nb_idx].title)
                         .changed()
                     {
-                        self.mark_dirty(&notebook_id);
+                        self.mark_dirty(notebook_id);
                     }
                     ui.add_space(6.0);
                     let page_cnt = self.library.notebooks[nb_idx].pages.len();
@@ -882,7 +891,10 @@ impl RustNotesApp {
                     });
                 });
         }
+    }
 
+    fn render_tool_popup(&mut self, ctx: &egui::Context, nb_idx: usize, notebook_id: &str) {
+        let lang = self.settings.language;
         // =====================================================================
         // GOODNOTES POP-UP 2: Tool Settings Pop-up (Ketebalan, Warna, Bentuk, Eraser)
         // =====================================================================
@@ -1116,7 +1128,7 @@ impl RustNotesApp {
                                             [self.current_page_index]
                                             .objects,
                                     );
-                                    self.mark_dirty(&notebook_id);
+                                    self.mark_dirty(notebook_id);
                                     self.toast_message = Some(format!(
                                         "✅ Template {} disisipkan ({} objek).",
                                         kind.title(),
@@ -1220,7 +1232,10 @@ impl RustNotesApp {
                     });
                 });
         }
+    }
 
+    fn render_more_menu_popup(&mut self, ctx: &egui::Context, nb_idx: usize, notebook_id: &str) {
+        let lang = self.settings.language;
         // =====================================================================
         // GOODNOTES POP-UP 3: Authentic GoodNotes Right Pop-up Menu (`⋯`)
         // =====================================================================
@@ -1262,7 +1277,7 @@ impl RustNotesApp {
                     {
                         self.library.notebooks[nb_idx].pages[self.current_page_index].bookmarked =
                             !is_bm;
-                        self.mark_dirty(&notebook_id);
+                        self.mark_dirty(notebook_id);
                         self.show_more_menu_popup = false;
                     }
 
@@ -1279,7 +1294,7 @@ impl RustNotesApp {
                             self.library.notebooks[nb_idx].duplicate_page(self.current_page_index)
                         {
                             self.navigate_to_page(nb_idx, new_idx);
-                            self.mark_dirty(&notebook_id);
+                            self.mark_dirty(notebook_id);
                         }
                         self.show_more_menu_popup = false;
                     }
@@ -1304,7 +1319,7 @@ impl RustNotesApp {
                         {
                             self.canvas_state.spatial_grid.rebuild(&p.objects);
                         }
-                        self.mark_dirty(&notebook_id);
+                        self.mark_dirty(notebook_id);
                         self.toast_message =
                             Some("↻ Halaman diputar 90° searah jarum jam.".to_string());
                         self.show_more_menu_popup = false;
@@ -1330,7 +1345,7 @@ impl RustNotesApp {
                         {
                             self.canvas_state.spatial_grid.rebuild(&p.objects);
                         }
-                        self.mark_dirty(&notebook_id);
+                        self.mark_dirty(notebook_id);
                         self.toast_message =
                             Some("↺ Halaman diputar 90° berlawanan arah jarum jam.".to_string());
                         self.show_more_menu_popup = false;
@@ -1353,7 +1368,7 @@ impl RustNotesApp {
                         {
                             self.canvas_state.spatial_grid.rebuild(&p.objects);
                         }
-                        self.mark_dirty(&notebook_id);
+                        self.mark_dirty(notebook_id);
                         self.toast_message = Some("⟲ Halaman diputar 180°.".to_string());
                         self.show_more_menu_popup = false;
                     }
@@ -1437,7 +1452,7 @@ impl RustNotesApp {
                                             [self.current_page_index]
                                             .objects,
                                     );
-                                    self.mark_dirty(&notebook_id);
+                                    self.mark_dirty(notebook_id);
                                     self.toast_message = Some(format!(
                                         "✅ Template {} disisipkan ({} objek).",
                                         kind.title(),
@@ -1503,7 +1518,7 @@ impl RustNotesApp {
                             self.library.notebooks[nb_idx].pages[self.current_page_index]
                                 .objects
                                 .clear();
-                            self.mark_dirty(&notebook_id);
+                            self.mark_dirty(notebook_id);
                         }
                         self.show_more_menu_popup = false;
                     }
@@ -1525,7 +1540,7 @@ impl RustNotesApp {
                             self.library.notebooks[nb_idx].delete_page(self.current_page_index)
                         {
                             self.navigate_to_page(nb_idx, new_idx);
-                            self.mark_dirty(&notebook_id);
+                            self.mark_dirty(notebook_id);
                         }
                         self.show_more_menu_popup = false;
                     }
@@ -1555,7 +1570,7 @@ impl RustNotesApp {
                             crate::geometry::recognize_handwriting_from_strokes(&p.objects);
                         if !extracted.is_empty() {
                             p.ocr_text = extracted;
-                            self.mark_dirty(&notebook_id);
+                            self.mark_dirty(notebook_id);
                         }
                         self.show_ocr_modal = true;
                         self.show_more_menu_popup = false;
@@ -1682,7 +1697,5 @@ impl RustNotesApp {
                     }
                 });
         }
-
-        true
     }
 }
