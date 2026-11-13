@@ -1,6 +1,8 @@
 use super::library_store::{load_library_index_from_dir, save_library_index_to_dir};
 use super::notebook_store::{load_notebook_from_dir, save_notebook_to_dir};
-use crate::model::{CURRENT_SCHEMA_VERSION, Notebook, NotebookMeta};
+use crate::model::{
+    CURRENT_NOTEBOOK_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION, Notebook, NotebookMeta,
+};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -118,8 +120,26 @@ pub fn import_notebook_from_zip(dir: &Path, zip_source: &Path) -> Result<Noteboo
         return Err("notebook.json in archive exceeds maximum allowed size (20MB)".to_string());
     }
 
-    let mut nb: Notebook =
+    let raw_value: serde_json::Value =
         serde_json::from_str(&content).map_err(|e| format!("Invalid notebook.json in zip: {e}"))?;
+
+    if let Some(ver) = raw_value.get("schema_version").and_then(|v| v.as_u64())
+        && ver as u32 > CURRENT_NOTEBOOK_SCHEMA_VERSION
+    {
+        return Err(format!(
+            "Arsip notebook dibuat dengan versi RustNotes yang lebih baru (schema v{ver}, maksimum didukung v{CURRENT_NOTEBOOK_SCHEMA_VERSION}). Harap perbarui aplikasi Anda."
+        ));
+    }
+
+    let mut nb: Notebook = serde_json::from_value(raw_value)
+        .map_err(|e| format!("Invalid notebook.json in zip: {e}"))?;
+
+    if nb.schema_version > CURRENT_NOTEBOOK_SCHEMA_VERSION {
+        return Err(format!(
+            "Arsip notebook dibuat dengan versi RustNotes yang lebih baru (schema v{}, maksimum didukung v{CURRENT_NOTEBOOK_SCHEMA_VERSION}). Harap perbarui aplikasi Anda.",
+            nb.schema_version
+        ));
+    }
 
     // 2. Sanitasi ID terhadap path traversal
     let is_safe_id = !nb.id.is_empty()
