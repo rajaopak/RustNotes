@@ -315,6 +315,11 @@ impl CanvasState {
         self.texture_cache.get(&key)
     }
 
+    pub fn rebuild_spatial_grid(&mut self, page_id: &str, objects: &[DrawObject]) {
+        self.spatial_grid.rebuild(objects);
+        self.spatial_grid_page_id = Some(page_id.to_string());
+    }
+
     pub fn invalidate_mesh_for_selection(&mut self) {
         if self.selected_ids.is_empty() {
             return;
@@ -456,8 +461,7 @@ impl CanvasState {
     /// Mengembalikan `true` jika ada objek yang terpotong atau terhapus.
     pub fn erase_at(&mut self, page: &mut Page, page_p: Pos2, radius: f32) -> bool {
         if self.spatial_grid_page_id.as_deref() != Some(&page.id) {
-            self.spatial_grid.rebuild(&page.objects);
-            self.spatial_grid_page_id = Some(page.id.clone());
+            self.rebuild_spatial_grid(&page.id, &page.objects);
         }
         let candidate_indices = self.spatial_grid.query_point(page_p, radius);
         if candidate_indices.is_empty() {
@@ -725,6 +729,7 @@ impl CanvasState {
         }
         unselected.extend(selected);
         page.objects = unselected;
+        self.rebuild_spatial_grid(&page.id, &page.objects);
     }
 
     pub fn send_selected_to_back(&mut self, page: &mut Page) {
@@ -743,6 +748,7 @@ impl CanvasState {
         }
         selected.extend(unselected);
         page.objects = selected;
+        self.rebuild_spatial_grid(&page.id, &page.objects);
     }
 
     pub fn push_undo(&mut self, page_id: &str, objects: &[DrawObject]) {
@@ -827,7 +833,7 @@ impl CanvasState {
             page.objects = Arc::unwrap_or_clone(previous);
             self.selected_ids.clear();
             self.mesh_cache.clear();
-            self.spatial_grid.rebuild(&page.objects);
+            self.rebuild_spatial_grid(&page.id, &page.objects);
         }
     }
 
@@ -852,7 +858,7 @@ impl CanvasState {
             page.objects = Arc::unwrap_or_clone(next);
             self.selected_ids.clear();
             self.mesh_cache.clear();
-            self.spatial_grid.rebuild(&page.objects);
+            self.rebuild_spatial_grid(&page.id, &page.objects);
         }
     }
 }

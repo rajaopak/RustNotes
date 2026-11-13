@@ -14,7 +14,7 @@ use crate::geometry::{
     calculate_single_axis_resize, combined_bounds, find_alignment_guides, find_connector_snap_site,
     hit_test_connector_details, hit_test_connector_midpoint, hit_test_connector_with_objects,
     hit_test_object, hit_test_transform_handles, insert_control_point_at, next_shape_rect,
-    object_bounds, object_in_lasso_mode_with_context, point_in_polygon,
+    object_bounds, object_bounds_with_context, object_in_lasso_mode_with_context, point_in_polygon,
     prune_collinear_control_points, prune_invalid_connector_control_points,
     recognize_handwriting_from_strokes, recognize_shape, resolve_connector_endpoints, scale_object,
     shape_connection_point, should_reject_palm_input, smooth_stroke_points, snap_point_to_grid,
@@ -110,7 +110,9 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     // Simpan mesh di dalam cache menggunakan koordinat lokal kertas (`|p| p`, skala 1.0),
                     // lalu transformasikan ke posisi layar (`origin` + `state.zoom`) setiap frame agar
                     // goresan tidak pernah bergeser atau hilang ketika halaman di-scroll maupun di-zoom.
-                    let key = (id.clone(), 0);
+                    let style_rev: u32 = ((state.smoothing_steps as u32) << 8)
+                        | if *is_highlighter { hl_alpha as u32 } else { 0 };
+                    let key = (id.clone(), style_rev);
                     let page_mesh = if let Some(cached) = state.mesh_cache.get(&key) {
                         cached.clone()
                     } else {
@@ -146,7 +148,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     continue;
                 }
                 _ => {
-                    let obj_b = object_bounds(obj);
+                    let obj_b = object_bounds_with_context(obj, &page.objects);
                     let screen_b =
                         Rect::from_min_max(page_to_screen(obj_b.min), page_to_screen(obj_b.max));
                     if !screen_clip_rect.intersects(screen_b) {
