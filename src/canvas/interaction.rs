@@ -20,13 +20,6 @@ use eframe::egui::{self, Color32, Key, PointerButton, Pos2, Rect, Response, Ui, 
 use std::time::Instant;
 use uuid::Uuid;
 
-/// Hasil evaluasi interaksi drag & hold-to-snap pada frame kanvas saat ini.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PointerInteractionOutcome {
-    Continue,
-    EarlyReturn,
-}
-
 /// Menangani seluruh interaksi drag primer dan hold-to-snap pada kanvas halaman.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_pointer_drag_interaction(
@@ -38,13 +31,11 @@ pub(crate) fn handle_pointer_drag_interaction(
     pointer_pos: Option<Pos2>,
     now: Instant,
     screen_to_page: impl Fn(Pos2) -> Pos2 + Copy,
-) -> PointerInteractionOutcome {
+) {
     if response.drag_started_by(PointerButton::Primary)
         && let Some(pos) = pointer_pos
-        && handle_drag_started(ui, page, state, sel, pos, screen_to_page)
-            == PointerInteractionOutcome::EarlyReturn
     {
-        return PointerInteractionOutcome::EarlyReturn;
+        handle_drag_started(ui, page, state, sel, pos, screen_to_page);
     }
 
     if response.dragged_by(PointerButton::Primary)
@@ -59,8 +50,6 @@ pub(crate) fn handle_pointer_drag_interaction(
     if response.drag_stopped() {
         handle_drag_stopped(ui, page, state, pointer_pos, screen_to_page);
     }
-
-    PointerInteractionOutcome::Continue
 }
 
 /// Menangani awal gesture drag primer: seleksi handle/garis/titik Quick Diagram atau mulai alat aktif.
@@ -71,7 +60,7 @@ fn handle_drag_started(
     sel: &SelectionData,
     pos: Pos2,
     screen_to_page: impl Fn(Pos2) -> Pos2 + Copy,
-) -> PointerInteractionOutcome {
+) {
     // Gunakan titik tekan awal (press_origin) untuk hit-test handle agar seretan cepat tidak meleset
     let press_pos = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
     let page_p = screen_to_page(press_pos);
@@ -92,21 +81,21 @@ fn handle_drag_started(
             state.resize_corner = Some(ResizeCorner::Rotation);
             state.drag_start_pos = Some(page_p);
             state.push_undo(&page.id, &page.objects);
-            return PointerInteractionOutcome::EarlyReturn;
+            return;
         }
         // Handle titik akhir garis (dapat berotasi & diatur terhadap titik awal sebagai pusat)
         if (page_p - line_end).length() <= handle_dist {
             state.resize_corner = Some(ResizeCorner::LineEnd);
             state.drag_start_pos = Some(page_p);
             state.push_undo(&page.id, &page.objects);
-            return PointerInteractionOutcome::EarlyReturn;
+            return;
         }
         // Handle titik awal garis (pusat rotasi)
         if (page_p - line_start).length() <= handle_dist {
             state.resize_corner = Some(ResizeCorner::LineStart);
             state.drag_start_pos = Some(page_p);
             state.push_undo(&page.id, &page.objects);
-            return PointerInteractionOutcome::EarlyReturn;
+            return;
         }
         // Klik pada badan garis untuk menggeser garis (hanya saat menggunakan alat Lasso)
         if state.current_tool == ActiveTool::Lasso
@@ -115,7 +104,7 @@ fn handle_drag_started(
             state.is_dragging_selection = true;
             state.drag_start_pos = Some(page_p);
             state.push_undo(&page.id, &page.objects);
-            return PointerInteractionOutcome::EarlyReturn;
+            return;
         }
     } else if let Some((source_id, site)) = hit_test_quick_diagram_dot(sel, state, page_p) {
         state.active_stroke_page_id = Some(page.id.clone());
@@ -127,7 +116,7 @@ fn handle_drag_started(
         });
         state.draft_connector_current = Some(Point2D::new(page_p.x, page_p.y));
         state.connector_snap_candidate = None;
-        return PointerInteractionOutcome::EarlyReturn;
+        return;
     }
 
     if let Some((conn_id, Some(poly))) = &sel.single_connector {
@@ -154,7 +143,7 @@ fn handle_drag_started(
                 }
                 state.resize_corner = Some(ResizeCorner::ConnectorControl(new_idx));
                 state.drag_start_pos = Some(page_p);
-                return PointerInteractionOutcome::EarlyReturn;
+                return;
             } else if let Some(target) =
                 hit_test_connector_details(Point2D::new(page_p.x, page_p.y), poly, handle_dist)
             {
@@ -188,7 +177,7 @@ fn handle_drag_started(
                 state.resize_corner = Some(corner);
                 state.drag_start_pos = Some(page_p);
                 state.push_undo(&page.id, &page.objects);
-                return PointerInteractionOutcome::EarlyReturn;
+                return;
             }
         }
     } else if matches!(state.current_tool, ActiveTool::Lasso | ActiveTool::Shape(_))
@@ -215,7 +204,7 @@ fn handle_drag_started(
             state.resize_corner = Some(corner);
             state.drag_start_pos = Some(page_p);
             state.push_undo(&page.id, &page.objects);
-            return PointerInteractionOutcome::EarlyReturn;
+            return;
         }
 
         // Check if clicking inside selection to move
@@ -228,7 +217,7 @@ fn handle_drag_started(
             state.is_dragging_selection = true;
             state.drag_start_pos = Some(page_p);
             state.push_undo(&page.id, &page.objects);
-            return PointerInteractionOutcome::EarlyReturn;
+            return;
         }
     }
 
@@ -380,8 +369,6 @@ fn handle_drag_started(
         }
         ActiveTool::Hand | ActiveTool::Equation => {}
     }
-
-    PointerInteractionOutcome::Continue
 }
 
 /// Menangani pergerakan drag primer: memindahkan seleksi, mengubah ukuran/rotasi handle, atau memperbarui draft alat.

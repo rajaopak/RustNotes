@@ -1,9 +1,6 @@
 use super::gizmo::{SelectionData, render_alignment_guides, render_selection_gizmo};
 pub(crate) use super::interaction::extract_touch_pressure;
-use super::interaction::{
-    PointerInteractionOutcome, handle_pointer_drag_interaction,
-    handle_post_render_pointer_interaction,
-};
+use super::interaction::{handle_pointer_drag_interaction, handle_post_render_pointer_interaction};
 use super::laser::render_laser_trail;
 use super::primitives::{
     draw_non_stroke_object, draw_paper_pattern, draw_rotated_background_image,
@@ -93,7 +90,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
     // Active Selection Bounds
     let sel = SelectionData::compute(page, state);
 
-    if handle_pointer_drag_interaction(
+    handle_pointer_drag_interaction(
         ui,
         &response,
         page,
@@ -102,10 +99,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         pointer_pos,
         now,
         screen_to_page,
-    ) == PointerInteractionOutcome::EarlyReturn
-    {
-        return response;
-    }
+    );
 
     // 4 & 5. Render Active Draft Stroke/Shape, Connector Snap Sites, and Active Lasso Loop
     render_active_draft_and_lasso(ui, &painter, page, state, now, page_to_screen);

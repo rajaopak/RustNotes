@@ -2117,3 +2117,142 @@ fn test_quick_diagram_drag_and_stationary_click_through_canvas() {
     );
     assert_eq!(state.selected_ids, vec![page.objects[5].id().to_string()]);
 }
+
+#[test]
+fn test_handle_drag_start_preserves_canvas_updates_and_last_interacted_page() {
+    fn step_two_pages(
+        ctx: &eframe::egui::Context,
+        page1: &mut Page,
+        page2: &mut Page,
+        state: &mut CanvasState,
+        events: Vec<eframe::egui::Event>,
+    ) -> Pos2 {
+        let mut page2_origin = Pos2::ZERO;
+        let input = eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                Pos2::ZERO,
+                Vec2::new(1000.0, 2000.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            eframe::egui::CentralPanel::default()
+                .frame(eframe::egui::Frame::NONE)
+                .show(ctx, |ui| {
+                    let _ = render_page_canvas(ui, page1, state);
+                    page2_origin = ui.next_widget_position();
+                    let _ = render_page_canvas(ui, page2, state);
+                });
+        });
+        page2_origin
+    }
+
+    let ctx = eframe::egui::Context::default();
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Lasso,
+        zoom: 1.0,
+        last_interacted_page_id: Some("page-1".to_string()),
+        ..Default::default()
+    };
+    let mut page1 = Page::new(PageTemplate::Blank);
+    page1.id = "page-1".to_string();
+    let mut page2 = Page::new(PageTemplate::Blank);
+    page2.id = "page-2".to_string();
+    page2.objects.push(DrawObject::Shape {
+        id: "s2".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: 100.0,
+        y: 100.0,
+        width: 80.0,
+        height: 60.0,
+        color: ColorData::from(Color32::BLACK),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    });
+    state.selected_ids = vec!["s2".to_string()];
+
+    // Frame 0: layout
+    let page2_origin = step_two_pages(&ctx, &mut page1, &mut page2, &mut state, vec![]);
+    let to_screen_p2 = |x: f32, y: f32| page2_origin + Vec2::new(x, y);
+
+    // East handle of s2 is at (180, 130)
+    let handle_pos = to_screen_p2(180.0, 130.0);
+    let drag_start_move = to_screen_p2(205.0, 130.0);
+    let drag_release = to_screen_p2(230.0, 130.0);
+
+    step_two_pages(
+        &ctx,
+        &mut page1,
+        &mut page2,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(handle_pos)],
+    );
+    step_two_pages(
+        &ctx,
+        &mut page1,
+        &mut page2,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: handle_pos,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }],
+    );
+    // Frame where drag_started() fires on page-2's East handle
+    step_two_pages(
+        &ctx,
+        &mut page1,
+        &mut page2,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(drag_start_move)],
+    );
+
+    assert_eq!(state.resize_corner, Some(ResizeCorner::East));
+    assert_eq!(
+        state.last_interacted_page_id.as_deref(),
+        Some("page-2"),
+        "drag_started early return must no longer skip last_interacted_page_id updates"
+    );
+    assert_eq!(state.hovered_page_id.as_deref(), Some("page-2"));
+    assert!(state.lasso_points.is_empty());
+    assert!(state.active_stroke_page_id.is_none());
+
+    // Continue drag and release
+    step_two_pages(
+        &ctx,
+        &mut page1,
+        &mut page2,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(drag_release)],
+    );
+    step_two_pages(
+        &ctx,
+        &mut page1,
+        &mut page2,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: drag_release,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    assert_eq!(state.resize_corner, None);
+    match &page2.objects[0] {
+        DrawObject::Shape { width, .. } => {
+            assert!(
+                *width > 120.0,
+                "Expected shape width to expand after East handle drag, got {width}"
+            );
+        }
+        other => panic!("Expected Shape object, got {other:?}"),
+    }
+}
