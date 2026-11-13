@@ -11,11 +11,18 @@ impl RustNotesApp {
         if !self.show_add_page_modal {
             return;
         }
+        let Some(nb) = self.library.notebooks.get(nb_idx) else {
+            self.show_add_page_modal = false;
+            return;
+        };
+        let page_count = nb.pages.len();
+        let current_page_display = if page_count == 0 {
+            0
+        } else {
+            self.current_page_index.min(page_count - 1) + 1
+        };
         let (cur_tmpl, cur_w, cur_h) = {
-            if let Some(p) = self.library.notebooks[nb_idx]
-                .pages
-                .get(self.current_page_index)
-            {
+            if let Some(p) = nb.pages.get(self.current_page_index) {
                 (p.template, p.width, p.height)
             } else {
                 (PageTemplate::Ruled, 595.0, 842.0)
@@ -36,11 +43,7 @@ impl RustNotesApp {
                 ui.group(|ui| {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("📄 Halaman Aktif:").strong());
-                        ui.label(format!(
-                            "Hal {} dari {}",
-                            self.current_page_index + 1,
-                            self.library.notebooks[nb_idx].pages.len()
-                        ));
+                        ui.label(format!("Hal {current_page_display} dari {page_count}"));
 
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui
@@ -50,9 +53,11 @@ impl RustNotesApp {
                                 )
                                 .clicked()
                             {
-                                let current_page = self.library.notebooks[nb_idx]
-                                    .pages
-                                    .get(self.current_page_index);
+                                let current_page = self
+                                    .library
+                                    .notebooks
+                                    .get(nb_idx)
+                                    .and_then(|nb| nb.pages.get(self.current_page_index));
                                 if let Some(p) = current_page {
                                     self.add_page_template = p.template;
                                     self.add_page_paper_color = p.paper_color.to_color32();
@@ -338,6 +343,8 @@ impl RustNotesApp {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("3. Gunakan Gambar Latar:").strong());
                         if ui.button("🖼 Pilih Gambar...").clicked()
+                            && let Some(nb_id) =
+                                self.library.notebooks.get(nb_idx).map(|nb| nb.id.clone())
                             && let Some(path) = rfd::FileDialog::new()
                                 .add_filter("Image", &["png", "jpg", "jpeg", "webp"])
                                 .pick_file()
@@ -345,7 +352,6 @@ impl RustNotesApp {
                         {
                             let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("png");
                             let storage_dir = app_storage_dir();
-                            let nb_id = self.library.notebooks[nb_idx].id.clone();
                             if let Ok(asset_id) =
                                 save_asset_to_notebook(&storage_dir, &nb_id, &img_bytes, ext)
                                 && let Ok(dyn_img) = image::load_from_memory(&img_bytes)
@@ -357,24 +363,32 @@ impl RustNotesApp {
                                 new_page.background =
                                     Some(crate::model::PageBackground::Image { asset_id });
 
-                                self.push_doc_undo(nb_idx);
-                                let insert_pos = match self.add_page_target_pos {
-                                    AddPagePosition::BeforeCurrent => self.current_page_index,
-                                    AddPagePosition::AfterCurrent => self.current_page_index + 1,
-                                    AddPagePosition::AtEnd => {
-                                        self.library.notebooks[nb_idx].pages.len()
+                                if nb_idx < self.library.notebooks.len() {
+                                    self.push_doc_undo(nb_idx);
+                                    if let Some(clamped_pos) =
+                                        self.library.notebooks.get_mut(nb_idx).map(|nb| {
+                                            let insert_pos = match self.add_page_target_pos {
+                                                AddPagePosition::BeforeCurrent => {
+                                                    self.current_page_index
+                                                }
+                                                AddPagePosition::AfterCurrent => {
+                                                    self.current_page_index.saturating_add(1)
+                                                }
+                                                AddPagePosition::AtEnd => nb.pages.len(),
+                                            };
+                                            let clamped_pos = insert_pos.min(nb.pages.len());
+                                            nb.pages.insert(clamped_pos, new_page);
+                                            clamped_pos
+                                        })
+                                    {
+                                        self.navigate_to_page(nb_idx, clamped_pos);
+                                        self.mark_dirty(&nb_id);
+                                        self.toast_message = Some(
+                                            "✅ Halaman berlatar gambar berhasil ditambahkan."
+                                                .to_string(),
+                                        );
                                     }
-                                };
-                                let clamped_pos =
-                                    insert_pos.min(self.library.notebooks[nb_idx].pages.len());
-                                self.library.notebooks[nb_idx]
-                                    .pages
-                                    .insert(clamped_pos, new_page);
-                                self.navigate_to_page(nb_idx, clamped_pos);
-                                self.mark_dirty(&nb_id);
-                                self.toast_message = Some(
-                                    "✅ Halaman berlatar gambar berhasil ditambahkan.".to_string(),
-                                );
+                                }
                                 close_modal = true;
                             }
                         }
@@ -405,24 +419,33 @@ impl RustNotesApp {
                                 self.add_page_preset.dimensions(self.add_page_orientation)
                             };
 
-                            self.push_doc_undo(nb_idx);
-                            let target_idx = match self.add_page_target_pos {
-                                AddPagePosition::BeforeCurrent => self.current_page_index,
-                                AddPagePosition::AfterCurrent => self.current_page_index + 1,
-                                AddPagePosition::AtEnd => {
-                                    self.library.notebooks[nb_idx].pages.len()
+                            if nb_idx < self.library.notebooks.len() {
+                                self.push_doc_undo(nb_idx);
+                                if let Some((new_idx, nb_id)) =
+                                    self.library.notebooks.get_mut(nb_idx).map(|nb| {
+                                        let target_idx = match self.add_page_target_pos {
+                                            AddPagePosition::BeforeCurrent => {
+                                                self.current_page_index
+                                            }
+                                            AddPagePosition::AfterCurrent => {
+                                                self.current_page_index.saturating_add(1)
+                                            }
+                                            AddPagePosition::AtEnd => nb.pages.len(),
+                                        };
+                                        let new_idx = nb.insert_page_with_color(
+                                            target_idx,
+                                            self.add_page_template,
+                                            w,
+                                            h,
+                                            self.add_page_paper_color,
+                                        );
+                                        (new_idx, nb.id.clone())
+                                    })
+                                {
+                                    self.navigate_to_page(nb_idx, new_idx);
+                                    self.mark_dirty(&nb_id);
                                 }
-                            };
-                            let new_idx = self.library.notebooks[nb_idx].insert_page_with_color(
-                                target_idx,
-                                self.add_page_template,
-                                w,
-                                h,
-                                self.add_page_paper_color,
-                            );
-                            self.navigate_to_page(nb_idx, new_idx);
-                            let nb_id = self.library.notebooks[nb_idx].id.clone();
-                            self.mark_dirty(&nb_id);
+                            }
 
                             // Simpan ke memori template terakhir
                             self.last_created_template = self.add_page_template;
@@ -458,9 +481,18 @@ impl RustNotesApp {
             return;
         }
 
-        let page_count = self.library.notebooks[nb_idx].pages.len();
+        let Some(page_count) = self.library.notebooks.get(nb_idx).map(|nb| nb.pages.len()) else {
+            self.show_page_resize_modal = false;
+            return;
+        };
+        if page_count == 0 {
+            self.show_page_resize_modal = false;
+            self.toast_message = Some("⚠️ Tidak ada halaman untuk diubah ukurannya.".to_string());
+            return;
+        }
+        let last_page_idx = page_count.saturating_sub(1);
         if self.resize_target_page_index >= page_count {
-            self.resize_target_page_index = self.current_page_index.min(page_count - 1);
+            self.resize_target_page_index = self.current_page_index.min(last_page_idx);
         }
         egui::Window::new("📐 Pengaturan Ukuran Kertas & Template Halaman")
             .collapsible(false)
@@ -684,38 +716,31 @@ impl RustNotesApp {
                         )
                         .fill(Color32::from_rgb(0, 114, 206));
                         if ui.add(apply_btn).clicked() {
-                            self.push_doc_undo(nb_idx);
-                            if self.resize_apply_all_pages {
-                                let total = self.library.notebooks[nb_idx].pages.len();
-                                for idx in 0..total {
-                                    self.library.notebooks[nb_idx].resize_page(idx, w, h);
-                                    let p = &mut self.library.notebooks[nb_idx].pages[idx];
-                                    p.template = self.resize_target_template;
-                                    if matches!(
-                                        p.background,
-                                        Some(crate::model::PageBackground::Template(_))
-                                    ) {
-                                        p.background =
-                                            Some(crate::model::PageBackground::Template(
+                            if nb_idx < self.library.notebooks.len() {
+                                self.push_doc_undo(nb_idx);
+                                if let Some(nb) = self.library.notebooks.get_mut(nb_idx) {
+                                    if self.resize_apply_all_pages {
+                                        for idx in 0..nb.pages.len() {
+                                            apply_page_resize_and_template(
+                                                nb,
+                                                idx,
+                                                w,
+                                                h,
                                                 self.resize_target_template,
-                                            ));
+                                            );
+                                        }
+                                    } else {
+                                        apply_page_resize_and_template(
+                                            nb,
+                                            self.resize_target_page_index,
+                                            w,
+                                            h,
+                                            self.resize_target_template,
+                                        );
                                     }
-                                }
-                            } else {
-                                let target_idx = self.resize_target_page_index;
-                                self.library.notebooks[nb_idx].resize_page(target_idx, w, h);
-                                let p = &mut self.library.notebooks[nb_idx].pages[target_idx];
-                                p.template = self.resize_target_template;
-                                if matches!(
-                                    p.background,
-                                    Some(crate::model::PageBackground::Template(_))
-                                ) {
-                                    p.background = Some(crate::model::PageBackground::Template(
-                                        self.resize_target_template,
-                                    ));
+                                    self.mark_dirty(notebook_id);
                                 }
                             }
-                            self.mark_dirty(notebook_id);
                             self.show_page_resize_modal = false;
                         }
                         if ui.button("Batal").clicked() {
@@ -728,32 +753,47 @@ impl RustNotesApp {
 
     pub(super) fn render_save_template_modal(&mut self, ctx: &egui::Context, nb_idx: usize) {
         // Fase 5: Save Page as Custom Template Modal Dialog
-        if self.show_save_template_modal {
-            egui::Window::new("💾 Simpan Halaman sebagai Template Kustom")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.set_width(340.0);
-                    ui.label(RichText::new("Simpan Format & Latar Halaman Ini").strong());
-                    ui.label(
-                        RichText::new(
-                            "Template yang disimpan dapat digunakan kembali saat membuat buku catatan baru.",
-                        )
-                        .size(11.0)
-                        .color(Color32::GRAY),
-                    );
-                    ui.add_space(8.0);
-                    ui.label("Nama Template:");
-                    ui.text_edit_singleline(&mut self.new_template_name);
-                    ui.add_space(12.0);
-                    ui.horizontal(|ui| {
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.button("Simpan Template").clicked()
-                                && !self.new_template_name.trim().is_empty()
-                            {
-                                let cur_p =
-                                    &self.library.notebooks[nb_idx].pages[self.current_page_index];
+        if !self.show_save_template_modal {
+            return;
+        }
+        let Some(nb) = self.library.notebooks.get(nb_idx) else {
+            self.show_save_template_modal = false;
+            return;
+        };
+        if nb.pages.is_empty() {
+            self.show_save_template_modal = false;
+            self.toast_message =
+                Some("⚠️ Tidak ada halaman aktif untuk disimpan sebagai template.".to_string());
+            return;
+        }
+        egui::Window::new("💾 Simpan Halaman sebagai Template Kustom")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_width(340.0);
+                ui.label(RichText::new("Simpan Format & Latar Halaman Ini").strong());
+                ui.label(
+                    RichText::new(
+                        "Template yang disimpan dapat digunakan kembali saat membuat buku catatan baru.",
+                    )
+                    .size(11.0)
+                    .color(Color32::GRAY),
+                );
+                ui.add_space(8.0);
+                ui.label("Nama Template:");
+                ui.text_edit_singleline(&mut self.new_template_name);
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button("Simpan Template").clicked()
+                            && !self.new_template_name.trim().is_empty()
+                        {
+                            if let Some(cur_p) = self.library.notebooks.get(nb_idx).and_then(|nb| {
+                                nb.pages
+                                    .get(self.current_page_index)
+                                    .or_else(|| nb.pages.last())
+                            }) {
                                 let tmpl = CustomTemplate {
                                     id: uuid::Uuid::new_v4().to_string(),
                                     name: self.new_template_name.trim().to_string(),
@@ -769,15 +809,41 @@ impl RustNotesApp {
                                     self.toast_message =
                                         Some("✅ Template kustom berhasil disimpan!".to_string());
                                 }
-                                self.show_save_template_modal = false;
-                                self.new_template_name.clear();
+                            } else {
+                                self.toast_message = Some(
+                                    "⚠️ Halaman aktif tidak ditemukan untuk disimpan sebagai template."
+                                        .to_string(),
+                                );
                             }
-                            if ui.button("Batal").clicked() {
-                                self.show_save_template_modal = false;
-                            }
-                        });
+                            self.show_save_template_modal = false;
+                            self.new_template_name.clear();
+                        }
+                        if ui.button("Batal").clicked() {
+                            self.show_save_template_modal = false;
+                        }
                     });
                 });
+            });
+    }
+}
+
+pub(super) fn apply_page_resize_and_template(
+    nb: &mut crate::model::Notebook,
+    idx: usize,
+    w: f32,
+    h: f32,
+    template: PageTemplate,
+) {
+    if !nb.resize_page(idx, w, h) {
+        return;
+    }
+    if let Some(p) = nb.pages.get_mut(idx) {
+        p.template = template;
+        if matches!(
+            p.background,
+            Some(crate::model::PageBackground::Template(_))
+        ) {
+            p.background = Some(crate::model::PageBackground::Template(template));
         }
     }
 }
