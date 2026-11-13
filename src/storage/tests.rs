@@ -1056,3 +1056,154 @@ fn test_sticky_note_png_rotation_rendering() {
     assert_eq!(corner_outside_px[1], 255);
     assert_eq!(corner_outside_px[2], 255);
 }
+
+#[test]
+fn test_failed_notebook_save_does_not_rotate_existing_backups() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+
+    let mut nb = Notebook::new("Backup Integrity NB", PageTemplate::Blank, Color32::WHITE);
+    save_notebook_to_dir(dir, &nb).expect("initial save v1");
+
+    nb.title = "Updated Title v2".to_string();
+    save_notebook_to_dir(dir, &nb).expect("second save v2");
+
+    let nb_dir = dir.join("notebooks").join(&nb.id);
+    let bak1_path = nb_dir.join("notebook.bak.1.json");
+    let bak1_before = fs::read_to_string(&bak1_path).expect("bak.1 exists");
+    assert!(bak1_before.contains("Backup Integrity NB"));
+    assert!(!nb_dir.join("notebook.bak.2.json").exists());
+
+    // Simulasikan kegagalan save karena schema_version lebih baru
+    nb.schema_version = CURRENT_NOTEBOOK_SCHEMA_VERSION + 10;
+    nb.title = "Should Not Persist".to_string();
+    let res = save_notebook_to_dir(dir, &nb);
+    assert!(res.is_err());
+
+    // Pastikan backup tidak bergeser dan file utama tetap v2
+    let bak1_after = fs::read_to_string(&bak1_path).expect("bak.1 still exists");
+    assert_eq!(bak1_before, bak1_after);
+    assert!(!nb_dir.join("notebook.bak.2.json").exists());
+    let loaded = load_notebook_from_dir(dir, &nb.id).expect("reload valid v2");
+    assert_eq!(loaded.title, "Updated Title v2");
+}
+
+#[test]
+fn test_atomic_write_failed_replacement_preserves_target_and_cleans_temp() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+
+    // 1. Target berupa direktori harus ditolak tanpa memodifikasi isinya
+    let target_dir_as_file = dir.join("locked_target.json");
+    fs::create_dir_all(&target_dir_as_file).unwrap();
+    let sentinel = target_dir_as_file.join("keep.txt");
+    fs::write(&sentinel, "precious").unwrap();
+
+    let res = atomic_write_file(&target_dir_as_file, "{\"new\":true}", None);
+    assert!(res.is_err(), "atomic write over a directory must fail");
+    assert!(
+        sentinel.exists(),
+        "existing target contents must remain untouched"
+    );
+
+    // 2. Target berupa berkas yang tidak bisa ditimpa (mis. read-only / terkunci) harus mempertahankan isi lama
+    let locked_file = dir.join("readonly_target.json");
+    fs::write(&locked_file, "{\"valid\":1}").unwrap();
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Buka handle tanpa FILE_SHARE_DELETE (share_mode = 1 = FILE_SHARE_READ) untuk memblokir rename di Windows
+        let _lock = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&locked_file)
+            .unwrap();
+        let res_locked = atomic_write_file(&locked_file, "{\"corrupt\":2}", None);
+        assert!(res_locked.is_err(), "atomic write to locked file must fail");
+    }
+    let preserved = fs::read_to_string(&locked_file).unwrap();
+    assert_eq!(preserved, "{\"valid\":1}");
+
+    // Pastikan tidak ada file .tmp.* atau .rollback.* yang tertinggal
+    let leftovers: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            name.contains(".tmp.") || name.contains(".rollback.")
+        })
+        .collect();
+    assert!(leftovers.is_empty(), "temporary files must be cleaned up");
+}
+
+#[test]
+fn test_archive_import_rejects_future_schema_version_and_migrates_legacy() {
+    use std::io::Write;
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+
+    // 1. Arsip dengan schema_version masa depan harus ditolak
+    let future_zip = dir.join("future.rnote");
+    {
+        let file = fs::File::create(&future_zip).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default();
+        zip.start_file("notebook.json", opts).unwrap();
+        let future_nb = serde_json::json!({
+            "schema_version": CURRENT_NOTEBOOK_SCHEMA_VERSION + 5,
+            "id": "nb-future-1",
+            "title": "Future Notebook",
+            "cover_color": { "r": 10, "g": 20, "b": 30, "a": 255 },
+            "pages": [],
+            "created_at": 1700000000,
+            "updated_at": 1700000000
+        });
+        zip.write_all(future_nb.to_string().as_bytes()).unwrap();
+        zip.finish().unwrap();
+    }
+
+    let err = import_notebook_from_zip(dir, &future_zip).unwrap_err();
+    assert!(
+        err.contains("lebih baru") || err.contains("schema"),
+        "Unexpected error message: {err}"
+    );
+    assert!(
+        !dir.join("notebooks").join("nb-future-1").exists(),
+        "Failed import must not create notebook directory"
+    );
+
+    // 2. Arsip legacy (v1 tanpa field schema_version) harus tetap berhasil diimpor & dimigrasi
+    let legacy_zip = dir.join("legacy_v1.rnote");
+    {
+        let file = fs::File::create(&legacy_zip).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default();
+        zip.start_file("notebook.json", opts).unwrap();
+        let legacy_nb = serde_json::json!({
+            "id": "nb-legacy-zip-1",
+            "title": "Legacy v1 Archive",
+            "cover_color": { "r": 50, "g": 80, "b": 120, "a": 255 },
+            "pages": [
+                {
+                    "id": "p1",
+                    "width": 595.0,
+                    "height": 842.0,
+                    "template": "Blank",
+                    "paper_color": { "r": 255, "g": 255, "b": 255, "a": 255 },
+                    "bookmarked": false,
+                    "objects": []
+                }
+            ],
+            "created_at": 1700000000,
+            "updated_at": 1700000000
+        });
+        zip.write_all(legacy_nb.to_string().as_bytes()).unwrap();
+        zip.finish().unwrap();
+    }
+
+    let imported = import_notebook_from_zip(dir, &legacy_zip).expect("import legacy v1 archive");
+    assert_eq!(imported.id, "nb-legacy-zip-1");
+    let reloaded =
+        load_notebook_from_dir(dir, "nb-legacy-zip-1").expect("reload migrated notebook");
+    assert_eq!(reloaded.schema_version, CURRENT_NOTEBOOK_SCHEMA_VERSION);
+}
