@@ -143,7 +143,19 @@ pub fn render_zoom_window_canvas(
                 }
             }
             _ => {
-                state.zoom_draft_stroke = Some(vec![StrokePoint::from(page_p)]);
+                let (touch_id, touch_force) = ui.input(|i| {
+                    super::render::extract_touch_pressure(&i.raw.events, None, Some(pos))
+                });
+                state.active_touch_id = touch_id;
+                let raw_pressure = touch_force.unwrap_or(1.0).clamp(0.0, 1.0);
+                let is_highlighter = state.current_tool == ActiveTool::Highlighter;
+                let pressure = if is_highlighter && !state.highlighter_pressure_enabled {
+                    1.0
+                } else {
+                    state.effective_pressure(raw_pressure)
+                };
+                state.zoom_draft_stroke =
+                    Some(vec![StrokePoint::new(page_p.x, page_p.y, pressure)]);
                 state.zoom_wrote_in_advance_zone = page_p.x >= adv_page_x;
             }
         }
@@ -160,13 +172,40 @@ pub fn render_zoom_window_canvas(
                 }
             }
             _ => {
-                if let Some(pts) = &mut state.zoom_draft_stroke {
+                if state.zoom_draft_stroke.is_some() {
                     let min_dist = 1.5 / scale;
-                    if pts
-                        .last()
-                        .is_none_or(|last| (page_p - last.to_pos2()).length() >= min_dist)
-                    {
-                        pts.push(StrokePoint::from(page_p));
+                    let should_push = state.zoom_draft_stroke.as_ref().is_some_and(|pts| {
+                        pts.last()
+                            .is_none_or(|last| (page_p - last.to_pos2()).length() >= min_dist)
+                    });
+                    if should_push {
+                        let (tid, touch_force) = ui.input(|i| {
+                            super::render::extract_touch_pressure(
+                                &i.raw.events,
+                                state.active_touch_id,
+                                Some(pos),
+                            )
+                        });
+                        if state.active_touch_id.is_none() {
+                            state.active_touch_id = tid;
+                        }
+                        let is_highlighter = state.current_tool == ActiveTool::Highlighter;
+                        let pressure = if (is_highlighter && !state.highlighter_pressure_enabled)
+                            || !state.pressure_sensitivity_enabled
+                        {
+                            1.0
+                        } else if let Some(f) = touch_force {
+                            state.effective_pressure(f.clamp(0.0, 1.0))
+                        } else {
+                            state
+                                .zoom_draft_stroke
+                                .as_ref()
+                                .and_then(|pts| pts.last().map(|p| p.pressure))
+                                .unwrap_or(1.0)
+                        };
+                        if let Some(pts) = &mut state.zoom_draft_stroke {
+                            pts.push(StrokePoint::new(page_p.x, page_p.y, pressure));
+                        }
                     }
                     if page_p.x >= adv_page_x {
                         state.zoom_wrote_in_advance_zone = true;
@@ -226,7 +265,7 @@ pub fn render_zoom_window_canvas(
                     is_highlighter,
                     style: state.stroke_style,
                 });
-                state.spatial_grid.rebuild(&page.objects);
+                state.rebuild_spatial_grid(&page.id, &page.objects);
                 // Fase 8.6: Perbarui indeks OCR tulisan tangan otomatis saat menulis di Zoom Window
                 page.ocr_text = recognize_handwriting_from_strokes(&page.objects);
                 modified = true;
