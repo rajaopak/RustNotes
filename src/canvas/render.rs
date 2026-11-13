@@ -384,7 +384,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                         alignment: state.text_alignment,
                     };
                     page.objects.push(new_text);
-                    state.spatial_grid.rebuild(&page.objects);
+                    state.rebuild_spatial_grid(&page.id, &page.objects);
                     state.selected_ids = vec![id.clone()];
                     state.editing_text_id = Some(id);
                     state.focus_text_edit = true;
@@ -410,7 +410,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     rotation: 0.0,
                 };
                 page.objects.push(new_note);
-                state.spatial_grid.rebuild(&page.objects);
+                state.rebuild_spatial_grid(&page.id, &page.objects);
                 state.selected_ids = vec![id.clone()];
                 state.editing_text_id = Some(id);
                 state.focus_text_edit = true;
@@ -975,32 +975,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
     }
 
     // Fase 8.1 & G4: Deteksi tahan pena (~500 ms) di akhir goresan untuk Shape Recognition
-    if state.auto_shape_enabled
-        && state.active_stroke_page_id.as_deref() == Some(&page.id)
-        && matches!(
-            state.current_tool,
-            ActiveTool::Pen | ActiveTool::Pencil | ActiveTool::Highlighter
-        )
-        && state.recognized_draft_shape.is_none()
-        && let Some(pts) = &state.draft_stroke
-        && let Some(last_move) = state.last_stroke_move_time
-    {
-        let elapsed = now.saturating_duration_since(last_move);
-        if elapsed >= std::time::Duration::from_millis(500) {
-            if let Some(recognized) = recognize_shape(pts) {
-                state.recognized_draft_shape = Some(recognized.clone());
-                state.snap_initial_shape = Some(recognized);
-                state.snap_flash_time = Some(Instant::now());
-                ui.ctx().request_repaint();
-            } else {
-                // Jangan cek berulang kali jika goresan bukan bentuk geometri hingga bergerak lagi
-                state.last_stroke_move_time = None;
-            }
-        } else {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(50));
-        }
-    }
+    update_hold_to_snap(ui, page, state, now);
 
     if response.drag_stopped() {
         state.active_alignment_guides.clear();
@@ -1027,7 +1002,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
             for obj in &mut page.objects {
                 prune_invalid_connector_control_points(obj, &shapes_snapshot);
             }
-            state.spatial_grid.rebuild(&page.objects);
+            state.rebuild_spatial_grid(&page.id, &page.objects);
         } else if let Some(corner) = state.resize_corner.take() {
             state.drag_start_pos = None;
             // Task 8.3: Jika selesai drag control point, bersihkan jika hampir segaris
@@ -1261,7 +1236,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 state.draft_connector_current = None;
                 state.connector_snap_candidate = None;
             }
-            state.spatial_grid.rebuild(&page.objects);
+            state.rebuild_spatial_grid(&page.id, &page.objects);
         } else if state.active_stroke_page_id.as_deref() == Some(&page.id) {
             state.active_stroke_page_id = None;
             state.last_stroke_move_time = None;
@@ -1359,7 +1334,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                         if is_line {
                             state.selected_ids = vec![new_id];
                         }
-                        state.spatial_grid.rebuild(&page.objects);
+                        state.rebuild_spatial_grid(&page.id, &page.objects);
                     } else {
                         page.objects.push(DrawObject::Stroke {
                             id: Uuid::new_v4().to_string(),
@@ -1369,7 +1344,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                             is_highlighter,
                             style: state.stroke_style,
                         });
-                        state.spatial_grid.rebuild(&page.objects);
+                        state.rebuild_spatial_grid(&page.id, &page.objects);
                         // Fase 8.6: Perbarui indeks OCR tulisan tangan otomatis
                         page.ocr_text = recognize_handwriting_from_strokes(&page.objects);
                     }
@@ -1404,7 +1379,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     if kind == ShapeKind::Line {
                         state.selected_ids = vec![new_id];
                     }
-                    state.spatial_grid.rebuild(&page.objects);
+                    state.rebuild_spatial_grid(&page.id, &page.objects);
                 }
             } else if let Some(start_end) = state.draft_connector_start.take() {
                 let stop_page_p = pointer_pos
@@ -1468,7 +1443,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     };
                     page.objects.push(new_conn);
                     state.selected_ids = vec![new_id];
-                    state.spatial_grid.rebuild(&page.objects);
+                    state.rebuild_spatial_grid(&page.id, &page.objects);
                 }
             } else if !state.lasso_points.is_empty()
                 && state.active_stroke_page_id.as_deref() == Some(&page.id)
@@ -1520,97 +1495,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
     render_zoom_target_indicator(&painter, state, page_to_screen);
 
     // Task 9.6: Quick Diagramming via Keyboard (Tab: Right / Child, Enter: Bottom / Sibling)
-    if state.editing_text_id.is_none()
-        && let Some((source_id, _)) = &updated_sel.single_shape_quick_dots
-    {
-        let tab_pressed = ui.input(|i| i.key_pressed(Key::Tab));
-        let enter_pressed = ui.input(|i| i.key_pressed(Key::Enter));
-        if tab_pressed || enter_pressed {
-            let target_site = if tab_pressed {
-                ConnectionSite::Right
-            } else {
-                ConnectionSite::Bottom
-            };
-            if let Some(source_obj) = page.objects.iter().find(|o| o.id() == source_id).cloned()
-                && let DrawObject::Shape {
-                    x: sx,
-                    y: sy,
-                    width: sw,
-                    height: sh,
-                    shape_type,
-                    color,
-                    stroke_width,
-                    fill,
-                    corner_radius,
-                    ..
-                } = source_obj
-            {
-                state.push_undo(&page.id, &page.objects);
-                let (nx, ny, nw, nh, opp_site) = next_shape_rect(
-                    (sx, sy, sw, sh),
-                    target_site,
-                    60.0,
-                    &page.objects,
-                    (page.width, page.height),
-                );
-                let new_shape_id = Uuid::new_v4().to_string();
-                let new_shape = DrawObject::Shape {
-                    id: new_shape_id.clone(),
-                    x: nx,
-                    y: ny,
-                    width: nw,
-                    height: nh,
-                    color: color.clone(),
-                    stroke_width,
-                    fill,
-                    shape_type,
-                    rotation: 0.0,
-                    corner_radius,
-                    curve_points: Vec::new(),
-                    label: Some(crate::model::ShapeLabel {
-                        text: String::new(),
-                        font_size: 16.0,
-                        color,
-                        alignment: crate::model::TextAlign::Center,
-                        vertical_alignment: crate::model::VerticalAlign::Middle,
-                    }),
-                    locked: false,
-                };
-                let new_conn = DrawObject::Connector {
-                    id: Uuid::new_v4().to_string(),
-                    start: ConnectorEnd::Attached {
-                        shape_id: source_id.clone(),
-                        site: target_site,
-                    },
-                    end: ConnectorEnd::Attached {
-                        shape_id: new_shape_id.clone(),
-                        site: opp_site,
-                    },
-                    route: ConnectorRoute::Orthogonal,
-                    control_points: Vec::new(),
-                    style: ConnectorStyle {
-                        stroke_color: ColorData {
-                            r: 40,
-                            g: 45,
-                            b: 55,
-                            a: 255,
-                        },
-                        stroke_width: 2.0,
-                        start_marker: MarkerKind::None,
-                        end_marker: MarkerKind::Arrow,
-                    },
-                    locked: false,
-                };
-                page.objects.push(new_shape);
-                page.objects.push(new_conn);
-                state.selected_ids = vec![new_shape_id.clone()];
-                state.editing_text_id = Some(new_shape_id);
-                state.focus_text_edit = true;
-                state.spatial_grid.rebuild(&page.objects);
-                ui.ctx().request_repaint();
-            }
-        }
-    }
+    handle_quick_diagramming_shortcuts(ui, page, state, &updated_sel);
 
     // Double-click pada control point connector untuk menghapus titik kontrol (Task 8.3)
     if response.double_clicked()
@@ -1712,7 +1597,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     |o| !matches!(o, DrawObject::Text { text, .. } if text.trim().is_empty()),
                 );
                 state.clean_redundant_top_undo(&page.id, &page.objects);
-                state.spatial_grid.rebuild(&page.objects);
+                state.rebuild_spatial_grid(&page.id, &page.objects);
             } else {
                 state.push_undo(&page.id, &page.objects);
                 let id = Uuid::new_v4().to_string();
@@ -1730,7 +1615,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                     alignment: state.text_alignment,
                 };
                 page.objects.push(new_text);
-                state.spatial_grid.rebuild(&page.objects);
+                state.rebuild_spatial_grid(&page.id, &page.objects);
                 state.selected_ids = vec![id.clone()];
                 state.editing_text_id = Some(id);
                 state.focus_text_edit = true;
@@ -1755,7 +1640,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 rotation: 0.0,
             };
             page.objects.push(new_note);
-            state.spatial_grid.rebuild(&page.objects);
+            state.rebuild_spatial_grid(&page.id, &page.objects);
             state.selected_ids = vec![id.clone()];
             state.editing_text_id = Some(id);
             state.focus_text_edit = true;
@@ -1858,7 +1743,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
                 is_highlighter,
                 style: state.stroke_style,
             });
-            state.spatial_grid.rebuild(&page.objects);
+            state.rebuild_spatial_grid(&page.id, &page.objects);
             page.ocr_text = recognize_handwriting_from_strokes(&page.objects);
             ui.ctx().request_repaint();
         } else if matches!(
@@ -2398,6 +2283,136 @@ fn render_active_draft_and_lasso(
             let p1 = page_to_screen(state.lasso_points[i - 1]);
             let p2 = page_to_screen(state.lasso_points[i]);
             painter.line_segment([p1, p2], stroke);
+        }
+    }
+}
+
+/// Mendeteksi jeda pena (~500 ms) di akhir goresan aktif untuk memicu pengenalan bentuk (*hold-to-snap*).
+fn update_hold_to_snap(ui: &Ui, page: &Page, state: &mut CanvasState, now: Instant) {
+    if state.auto_shape_enabled
+        && state.active_stroke_page_id.as_deref() == Some(&page.id)
+        && matches!(
+            state.current_tool,
+            ActiveTool::Pen | ActiveTool::Pencil | ActiveTool::Highlighter
+        )
+        && state.recognized_draft_shape.is_none()
+        && let Some(pts) = &state.draft_stroke
+        && let Some(last_move) = state.last_stroke_move_time
+    {
+        let elapsed = now.saturating_duration_since(last_move);
+        if elapsed >= std::time::Duration::from_millis(500) {
+            if let Some(recognized) = recognize_shape(pts) {
+                state.recognized_draft_shape = Some(recognized.clone());
+                state.snap_initial_shape = Some(recognized);
+                state.snap_flash_time = Some(Instant::now());
+                ui.ctx().request_repaint();
+            } else {
+                // Jangan cek berulang kali jika goresan bukan bentuk geometri hingga bergerak lagi
+                state.last_stroke_move_time = None;
+            }
+        } else {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(50));
+        }
+    }
+}
+
+/// Menangani pintasan keyboard Quick Diagramming (`Tab` untuk child kanan, `Enter` untuk sibling bawah).
+fn handle_quick_diagramming_shortcuts(
+    ui: &Ui,
+    page: &mut Page,
+    state: &mut CanvasState,
+    updated_sel: &SelectionData,
+) {
+    if state.editing_text_id.is_none()
+        && let Some((source_id, _)) = &updated_sel.single_shape_quick_dots
+    {
+        let tab_pressed = ui.input(|i| i.key_pressed(Key::Tab));
+        let enter_pressed = ui.input(|i| i.key_pressed(Key::Enter));
+        if tab_pressed || enter_pressed {
+            let target_site = if tab_pressed {
+                ConnectionSite::Right
+            } else {
+                ConnectionSite::Bottom
+            };
+            if let Some(source_obj) = page.objects.iter().find(|o| o.id() == source_id).cloned()
+                && let DrawObject::Shape {
+                    x: sx,
+                    y: sy,
+                    width: sw,
+                    height: sh,
+                    shape_type,
+                    color,
+                    stroke_width,
+                    fill,
+                    corner_radius,
+                    ..
+                } = source_obj
+            {
+                state.push_undo(&page.id, &page.objects);
+                let (nx, ny, nw, nh, opp_site) = next_shape_rect(
+                    (sx, sy, sw, sh),
+                    target_site,
+                    60.0,
+                    &page.objects,
+                    (page.width, page.height),
+                );
+                let new_shape_id = Uuid::new_v4().to_string();
+                let new_shape = DrawObject::Shape {
+                    id: new_shape_id.clone(),
+                    x: nx,
+                    y: ny,
+                    width: nw,
+                    height: nh,
+                    color: color.clone(),
+                    stroke_width,
+                    fill,
+                    shape_type,
+                    rotation: 0.0,
+                    corner_radius,
+                    curve_points: Vec::new(),
+                    label: Some(crate::model::ShapeLabel {
+                        text: String::new(),
+                        font_size: 16.0,
+                        color,
+                        alignment: crate::model::TextAlign::Center,
+                        vertical_alignment: crate::model::VerticalAlign::Middle,
+                    }),
+                    locked: false,
+                };
+                let new_conn = DrawObject::Connector {
+                    id: Uuid::new_v4().to_string(),
+                    start: ConnectorEnd::Attached {
+                        shape_id: source_id.clone(),
+                        site: target_site,
+                    },
+                    end: ConnectorEnd::Attached {
+                        shape_id: new_shape_id.clone(),
+                        site: opp_site,
+                    },
+                    route: ConnectorRoute::Orthogonal,
+                    control_points: Vec::new(),
+                    style: ConnectorStyle {
+                        stroke_color: ColorData {
+                            r: 40,
+                            g: 45,
+                            b: 55,
+                            a: 255,
+                        },
+                        stroke_width: 2.0,
+                        start_marker: MarkerKind::None,
+                        end_marker: MarkerKind::Arrow,
+                    },
+                    locked: false,
+                };
+                page.objects.push(new_shape);
+                page.objects.push(new_conn);
+                state.selected_ids = vec![new_shape_id.clone()];
+                state.editing_text_id = Some(new_shape_id);
+                state.focus_text_edit = true;
+                state.rebuild_spatial_grid(&page.id, &page.objects);
+                ui.ctx().request_repaint();
+            }
         }
     }
 }
