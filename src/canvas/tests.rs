@@ -1647,3 +1647,63 @@ fn test_spatial_grid_page_id_sync_and_reorder_consistency() {
         "spatial_grid must reflect new index 1 after bring_to_front"
     );
 }
+
+#[test]
+fn test_palm_rejection_thresholds() {
+    use crate::geometry::should_reject_palm_input;
+
+    let pts = vec![StrokePoint::new(100.0, 100.0, 1.0)];
+
+    // Multi-touch aktif selalu ditolak
+    assert!(should_reject_palm_input(
+        &pts,
+        Pos2::new(105.0, 105.0),
+        0.016,
+        true
+    ));
+
+    // Lompatan > 180 pt dalam < 80 ms ditolak sebagai sentuhan telapak tangan
+    assert!(should_reject_palm_input(
+        &pts,
+        Pos2::new(300.0, 100.0),
+        0.02,
+        false
+    ));
+
+    // Goresan normal cepat (<= 180 pt) tetap diterima
+    assert!(!should_reject_palm_input(
+        &pts,
+        Pos2::new(150.0, 100.0),
+        0.016,
+        false
+    ));
+
+    // Lompatan besar dengan jeda >= 80 ms tetap diterima
+    assert!(!should_reject_palm_input(
+        &pts,
+        Pos2::new(300.0, 100.0),
+        0.1,
+        false
+    ));
+}
+
+#[test]
+fn test_zoom_window_stroke_width_parity() {
+    let mut state = CanvasState {
+        stroke_width: 3.0,
+        ..Default::default()
+    };
+
+    state.current_tool = ActiveTool::Pen;
+    assert!((super::zoom_window::zoom_stroke_width(&state) - 3.0).abs() < f32::EPSILON);
+
+    state.current_tool = ActiveTool::Pencil;
+    assert!((super::zoom_window::zoom_stroke_width(&state) - 2.5).abs() < f32::EPSILON);
+
+    state.stroke_width = 1.0;
+    assert!((super::zoom_window::zoom_stroke_width(&state) - 1.0).abs() < f32::EPSILON);
+
+    state.stroke_width = 4.0;
+    state.current_tool = ActiveTool::Highlighter;
+    assert!((super::zoom_window::zoom_stroke_width(&state) - 24.0).abs() < f32::EPSILON);
+}
