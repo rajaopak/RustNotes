@@ -2,12 +2,22 @@ use super::primitives::{draw_non_stroke_object, draw_paper_pattern};
 use super::state::CanvasState;
 use super::types::ActiveTool;
 use crate::geometry::{
-    object_bounds, recognize_handwriting_from_strokes, smooth_stroke_points,
-    tessellate_stroke_styled,
+    object_bounds, recognize_handwriting_from_strokes, should_reject_palm_input,
+    smooth_stroke_points, tessellate_stroke_styled,
 };
 use crate::model::{DrawObject, Page, StrokePoint};
 use eframe::egui::{self, Color32, PointerButton, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 use uuid::Uuid;
+
+pub(super) fn zoom_stroke_width(state: &CanvasState) -> f32 {
+    if state.current_tool == ActiveTool::Highlighter {
+        state.stroke_width * 6.0
+    } else if state.current_tool == ActiveTool::Pencil {
+        (state.stroke_width - 0.5).max(1.0)
+    } else {
+        state.stroke_width
+    }
+}
 
 /// Fase 8.3: Render kanvas Zoom Window (panel menulis detail halus dengan auto-scroll ke kanan).
 /// Mengembalikan `true` jika ada perubahan objek pada halaman.
@@ -156,6 +166,7 @@ pub fn render_zoom_window_canvas(
                 };
                 state.zoom_draft_stroke =
                     Some(vec![StrokePoint::new(page_p.x, page_p.y, pressure)]);
+                state.last_stroke_move_time = Some(std::time::Instant::now());
                 state.zoom_wrote_in_advance_zone = page_p.x >= adv_page_x;
             }
         }
@@ -173,10 +184,20 @@ pub fn render_zoom_window_canvas(
             }
             _ => {
                 if state.zoom_draft_stroke.is_some() {
+                    let now = std::time::Instant::now();
+                    let dt_secs = state
+                        .last_stroke_move_time
+                        .map(|t| now.saturating_duration_since(t).as_secs_f32())
+                        .unwrap_or(0.016);
+                    let multi_touch = ui.input(|i| i.multi_touch().is_some());
                     let min_dist = 1.5 / scale;
                     let should_push = state.zoom_draft_stroke.as_ref().is_some_and(|pts| {
-                        pts.last()
-                            .is_none_or(|last| (page_p - last.to_pos2()).length() >= min_dist)
+                        let rejected = state.palm_rejection_enabled
+                            && should_reject_palm_input(pts, page_p, dt_secs, multi_touch);
+                        !rejected
+                            && pts
+                                .last()
+                                .is_none_or(|last| (page_p - last.to_pos2()).length() >= min_dist)
                     });
                     if should_push {
                         let (tid, touch_force) = ui.input(|i| {
@@ -206,9 +227,10 @@ pub fn render_zoom_window_canvas(
                         if let Some(pts) = &mut state.zoom_draft_stroke {
                             pts.push(StrokePoint::new(page_p.x, page_p.y, pressure));
                         }
-                    }
-                    if page_p.x >= adv_page_x {
-                        state.zoom_wrote_in_advance_zone = true;
+                        state.last_stroke_move_time = Some(now);
+                        if page_p.x >= adv_page_x {
+                            state.zoom_wrote_in_advance_zone = true;
+                        }
                     }
                 }
             }
@@ -218,6 +240,8 @@ pub fn render_zoom_window_canvas(
     if response.drag_stopped() {
         state.eraser_undo_pushed = false;
         state.last_whole_erase_pos = None;
+        state.active_touch_id = None;
+        state.last_stroke_move_time = None;
         if let Some(mut pts) = state.zoom_draft_stroke.take() {
             if let Some(pos) = pointer_pos {
                 let page_p = zw_to_page(pos);
@@ -239,13 +263,7 @@ pub fn render_zoom_window_canvas(
             if !pts.is_empty() {
                 state.push_undo(&page.id, &page.objects);
                 let is_highlighter = state.current_tool == ActiveTool::Highlighter;
-                let stroke_width = if is_highlighter {
-                    state.stroke_width * 6.0
-                } else if state.current_tool == ActiveTool::Pencil {
-                    (state.stroke_width - 0.5).max(1.0)
-                } else {
-                    state.stroke_width
-                };
+                let stroke_width = zoom_stroke_width(state);
                 let color = if is_highlighter {
                     let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
                     Color32::from_rgba_unmultiplied(
@@ -282,11 +300,7 @@ pub fn render_zoom_window_canvas(
     // 5. Render draft stroke yang sedang ditulis di Zoom Window
     if let Some(pts) = &state.zoom_draft_stroke {
         let is_highlighter = state.current_tool == ActiveTool::Highlighter;
-        let stroke_w = if is_highlighter {
-            state.stroke_width * 6.0 * scale
-        } else {
-            state.stroke_width * scale
-        };
+        let stroke_w = zoom_stroke_width(state) * scale;
         let color = if is_highlighter {
             let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
             Color32::from_rgba_unmultiplied(
