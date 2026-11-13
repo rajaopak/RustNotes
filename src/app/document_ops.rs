@@ -775,6 +775,7 @@ impl RustNotesApp {
                     nb.pages = pages;
                     self.library.notebooks.push(nb);
                     self.force_save_notebook(&nb_id);
+                    self.sync_library_index();
                     if !self.open_notebook_ids.contains(&nb_id) {
                         self.open_notebook_ids.push(nb_id.clone());
                     }
