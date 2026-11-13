@@ -1707,3 +1707,67 @@ fn test_zoom_window_stroke_width_parity() {
     state.current_tool = ActiveTool::Highlighter;
     assert!((super::zoom_window::zoom_stroke_width(&state) - 24.0).abs() < f32::EPSILON);
 }
+
+#[test]
+fn test_multi_page_spatial_grid_sync_after_paste_and_delete() {
+    let mut state = CanvasState {
+        eraser_mode: EraserMode::WholeStroke,
+        ..Default::default()
+    };
+
+    let mut page_a = Page::new(PageTemplate::Blank);
+    let mut page_b = Page::new(PageTemplate::Blank);
+
+    let stroke_a = DrawObject::Stroke {
+        id: "stroke-a".to_string(),
+        points: vec![
+            StrokePoint::new(40.0, 40.0, 1.0),
+            StrokePoint::new(80.0, 40.0, 1.0),
+        ],
+        color: ColorData {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+        width: 3.0,
+        is_highlighter: false,
+        style: StrokeStyle::Solid,
+    };
+    page_a.objects.push(stroke_a.clone());
+
+    // 1. Rebuild grid untuk page_a, lalu paste ke page_b
+    state.rebuild_spatial_grid(&page_a.id, &page_a.objects);
+    assert_eq!(
+        state.spatial_grid_page_id.as_deref(),
+        Some(page_a.id.as_str())
+    );
+
+    state.object_clipboard = vec![stroke_a];
+    state.paste_clipboard(&mut page_b, Some(Pos2::new(200.0, 200.0)));
+    assert_eq!(
+        state.spatial_grid_page_id.as_deref(),
+        Some(page_b.id.as_str()),
+        "paste_clipboard on page_b must update spatial_grid_page_id to page_b"
+    );
+
+    // 2. Kembali hapus di page_a; erase_at harus mendeteksi page_id berbeda dan membangun ulang grid page_a
+    assert!(
+        state.erase_at(&mut page_a, Pos2::new(60.0, 40.0), 10.0),
+        "erase_at on page_a must succeed after paste_clipboard on page_b"
+    );
+    assert!(page_a.objects.is_empty());
+    assert_eq!(
+        state.spatial_grid_page_id.as_deref(),
+        Some(page_a.id.as_str())
+    );
+
+    // 3. delete_selected pada page_b harus menyinkronkan spatial_grid_page_id kembali ke page_b
+    state.selected_ids = vec![page_b.objects[0].id().to_string()];
+    state.delete_selected(&mut page_b);
+    assert!(page_b.objects.is_empty());
+    assert_eq!(
+        state.spatial_grid_page_id.as_deref(),
+        Some(page_b.id.as_str())
+    );
+}
