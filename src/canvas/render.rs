@@ -1861,81 +1861,13 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         state.last_interacted_page_id = Some(page.id.clone());
     }
 
-    response.context_menu(|ui| {
-        if has_selection_on_this_page {
-            let count = page
-                .objects
-                .iter()
-                .filter(|o| state.selected_ids.contains(&o.id().to_string()))
-                .count();
-            ui.label(format!("{} objek dipilih", count));
-            ui.separator();
-            if ui.button("📋 Salin (Ctrl+C)").clicked() {
-                state.copy_selected(&page.objects);
-                ui.close_menu();
-            }
-            if ui.button("✂ Potong (Ctrl+X)").clicked() {
-                state.cut_selected(page);
-                ui.close_menu();
-            }
-            if ui.button("📄 Gandakan (Ctrl+D)").clicked() {
-                state.duplicate_selected(page);
-                ui.close_menu();
-            }
-            if ui.button("🗑 Hapus (Del)").clicked() {
-                state.delete_selected(page);
-                ui.close_menu();
-            }
-            ui.separator();
-            let is_locked = state.is_selected_locked(page);
-            let lock_label = if is_locked {
-                "🔓 Buka Kunci (Ctrl+L)"
-            } else {
-                "🔒 Kunci Objek (Ctrl+L)"
-            };
-            if ui.button(lock_label).clicked() {
-                state.toggle_lock_selected(page);
-                ui.close_menu();
-            }
-            ui.separator();
-            if ui.button("🔄 Balik Horizontal").clicked() {
-                state.flip_selected_horizontal(page);
-                ui.close_menu();
-            }
-            if ui.button("🔃 Balik Vertikal").clicked() {
-                state.flip_selected_vertical(page);
-                ui.close_menu();
-            }
-            ui.separator();
-            if ui.button("⬆ Pindah ke Depan").clicked() {
-                state.bring_selected_to_front(page);
-                ui.close_menu();
-            }
-            if ui.button("⬇ Pindah ke Belakang").clicked() {
-                state.send_selected_to_back(page);
-                ui.close_menu();
-            }
-        } else {
-            if !state.object_clipboard.is_empty() {
-                if ui.button("📋 Tempel Objek (Ctrl+V)").clicked() {
-                    state.paste_clipboard(page, Some(click_page_p));
-                    state.last_interacted_page_id = Some(page.id.clone());
-                    ui.close_menu();
-                }
-                ui.separator();
-            }
-            if ui.button("🖼 Tempel Gambar dari Clipboard").clicked() {
-                state.request_paste_image = Some((page.id.clone(), click_page_p));
-                state.last_interacted_page_id = Some(page.id.clone());
-                ui.close_menu();
-            }
-            ui.separator();
-            if ui.button("Pilih Semua (Ctrl+A)").clicked() {
-                state.selected_ids = page.objects.iter().map(|o| o.id().to_string()).collect();
-                ui.close_menu();
-            }
-        }
-    });
+    render_canvas_context_menu(
+        &response,
+        page,
+        state,
+        click_page_p,
+        has_selection_on_this_page,
+    );
 
     response
 }
@@ -2415,6 +2347,91 @@ fn handle_quick_diagramming_shortcuts(
             }
         }
     }
+}
+
+/// Merender menu konteks klik-kanan pada kanvas halaman (aksi seleksi atau tempel kanvas kosong).
+fn render_canvas_context_menu(
+    response: &Response,
+    page: &mut Page,
+    state: &mut CanvasState,
+    click_page_p: Pos2,
+    has_selection_on_this_page: bool,
+) {
+    response.context_menu(|ui| {
+        if has_selection_on_this_page {
+            let count = page
+                .objects
+                .iter()
+                .filter(|o| state.selected_ids.contains(&o.id().to_string()))
+                .count();
+            ui.label(format!("{} objek dipilih", count));
+            ui.separator();
+            if ui.button("📋 Salin (Ctrl+C)").clicked() {
+                state.copy_selected(&page.objects);
+                ui.close_menu();
+            }
+            if ui.button("✂ Potong (Ctrl+X)").clicked() {
+                state.cut_selected(page);
+                ui.close_menu();
+            }
+            if ui.button("📄 Gandakan (Ctrl+D)").clicked() {
+                state.duplicate_selected(page);
+                ui.close_menu();
+            }
+            if ui.button("🗑 Hapus (Del)").clicked() {
+                state.delete_selected(page);
+                ui.close_menu();
+            }
+            ui.separator();
+            let is_locked = state.is_selected_locked(page);
+            let lock_label = if is_locked {
+                "🔓 Buka Kunci (Ctrl+L)"
+            } else {
+                "🔒 Kunci Objek (Ctrl+L)"
+            };
+            if ui.button(lock_label).clicked() {
+                state.toggle_lock_selected(page);
+                ui.close_menu();
+            }
+            ui.separator();
+            if ui.button("🔄 Balik Horizontal").clicked() {
+                state.flip_selected_horizontal(page);
+                ui.close_menu();
+            }
+            if ui.button("🔃 Balik Vertikal").clicked() {
+                state.flip_selected_vertical(page);
+                ui.close_menu();
+            }
+            ui.separator();
+            if ui.button("⬆ Pindah ke Depan").clicked() {
+                state.bring_selected_to_front(page);
+                ui.close_menu();
+            }
+            if ui.button("⬇ Pindah ke Belakang").clicked() {
+                state.send_selected_to_back(page);
+                ui.close_menu();
+            }
+        } else {
+            if !state.object_clipboard.is_empty() {
+                if ui.button("📋 Tempel Objek (Ctrl+V)").clicked() {
+                    state.paste_clipboard(page, Some(click_page_p));
+                    state.last_interacted_page_id = Some(page.id.clone());
+                    ui.close_menu();
+                }
+                ui.separator();
+            }
+            if ui.button("🖼 Tempel Gambar dari Clipboard").clicked() {
+                state.request_paste_image = Some((page.id.clone(), click_page_p));
+                state.last_interacted_page_id = Some(page.id.clone());
+                ui.close_menu();
+            }
+            ui.separator();
+            if ui.button("Pilih Semua (Ctrl+A)").clicked() {
+                state.selected_ids = page.objects.iter().map(|o| o.id().to_string()).collect();
+                ui.close_menu();
+            }
+        }
+    });
 }
 
 /// Mengambil TouchId dan gaya tekanan (pressure/force) dari daftar event egui.
