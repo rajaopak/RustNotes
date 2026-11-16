@@ -300,22 +300,10 @@ pub fn draw_shape_primitive(
             }
         }
         ShapeKind::Curve => {
-            if curve_points.len() >= 2 {
-                let beziers = crate::geometry::curves::fit_catmull_rom_to_bezier(curve_points);
-                for bez in beziers {
-                    let sampled = crate::geometry::curves::sample_cubic_bezier(
-                        bez[0], bez[1], bez[2], bez[3], 16,
-                    );
-                    for w in sampled.windows(2) {
-                        let p_a = page_to_screen(w[0].to_pos2());
-                        let p_b = page_to_screen(w[1].to_pos2());
-                        painter.line_segment([p_a, p_b], stroke);
-                    }
-                }
-            } else {
-                let p1 = page_to_screen(Pos2::new(x, y));
-                let p2 = page_to_screen(Pos2::new(x + width, y + height));
-                painter.line_segment([p1, p2], stroke);
+            let poly =
+                crate::geometry::curve_shape_polyline(x, y, width, height, rotation, curve_points);
+            for w in poly.windows(2) {
+                painter.line_segment([page_to_screen(w[0]), page_to_screen(w[1])], stroke);
             }
         }
         ShapeKind::Triangle

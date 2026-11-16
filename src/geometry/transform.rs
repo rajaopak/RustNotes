@@ -171,11 +171,15 @@ pub fn flip_object_horizontal(obj: &mut DrawObject, center_x: f32) {
             x,
             width,
             shape_type,
+            curve_points,
             locked,
             ..
         } => {
             if *locked {
                 return;
+            }
+            for cp in curve_points.iter_mut() {
+                cp.x = 2.0 * center_x - cp.x;
             }
             match shape_type {
                 ShapeKind::ScaleneTriangle { u0, u1, u2, .. } => {
@@ -196,9 +200,7 @@ pub fn flip_object_horizontal(obj: &mut DrawObject, center_x: f32) {
         DrawObject::Text {
             x, text, font_size, ..
         } => {
-            let lines: Vec<&str> = text.lines().collect();
-            let max_line_len = lines.iter().map(|l| l.len()).max().unwrap_or(1) as f32;
-            let width = (max_line_len * *font_size * 0.6).max(80.0);
+            let (width, _) = super::primitives::text_approx_size(text, *font_size);
             *x = 2.0 * center_x - (*x + width);
         }
         DrawObject::StickyNote {
@@ -256,11 +258,15 @@ pub fn flip_object_vertical(obj: &mut DrawObject, center_y: f32) {
             y,
             height,
             shape_type,
+            curve_points,
             locked,
             ..
         } => {
             if *locked {
                 return;
+            }
+            for cp in curve_points.iter_mut() {
+                cp.y = 2.0 * center_y - cp.y;
             }
             match shape_type {
                 ShapeKind::ScaleneTriangle { v0, v1, v2, .. } => {
@@ -281,8 +287,7 @@ pub fn flip_object_vertical(obj: &mut DrawObject, center_y: f32) {
         DrawObject::Text {
             y, text, font_size, ..
         } => {
-            let line_count = text.lines().count().max(1) as f32;
-            let height = line_count * *font_size * 1.3;
+            let (_, height) = super::primitives::text_approx_size(text, *font_size);
             *y = 2.0 * center_y - (*y + height);
         }
         DrawObject::StickyNote {
@@ -359,6 +364,7 @@ pub fn rotate_object(obj: &mut DrawObject, origin: Pos2, angle_rad: f32) {
             height,
             rotation,
             shape_type,
+            curve_points,
             locked,
             ..
         } => {
@@ -401,9 +407,17 @@ pub fn rotate_object(obj: &mut DrawObject, origin: Pos2, angle_rad: f32) {
                     }
                 }
                 _ => {
-                    let (nx, ny) = rotate_pt(*x + *width / 2.0, *y + *height / 2.0);
+                    let old_cx = *x + *width / 2.0;
+                    let old_cy = *y + *height / 2.0;
+                    let (nx, ny) = rotate_pt(old_cx, old_cy);
+                    let dx = nx - old_cx;
+                    let dy = ny - old_cy;
                     *x = nx - *width / 2.0;
                     *y = ny - *height / 2.0;
+                    for cp in curve_points.iter_mut() {
+                        cp.x += dx;
+                        cp.y += dy;
+                    }
                     *rotation = (*rotation + angle_rad).rem_euclid(std::f32::consts::TAU);
                 }
             }

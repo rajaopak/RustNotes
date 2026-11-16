@@ -1,5 +1,69 @@
-use crate::model::{DrawObject, ShapeKind};
+use crate::model::{DrawObject, Point2D, ShapeKind, StrokePoint};
 use eframe::egui::{Pos2, Rect, Vec2};
+
+/// Menghasilkan sampel goresan kanonik (setelah adaptive smoothing dan stabilisasi pressure)
+/// yang menyatukan representasi geometri antara rendering (`render_stroke_object`) dan hit-testing (Track 3).
+pub fn stroke_visual_samples(points: &[StrokePoint]) -> Vec<StrokePoint> {
+    if points.len() <= 2 {
+        points
+            .iter()
+            .map(|p| StrokePoint {
+                x: p.x,
+                y: p.y,
+                pressure: super::tessellation::sanitize_pressure(p.pressure),
+            })
+            .collect()
+    } else {
+        super::tessellation::smooth_stroke_points(points, 3)
+    }
+}
+
+/// Menghasilkan rangkaian titik polyline kanonik untuk `ShapeKind::Curve`
+/// dengan memperhitungkan titik kontrol kurva Catmull-Rom/Bézier dan rotasi terhadap pusat bentuk (Track 3).
+pub fn curve_shape_polyline(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    rotation: f32,
+    curve_points: &[Point2D],
+) -> Vec<Pos2> {
+    let center = Pos2::new(x + width * 0.5, y + height * 0.5);
+    let cos_a = rotation.cos();
+    let sin_a = rotation.sin();
+    let rot_pt = |p: Pos2| -> Pos2 {
+        if rotation.abs() > 1e-5 {
+            let dx = p.x - center.x;
+            let dy = p.y - center.y;
+            Pos2::new(
+                center.x + dx * cos_a - dy * sin_a,
+                center.y + dx * sin_a + dy * cos_a,
+            )
+        } else {
+            p
+        }
+    };
+
+    if curve_points.len() >= 2 {
+        let beziers = super::curves::fit_catmull_rom_to_bezier(curve_points);
+        let mut all_pts = Vec::with_capacity(beziers.len() * 16 + 1);
+        for (i, seg) in beziers.iter().enumerate() {
+            let sampled = super::curves::sample_cubic_bezier(seg[0], seg[1], seg[2], seg[3], 16);
+            let skip = if i == 0 { 0 } else { 1 };
+            for p in sampled.into_iter().skip(skip) {
+                all_pts.push(rot_pt(p.to_pos2()));
+            }
+        }
+        if all_pts.len() >= 2 {
+            return all_pts;
+        }
+    }
+
+    vec![
+        rot_pt(Pos2::new(x, y)),
+        rot_pt(Pos2::new(x + width, y + height)),
+    ]
+}
 
 pub fn text_approx_size(text: &str, font_size: f32) -> (f32, f32) {
     let lines: Vec<&str> = text.lines().collect();
@@ -46,10 +110,31 @@ pub fn object_bounds(obj: &DrawObject) -> Rect {
             stroke_width,
             rotation,
             shape_type,
+            curve_points,
             ..
         } => {
             let half = *stroke_width / 2.0;
-            if *shape_type == ShapeKind::Line {
+            if *shape_type == ShapeKind::Curve {
+                let poly = curve_shape_polyline(*x, *y, *width, *height, *rotation, curve_points);
+                let mut min_x = f32::INFINITY;
+                let mut min_y = f32::INFINITY;
+                let mut max_x = f32::NEG_INFINITY;
+                let mut max_y = f32::NEG_INFINITY;
+                for p in poly {
+                    min_x = min_x.min(p.x);
+                    min_y = min_y.min(p.y);
+                    max_x = max_x.max(p.x);
+                    max_y = max_y.max(p.y);
+                }
+                if !min_x.is_finite() {
+                    Rect::NOTHING
+                } else {
+                    Rect::from_min_max(
+                        Pos2::new(min_x - half, min_y - half),
+                        Pos2::new(max_x + half, max_y + half),
+                    )
+                }
+            } else if *shape_type == ShapeKind::Line {
                 let mut p1 = Pos2::new(*x, *y);
                 let mut p2 = Pos2::new(*x + *width, *y + *height);
                 if rotation.abs() > 1e-4 {
@@ -140,8 +225,8 @@ pub fn object_bounds(obj: &DrawObject) -> Rect {
             let cy = *y + *height / 2.0;
             let cos_a = rotation.cos().abs();
             let sin_a = rotation.sin().abs();
-            let bb_w = *width * cos_a + *height * sin_a;
-            let bb_h = *width * sin_a + *height * cos_a;
+            let bb_w = width.abs() * cos_a + height.abs() * sin_a;
+            let bb_h = width.abs() * sin_a + height.abs() * cos_a;
             Rect::from_center_size(Pos2::new(cx, cy), Vec2::new(bb_w, bb_h))
         }
         DrawObject::Equation {
@@ -174,12 +259,26 @@ pub fn object_bounds(obj: &DrawObject) -> Rect {
             style,
             ..
         } => {
+            let both_free = matches!(
+                (start, end),
+                (
+                    crate::model::ConnectorEnd::Free { .. },
+                    crate::model::ConnectorEnd::Free { .. }
+                )
+            );
             let mut pts = Vec::new();
-            if let crate::model::ConnectorEnd::Free { x, y } = start {
-                pts.push(Pos2::new(*x, *y));
+            if both_free && let Some(poly) = super::connectors::connector_polyline(obj, &[]) {
+                for p in poly {
+                    pts.push(p.to_pos2());
+                }
             }
-            if let crate::model::ConnectorEnd::Free { x, y } = end {
-                pts.push(Pos2::new(*x, *y));
+            if pts.is_empty() {
+                if let crate::model::ConnectorEnd::Free { x, y } = start {
+                    pts.push(Pos2::new(*x, *y));
+                }
+                if let crate::model::ConnectorEnd::Free { x, y } = end {
+                    pts.push(Pos2::new(*x, *y));
+                }
             }
             for cp in control_points {
                 pts.push(Pos2::new(cp.x, cp.y));
@@ -208,7 +307,7 @@ pub fn object_bounds(obj: &DrawObject) -> Rect {
 }
 
 /// Menghitung bounding box objek dengan konteks seluruh objek pada halaman,
-/// sehingga Connector yang ujungnya terikat (Attached) ke Shape memiliki bounds akurat.
+/// sehingga Connector yang ujungnya terikat (Attached) maupun Orthogonal/Curved memiliki bounds akurat.
 pub fn object_bounds_with_context(obj: &DrawObject, all_objects: &[DrawObject]) -> Rect {
     if let DrawObject::Connector {
         start,
@@ -218,12 +317,25 @@ pub fn object_bounds_with_context(obj: &DrawObject, all_objects: &[DrawObject]) 
         ..
     } = obj
     {
-        let ((p_start, _), (p_end, _)) =
-            super::connectors::resolve_connector_endpoints(start, end, all_objects);
-        let mut min_x = p_start.x.min(p_end.x);
-        let mut min_y = p_start.y.min(p_end.y);
-        let mut max_x = p_start.x.max(p_end.x);
-        let mut max_y = p_start.y.max(p_end.y);
+        let mut min_x = f32::INFINITY;
+        let mut min_y = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
+        if let Some(poly) = super::connectors::connector_polyline(obj, all_objects) {
+            for p in poly {
+                min_x = min_x.min(p.x);
+                min_y = min_y.min(p.y);
+                max_x = max_x.max(p.x);
+                max_y = max_y.max(p.y);
+            }
+        } else {
+            let ((p_start, _), (p_end, _)) =
+                super::connectors::resolve_connector_endpoints(start, end, all_objects);
+            min_x = p_start.x.min(p_end.x);
+            min_y = p_start.y.min(p_end.y);
+            max_x = p_start.x.max(p_end.x);
+            max_y = p_start.y.max(p_end.y);
+        }
         for cp in control_points {
             min_x = min_x.min(cp.x);
             min_y = min_y.min(cp.y);
@@ -243,7 +355,7 @@ pub fn combined_bounds(objects: &[&DrawObject]) -> Option<Rect> {
     let mut combined: Option<Rect> = None;
     for obj in objects {
         let b = object_bounds(obj);
-        if b.is_positive() {
+        if b.is_finite() && b.min.x <= b.max.x && b.min.y <= b.max.y {
             combined = match combined {
                 Some(acc) => Some(acc.union(b)),
                 None => Some(b),
@@ -262,6 +374,44 @@ pub fn point_to_segment_dist(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     let t = ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0);
     let proj = a + ab * t;
     p.distance(proj)
+}
+
+/// Menghitung jarak terdekat antara dua segmen garis `a1-a2` dan `b1-b2` (Track 3).
+pub fn segment_to_segment_dist(a1: Pos2, a2: Pos2, b1: Pos2, b2: Pos2) -> f32 {
+    if segments_cross(a1, a2, b1, b2) {
+        return 0.0;
+    }
+    point_to_segment_dist(a1, b1, b2)
+        .min(point_to_segment_dist(a2, b1, b2))
+        .min(point_to_segment_dist(b1, a1, a2))
+        .min(point_to_segment_dist(b2, a1, a2))
+}
+
+/// Menghitung jarak terdekat dari titik `p` ke garis batas luar poligon tertutup (Track 3).
+pub fn point_to_polygon_outline_dist(p: Pos2, polygon: &[Pos2]) -> f32 {
+    match polygon.len() {
+        0 => f32::INFINITY,
+        1 => p.distance(polygon[0]),
+        2 => point_to_segment_dist(p, polygon[0], polygon[1]),
+        n => {
+            let mut min_d = f32::INFINITY;
+            for i in 0..n {
+                let d = point_to_segment_dist(p, polygon[i], polygon[(i + 1) % n]);
+                if d < min_d {
+                    min_d = d;
+                }
+            }
+            min_d
+        }
+    }
+}
+
+/// Menghitung jarak terdekat dari titik `p` ke poligon tertutup (`0.0` jika di dalam atau tepat di tepi) (Track 3).
+pub fn point_to_polygon_dist(p: Pos2, polygon: &[Pos2]) -> f32 {
+    if polygon.len() >= 3 && point_in_polygon(p, polygon) {
+        return 0.0;
+    }
+    point_to_polygon_outline_dist(p, polygon)
 }
 
 pub fn shape_vertices(shape_type: ShapeKind, x: f32, y: f32, width: f32, height: f32) -> Vec<Pos2> {
@@ -343,11 +493,22 @@ pub fn point_in_polygon(p: Pos2, polygon: &[Pos2]) -> bool {
     if polygon.len() < 3 {
         return false;
     }
+    const BOUNDARY_EPS: f32 = 1e-4;
     let mut inside = false;
     let mut j = polygon.len() - 1;
+    let mut valid_edges = 0usize;
     for i in 0..polygon.len() {
         let pi = polygon[i];
         let pj = polygon[j];
+        if (pi - pj).length_sq() < 1e-10 {
+            j = i;
+            continue;
+        }
+        valid_edges += 1;
+        // Titik tepat pada simpul (vertex) atau sisi (edge) poligon secara deterministik dianggap di dalam
+        if point_to_segment_dist(p, pj, pi) <= BOUNDARY_EPS {
+            return true;
+        }
         let dy = pj.y - pi.y;
         if (pi.y > p.y) != (pj.y > p.y)
             && dy.abs() > 1e-9
@@ -357,14 +518,58 @@ pub fn point_in_polygon(p: Pos2, polygon: &[Pos2]) -> bool {
         }
         j = i;
     }
+    if valid_edges < 3 {
+        return false;
+    }
     inside
 }
 
 pub fn segments_cross(a: Pos2, b: Pos2, c: Pos2, d: Pos2) -> bool {
-    let ccw = |p1: Pos2, p2: Pos2, p3: Pos2| -> bool {
-        (p3.y - p1.y) * (p2.x - p1.x) > (p2.y - p1.y) * (p3.x - p1.x)
+    const EPS: f32 = 1e-5;
+    // Fast AABB rejection dengan toleransi EPS
+    let ab_min_x = a.x.min(b.x) - EPS;
+    let ab_max_x = a.x.max(b.x) + EPS;
+    let ab_min_y = a.y.min(b.y) - EPS;
+    let ab_max_y = a.y.max(b.y) + EPS;
+    let cd_min_x = c.x.min(d.x) - EPS;
+    let cd_max_x = c.x.max(d.x) + EPS;
+    let cd_min_y = c.y.min(d.y) - EPS;
+    let cd_max_y = c.y.max(d.y) + EPS;
+    if ab_max_x < cd_min_x || cd_max_x < ab_min_x || ab_max_y < cd_min_y || cd_max_y < ab_min_y {
+        return false;
+    }
+
+    let ab_len_sq = (b - a).length_sq();
+    let cd_len_sq = (d - c).length_sq();
+    if ab_len_sq <= EPS * EPS && cd_len_sq <= EPS * EPS {
+        return a.distance(c) <= EPS;
+    }
+    if ab_len_sq <= EPS * EPS {
+        return point_to_segment_dist(a, c, d) <= EPS;
+    }
+    if cd_len_sq <= EPS * EPS {
+        return point_to_segment_dist(c, a, b) <= EPS;
+    }
+
+    // Endpoint touching, T-junction, atau collinear overlapping segments
+    if point_to_segment_dist(a, c, d) <= EPS
+        || point_to_segment_dist(b, c, d) <= EPS
+        || point_to_segment_dist(c, a, b) <= EPS
+        || point_to_segment_dist(d, a, b) <= EPS
+    {
+        return true;
+    }
+
+    let cross = |p1: Pos2, p2: Pos2, p3: Pos2| -> f32 {
+        (p2.x - p1.x) * (p3.y - p1.y) - (p2.y - p1.y) * (p3.x - p1.x)
     };
-    ccw(a, c, d) != ccw(b, c, d) && ccw(a, b, c) != ccw(a, b, d)
+    let d1 = cross(a, b, c);
+    let d2 = cross(a, b, d);
+    let d3 = cross(c, d, a);
+    let d4 = cross(c, d, b);
+
+    ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0))
+        && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0))
 }
 
 pub fn screen_to_page_point(screen_pos: Pos2, page_origin: Pos2, zoom: f32) -> Pos2 {
@@ -385,7 +590,10 @@ pub fn object_boundary_vertices_with_context(
     all_objects: Option<&[DrawObject]>,
 ) -> Vec<Pos2> {
     match obj {
-        DrawObject::Stroke { points, .. } => points.iter().map(|p| p.to_pos2()).collect(),
+        DrawObject::Stroke { points, .. } => stroke_visual_samples(points)
+            .into_iter()
+            .map(|p| p.to_pos2())
+            .collect(),
         DrawObject::Shape {
             x,
             y,
@@ -393,9 +601,13 @@ pub fn object_boundary_vertices_with_context(
             height,
             rotation,
             shape_type,
+            corner_radius,
+            curve_points,
             ..
         } => {
-            if *shape_type == ShapeKind::Line {
+            if *shape_type == ShapeKind::Curve {
+                curve_shape_polyline(*x, *y, *width, *height, *rotation, curve_points)
+            } else if *shape_type == ShapeKind::Line {
                 let mut p1 = Pos2::new(*x, *y);
                 let mut p2 = Pos2::new(*x + *width, *y + *height);
                 if rotation.abs() > 1e-4 {
@@ -412,6 +624,19 @@ pub fn object_boundary_vertices_with_context(
                     p2 = rot_pt(p2);
                 }
                 vec![p1, p2]
+            } else if *shape_type == ShapeKind::Rectangle && *corner_radius > 0.0 {
+                super::curves::rounded_rect_vertices(
+                    *x,
+                    *y,
+                    *width,
+                    *height,
+                    *corner_radius,
+                    *rotation,
+                    4,
+                )
+                .into_iter()
+                .map(|p| p.to_pos2())
+                .collect()
             } else {
                 let mut verts = shape_vertices(*shape_type, *x, *y, *width, *height);
                 if rotation.abs() > 1e-4 {
@@ -504,8 +729,19 @@ pub fn object_boundary_vertices_with_context(
             control_points,
             ..
         } => {
-            if let Some(objects) = all_objects
-                && let Some(poly) = crate::geometry::connectors::connector_polyline(obj, objects)
+            let both_free = matches!(
+                (start, end),
+                (
+                    crate::model::ConnectorEnd::Free { .. },
+                    crate::model::ConnectorEnd::Free { .. }
+                )
+            );
+            if let Some(objects) = all_objects {
+                if let Some(poly) = crate::geometry::connectors::connector_polyline(obj, objects) {
+                    return poly.into_iter().map(|p| Pos2::new(p.x, p.y)).collect();
+                }
+            } else if both_free
+                && let Some(poly) = crate::geometry::connectors::connector_polyline(obj, &[])
             {
                 return poly.into_iter().map(|p| Pos2::new(p.x, p.y)).collect();
             }
