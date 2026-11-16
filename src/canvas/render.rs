@@ -363,11 +363,14 @@ fn render_active_draft_and_lasso(
             }
         } else if let Some(pts) = &state.draft_stroke {
             let is_highlighter = state.current_tool == ActiveTool::Highlighter;
-            let stroke_width = if is_highlighter {
-                state.stroke_width * 6.0 * state.zoom
+            let page_stroke_width = if is_highlighter {
+                state.stroke_width * 6.0
+            } else if state.current_tool == ActiveTool::Pencil {
+                (state.stroke_width - 0.5).max(1.0)
             } else {
-                state.stroke_width * state.zoom
+                state.stroke_width
             };
+            let stroke_width = page_stroke_width * state.zoom;
             let color = if is_highlighter {
                 let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
                 Color32::from_rgba_unmultiplied(
