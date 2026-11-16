@@ -3759,3 +3759,80 @@ fn test_sampling_engine_high_frequency_benchmark() {
         "Pemrosesan 1000 sampel high-frequency harus sangat cepat (< 50ms), aktual: {elapsed:?}"
     );
 }
+
+#[test]
+fn test_track2_pen_pencil_highlighter_rendering_and_width_parity() {
+    let ctx = eframe::egui::Context::default();
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "track2-tool-parity".to_string();
+
+    for (tool, expected_width) in [
+        (ActiveTool::Pen, 3.0_f32),
+        (ActiveTool::Pencil, 2.5_f32),
+        (ActiveTool::Highlighter, 18.0_f32),
+    ] {
+        let mut state = CanvasState {
+            current_tool: tool,
+            stroke_width: 3.0,
+            zoom: 1.5,
+            ..Default::default()
+        };
+        page.objects.clear();
+
+        let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+        let to_screen = |x: f32, y: f32| origin + Vec2::new(x * 1.5, y * 1.5);
+
+        let p0 = to_screen(40.0, 40.0);
+        let p1 = to_screen(60.0, 50.0);
+        let p2 = to_screen(45.0, 70.0); // Sudut tajam
+
+        step_test_canvas(
+            &ctx,
+            &mut page,
+            &mut state,
+            vec![
+                eframe::egui::Event::PointerMoved(p0),
+                eframe::egui::Event::PointerButton {
+                    pos: p0,
+                    button: eframe::egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+                eframe::egui::Event::PointerMoved(p1),
+                eframe::egui::Event::PointerMoved(p2),
+            ],
+        );
+        assert!(state.draft_stroke.is_some());
+
+        step_test_canvas(
+            &ctx,
+            &mut page,
+            &mut state,
+            vec![eframe::egui::Event::PointerButton {
+                pos: p2,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+
+        assert_eq!(page.objects.len(), 1);
+        match &page.objects[0] {
+            DrawObject::Stroke {
+                width,
+                is_highlighter,
+                points,
+                ..
+            } => {
+                assert!((*width - expected_width).abs() < 1e-4);
+                assert_eq!(*is_highlighter, tool == ActiveTool::Highlighter);
+                assert_eq!(points.len(), 3);
+            }
+            other => panic!("Expected Stroke, got {other:?}"),
+        }
+
+        // Render frame berikutnya untuk memverifikasi pembuatan dan pembacaan mesh_cache
+        step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+        assert_eq!(state.mesh_cache.len(), 1);
+    }
+}

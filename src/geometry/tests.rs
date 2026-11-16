@@ -4382,3 +4382,283 @@ fn test_adaptive_filtering_preserves_corners_pressure_and_short_strokes() {
     assert_eq!(filtered_collinear.last().unwrap().x, 10.0);
     assert!(filtered_collinear.len() < collinear_pts.len());
 }
+
+fn assert_mesh_valid_and_finite(mesh: &eframe::egui::Mesh, label: &str) {
+    assert!(
+        !mesh.vertices.is_empty(),
+        "Mesh vertices must not be empty for {label}"
+    );
+    assert!(
+        !mesh.indices.is_empty(),
+        "Mesh indices must not be empty for {label}"
+    );
+    assert_eq!(
+        mesh.indices.len() % 3,
+        0,
+        "Mesh indices must form valid triangles for {label}"
+    );
+    for &idx in &mesh.indices {
+        assert!(
+            (idx as usize) < mesh.vertices.len(),
+            "Triangle index out of bounds for {label}"
+        );
+    }
+    for v in &mesh.vertices {
+        assert!(
+            v.pos.x.is_finite() && v.pos.y.is_finite(),
+            "Mesh vertex must be finite for {label}"
+        );
+    }
+}
+
+#[test]
+fn test_track2_basic_strokes_and_dense_samples() {
+    // 1. Single-point stroke
+    let single = vec![StrokePoint::new(40.0, 40.0, 0.7)];
+    let m_single = tessellate_stroke(&single, 4.0, Color32::BLACK, |p| p);
+    assert_mesh_valid_and_finite(&m_single, "single-point");
+
+    // 2. Very short stroke (0.15 pt)
+    let very_short = vec![
+        StrokePoint::new(50.0, 50.0, 0.6),
+        StrokePoint::new(50.15, 50.0, 0.6),
+    ];
+    let m_short = tessellate_stroke(&very_short, 3.0, Color32::BLACK, |p| p);
+    assert_mesh_valid_and_finite(&m_short, "very-short");
+
+    // 3. Horizontal, Vertical, Diagonal, Long Straight
+    let horiz = vec![
+        StrokePoint::new(10.0, 20.0, 0.5),
+        StrokePoint::new(110.0, 20.0, 0.5),
+    ];
+    let vert = vec![
+        StrokePoint::new(20.0, 10.0, 0.5),
+        StrokePoint::new(20.0, 110.0, 0.5),
+    ];
+    let diag = vec![
+        StrokePoint::new(10.0, 10.0, 0.5),
+        StrokePoint::new(90.0, 90.0, 0.5),
+    ];
+    let long_straight: Vec<StrokePoint> = (0..=20)
+        .map(|i| StrokePoint::new(i as f32 * 25.0, 100.0, 0.6))
+        .collect();
+
+    for (name, stroke) in [
+        ("horizontal", &horiz),
+        ("vertical", &vert),
+        ("diagonal", &diag),
+        ("long-straight", &long_straight),
+    ] {
+        let smoothed = smooth_stroke_points(stroke, 3);
+        let mesh = tessellate_stroke(&smoothed, 3.5, Color32::BLACK, |p| p);
+        assert_mesh_valid_and_finite(&mesh, name);
+    }
+
+    // 4. Curved stroke & Dense input samples
+    let dense_curve: Vec<StrokePoint> = (0..=200)
+        .map(|i| {
+            let t = i as f32 * 0.05;
+            StrokePoint::new(20.0 + t * 15.0, 100.0 + (t * 2.0).sin() * 25.0, 0.6)
+        })
+        .collect();
+    let smoothed_dense = smooth_stroke_points(&dense_curve, 3);
+    let m_dense = tessellate_stroke(&smoothed_dense, 3.0, Color32::BLACK, |p| p);
+    assert_mesh_valid_and_finite(&m_dense, "dense-curve");
+}
+
+#[test]
+fn test_track2_adaptive_smoothing_corner_preservation_and_no_overshoot() {
+    // 1. Sudut lancip tajam (V-shape) wajib mempertahankan titik puncak tanpa tumpul berlebihan
+    let v_corner = vec![
+        StrokePoint::new(10.0, 10.0, 0.6),
+        StrokePoint::new(30.0, 60.0, 0.8), // Puncak tajam V
+        StrokePoint::new(50.0, 10.0, 0.6),
+    ];
+    let smoothed_v = smooth_stroke_points(&v_corner, 4);
+    assert_eq!(smoothed_v.first().unwrap().to_pos2(), Pos2::new(10.0, 10.0));
+    assert_eq!(smoothed_v.last().unwrap().to_pos2(), Pos2::new(50.0, 10.0));
+    assert!(
+        smoothed_v
+            .iter()
+            .any(|p| (p.x - 30.0).abs() < 1e-3 && (p.y - 60.0).abs() < 1e-3),
+        "Sudut lancip tajam (30, 60) tidak boleh tumpul akibat smoothing"
+    );
+
+    // 2. Sudut siku-siku 90 derajat pada garis panjang tidak boleh memotong sudut jauh dari titik belok
+    let l_corner = vec![
+        StrokePoint::new(0.0, 0.0, 0.5),
+        StrokePoint::new(100.0, 0.0, 0.5),
+        StrokePoint::new(100.0, 100.0, 0.5),
+    ];
+    let smoothed_l = smooth_stroke_points(&l_corner, 4);
+    let min_dist_to_corner = smoothed_l
+        .iter()
+        .map(|p| (p.to_pos2() - Pos2::new(100.0, 0.0)).length())
+        .fold(f32::INFINITY, f32::min);
+    assert!(
+        min_dist_to_corner < 4.5,
+        "Sudut 90 derajat pada segmen panjang harus tetap dekat dengan titik sudut (100,0), aktual: {min_dist_to_corner}"
+    );
+
+    // 3. Bebas overshoot (Convex-hull property): seluruh titik hasil smoothing harus berada di dalam bounding box titik asli
+    let wave = vec![
+        StrokePoint::new(0.0, 50.0, 0.4),
+        StrokePoint::new(25.0, 80.0, 0.7),
+        StrokePoint::new(50.0, 20.0, 0.9),
+        StrokePoint::new(75.0, 80.0, 0.5),
+        StrokePoint::new(100.0, 50.0, 0.3),
+    ];
+    let smoothed_wave = smooth_stroke_points(&wave, 5);
+    for pt in &smoothed_wave {
+        assert!(
+            pt.x >= 0.0 - 1e-4 && pt.x <= 100.0 + 1e-4,
+            "Overshoot X terdeteksi: {}",
+            pt.x
+        );
+        assert!(
+            pt.y >= 20.0 - 1e-4 && pt.y <= 80.0 + 1e-4,
+            "Overshoot Y terdeteksi: {}",
+            pt.y
+        );
+    }
+}
+
+#[test]
+fn test_track2_pressure_sanitization_stabilization_and_transitions() {
+    // 1. Nilai pressure tidak valid (NaN, Infinity, negatif, > 1.0) harus disanitasi dengan aman
+    assert!((sanitize_pressure(f32::NAN) - 0.5).abs() < 1e-4);
+    assert!((sanitize_pressure(f32::INFINITY) - 0.5).abs() < 1e-4);
+    assert!((sanitize_pressure(-3.0) - 0.05).abs() < 1e-4);
+    assert!((sanitize_pressure(5.0) - 1.0).abs() < 1e-4);
+
+    let r_nan = stroke_radius_at_pressure(4.0, f32::NAN, false);
+    let r_neg_w = stroke_radius_at_pressure(-10.0, -2.0, false);
+    assert!(r_nan.is_finite() && r_nan >= 0.5);
+    assert!(r_neg_w.is_finite() && r_neg_w >= 0.5);
+
+    // 2. Gradual pressure increase & decrease
+    let ramp_up: Vec<StrokePoint> = (0..=10)
+        .map(|i| StrokePoint::new(i as f32 * 10.0, 50.0, 0.1 + i as f32 * 0.09))
+        .collect();
+    let smoothed_up = smooth_stroke_points(&ramp_up, 3);
+    assert!(
+        smoothed_up.last().unwrap().pressure > smoothed_up.first().unwrap().pressure,
+        "Gradual pressure increase harus tercermin pada hasil smoothing"
+    );
+    for w in smoothed_up.windows(2) {
+        assert!(
+            w[1].pressure + 1e-4 >= w[0].pressure,
+            "Gradual pressure increase harus monoton naik tanpa osilasi"
+        );
+    }
+
+    // 3. Peredaman spike noise 1-sampel vs pelestarian perubahan tajam
+    let noisy = vec![
+        StrokePoint::new(0.0, 0.0, 0.50),
+        StrokePoint::new(10.0, 0.0, 0.62), // Noise spike kecil lalu langsung turun kembali
+        StrokePoint::new(20.0, 0.0, 0.50),
+    ];
+    let stabilized = stabilize_stroke_pressures(&noisy);
+    assert!(
+        stabilized[1] < 0.62 && stabilized[1] > 0.50,
+        "Spike noise 1-sampel harus diredam oleh stabilize_stroke_pressures"
+    );
+
+    let intentional_step = vec![
+        StrokePoint::new(0.0, 0.0, 0.20),
+        StrokePoint::new(10.0, 0.0, 0.90),
+        StrokePoint::new(20.0, 0.0, 0.90),
+    ];
+    let step_stabilized = stabilize_stroke_pressures(&intentional_step);
+    assert!((step_stabilized[1] - 0.90).abs() < 1e-4);
+}
+
+#[test]
+fn test_track2_tessellation_round_cap_round_join_zoom_and_self_intersection() {
+    // 1. Round join pada sudut tajam 90 derajat & hairpin 170 derajat tidak menghasilkan lonjakan miter berlebihan
+    let sharp_turn = vec![
+        StrokePoint::new(20.0, 20.0, 1.0),
+        StrokePoint::new(60.0, 20.0, 1.0),
+        StrokePoint::new(25.0, 24.0, 1.0), // Belokan balik tajam (~173 derajat)
+    ];
+    let base_width = 10.0; // Radius = 5.0
+    let mesh = tessellate_stroke(&sharp_turn, base_width, Color32::BLACK, |p| p);
+    assert_mesh_valid_and_finite(&mesh, "sharp-hairpin-join");
+
+    // Tidak boleh ada vertex yang melampaui radius r = 5.0 (+ toleransi kecil) dari titik sudut (60, 20) ke arah kanan
+    let max_x = mesh
+        .vertices
+        .iter()
+        .map(|v| v.pos.x)
+        .fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        max_x <= 60.0 + 5.0 + 0.2,
+        "Round join tidak boleh menghasilkan lonjakan miter di luar radius (max_x = {max_x})"
+    );
+    assert!(
+        max_x >= 60.0 + 4.5,
+        "Round join harus mempertahankan ketebalan penuh radius pada puncak belokan (max_x = {max_x})"
+    );
+
+    // 2. Konsistensi geometri pada berbagai tingkat zoom (0.4x, 1.0x, 2.5x) untuk garis tipis & tebal
+    let curve_pts = smooth_stroke_points(
+        &[
+            StrokePoint::new(10.0, 10.0, 0.3),
+            StrokePoint::new(30.0, 40.0, 0.8),
+            StrokePoint::new(50.0, 15.0, 0.4),
+            StrokePoint::new(80.0, 45.0, 1.0),
+        ],
+        3,
+    );
+    for &width in &[1.0_f32, 4.0_f32, 16.0_f32] {
+        let page_mesh = tessellate_stroke(&curve_pts, width, Color32::BLACK, |p| p);
+        assert_mesh_valid_and_finite(&page_mesh, "page-mesh");
+        for &zoom in &[0.4_f32, 1.0_f32, 2.5_f32] {
+            let origin = Pos2::new(50.0, -30.0);
+            let direct_mesh = tessellate_stroke(&curve_pts, width * zoom, Color32::BLACK, |p| {
+                origin + eframe::egui::Vec2::new(p.x * zoom, p.y * zoom)
+            });
+            assert_eq!(
+                page_mesh.vertices.len(),
+                direct_mesh.vertices.len(),
+                "Jumlah vertex harus konsisten pada width={width}, zoom={zoom}"
+            );
+            for (vp, vd) in page_mesh.vertices.iter().zip(direct_mesh.vertices.iter()) {
+                let expected = origin + eframe::egui::Vec2::new(vp.pos.x * zoom, vp.pos.y * zoom);
+                assert!((expected.x - vd.pos.x).abs() < 1e-3);
+                assert!((expected.y - vd.pos.y).abs() < 1e-3);
+            }
+        }
+    }
+}
+
+#[test]
+fn test_track2_tessellation_performance_and_vertex_count_benchmark() {
+    // 1. Garis lurus 50 titik
+    let straight_pts: Vec<StrokePoint> = (0..50)
+        .map(|i| StrokePoint::new(i as f32 * 4.0, 50.0, 0.6))
+        .collect();
+    // 2. Kurva gelombang kompleks 500 titik
+    let complex_pts: Vec<StrokePoint> = (0..500)
+        .map(|i| {
+            let t = i as f32 * 0.08;
+            let p = 0.25 + 0.70 * (t * 0.5).sin().abs();
+            StrokePoint::new(t * 10.0, 150.0 + t.sin() * 30.0, p)
+        })
+        .collect();
+
+    let start = std::time::Instant::now();
+    let smoothed_straight = smooth_stroke_points(&straight_pts, 3);
+    let mesh_straight = tessellate_stroke(&smoothed_straight, 3.0, Color32::BLACK, |p| p);
+
+    let smoothed_complex = smooth_stroke_points(&complex_pts, 3);
+    let mesh_complex = tessellate_stroke(&smoothed_complex, 3.5, Color32::BLACK, |p| p);
+    let elapsed = start.elapsed();
+
+    assert_mesh_valid_and_finite(&mesh_straight, "benchmark-straight");
+    assert_mesh_valid_and_finite(&mesh_complex, "benchmark-complex");
+    assert!(
+        elapsed.as_millis() < 50,
+        "Smoothing + tessellation 500-point complex stroke harus sangat cepat (< 50ms), aktual: {elapsed:?}"
+    );
+}
