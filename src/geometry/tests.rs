@@ -4662,3 +4662,555 @@ fn test_track2_tessellation_performance_and_vertex_count_benchmark() {
         "Smoothing + tessellation 500-point complex stroke harus sangat cepat (< 50ms), aktual: {elapsed:?}"
     );
 }
+
+#[test]
+fn test_track3_precision_stroke_hit_testing_and_pressure() {
+    // 1. Single-point stroke (dot) & Short stroke
+    let dot = DrawObject::Stroke {
+        id: "t3-dot".into(),
+        points: vec![StrokePoint::new(100.0, 100.0, 0.8)],
+        color: dummy_color(),
+        width: 10.0,
+        is_highlighter: false,
+        style: StrokeStyle::Solid,
+    };
+    let expected_dot_r = stroke_radius_at_pressure(10.0, 0.8, false);
+    assert!(hit_test_object(&dot, Pos2::new(100.0, 100.0), 0.0));
+    assert!(hit_test_object(
+        &dot,
+        Pos2::new(100.0 + expected_dot_r - 0.1, 100.0),
+        0.0
+    ));
+    assert!(!hit_test_object(
+        &dot,
+        Pos2::new(100.0 + expected_dot_r + 1.5, 100.0),
+        0.5
+    ));
+
+    // 2. Variable-pressure stroke: tipis di awal (pressure 0.05) -> tebal di akhir (pressure 1.0)
+    let tapered = DrawObject::Stroke {
+        id: "t3-tapered".into(),
+        points: vec![
+            StrokePoint::new(0.0, 50.0, 0.05),
+            StrokePoint::new(100.0, 50.0, 1.0),
+        ],
+        color: dummy_color(),
+        width: 20.0,
+        is_highlighter: false,
+        style: StrokeStyle::Solid,
+    };
+    // Pada x=5 (dekat awal, r ~ 4.5), titik y=58 (offset 8.0) berada di luar radius tipis
+    assert!(!hit_test_object(&tapered, Pos2::new(5.0, 58.0), 0.5));
+    // Pada x=95 (dekat akhir, r ~ 12.1), titik y=58 (offset 8.0) berada di dalam radius tebal!
+    assert!(hit_test_object(&tapered, Pos2::new(95.0, 58.0), 0.5));
+
+    // 3. Curved stroke: hit-testing mengikuti jalur kurva terhaluskan (Chaikin), bukan sekadar titik mentah
+    let arch = DrawObject::Stroke {
+        id: "t3-arch".into(),
+        points: vec![
+            StrokePoint::new(0.0, 0.0, 0.7),
+            StrokePoint::new(0.0, 80.0, 0.7),
+            StrokePoint::new(80.0, 80.0, 0.7),
+            StrokePoint::new(80.0, 0.0, 0.7),
+        ],
+        color: dummy_color(),
+        width: 4.0,
+        is_highlighter: false,
+        style: StrokeStyle::Solid,
+    };
+    let samples = stroke_visual_samples(match &arch {
+        DrawObject::Stroke { points, .. } => points,
+        _ => unreachable!(),
+    });
+    for sp in &samples {
+        assert!(
+            hit_test_object(&arch, sp.to_pos2(), 0.5),
+            "Setiap titik pada sampel visual kanonik harus terdeteksi oleh hit_test_object"
+        );
+    }
+
+    // 4. Konsistensi toleransi pada berbagai tingkat zoom (0.5x, 1.0x, 2.5x)
+    for &zoom in &[0.5_f32, 1.0_f32, 2.5_f32] {
+        let screen_tol = 6.0;
+        let page_tol = screen_tol / zoom;
+        assert!(hit_test_object(
+            &tapered,
+            Pos2::new(50.0, 50.0 + page_tol),
+            page_tol
+        ));
+    }
+}
+
+#[test]
+fn test_track3_shape_and_curve_hit_testing() {
+    // 1. ShapeKind::Curve dengan curve_points melengkung ke atas (0,0) -> (50,80) -> (100,0)
+    let curve_shape = DrawObject::Shape {
+        id: "t3-curve".into(),
+        shape_type: ShapeKind::Curve,
+        x: 0.0,
+        y: 0.0,
+        width: 100.0,
+        height: 80.0,
+        color: dummy_color(),
+        stroke_width: 4.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: vec![
+            Point2D::new(0.0, 0.0),
+            Point2D::new(50.0, 80.0),
+            Point2D::new(100.0, 0.0),
+        ],
+    };
+    // Titik puncak kurva di (50, 80) harus HIT
+    assert!(hit_test_object(&curve_shape, Pos2::new(50.0, 80.0), 3.0));
+    // Titik tengah garis lurus imajiner antara ujung (50, 0) jauh dari lengkungan kurva dan harus MISS!
+    assert!(!hit_test_object(&curve_shape, Pos2::new(50.0, 0.0), 3.0));
+
+    // 2. ShapeKind::Rectangle dengan corner_radius besar (40.0 pada kotak 100x100)
+    let rounded_rect = DrawObject::Shape {
+        id: "t3-rrect".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 0.0,
+        y: 0.0,
+        width: 100.0,
+        height: 100.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: Some(dummy_color()),
+        rotation: 0.0,
+        corner_radius: 40.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    // Pusat dan sisi lurus harus HIT
+    assert!(hit_test_object(&rounded_rect, Pos2::new(50.0, 50.0), 2.0));
+    assert!(hit_test_object(&rounded_rect, Pos2::new(50.0, 0.5), 2.0));
+    // Sudut lancip bounding box (99, 99) berada jauh di luar busur corner_radius=40 dan harus MISS!
+    assert!(!hit_test_object(&rounded_rect, Pos2::new(99.0, 99.0), 2.0));
+
+    // 3. Hollow Rectangle berukuran sangat kecil (4x4) dengan toleransi lebih besar (6.0) tidak boleh gagal akibat shrink inversion
+    let tiny_hollow_rect = DrawObject::Shape {
+        id: "t3-tiny-rect".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 50.0,
+        y: 50.0,
+        width: 4.0,
+        height: 4.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    assert!(hit_test_object(
+        &tiny_hollow_rect,
+        Pos2::new(50.0, 52.0),
+        6.0
+    ));
+
+    // 4. Ellipse dengan rasio aspek ekstrem (rx = 150, ry = 15)
+    let wide_ellipse = DrawObject::Shape {
+        id: "t3-wide-ellipse".into(),
+        shape_type: ShapeKind::Ellipse,
+        x: 50.0,
+        y: 85.0,
+        width: 300.0,
+        height: 30.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    // Tepat di tepi kanan ekstrem (350, 100) + offset 3.0 -> HIT dengan tol 5.0
+    assert!(hit_test_object(&wide_ellipse, Pos2::new(353.0, 100.0), 5.0));
+    // Tepat di tepi atas (200, 85) - offset 3.0 -> HIT dengan tol 5.0
+    assert!(hit_test_object(&wide_ellipse, Pos2::new(200.0, 82.0), 5.0));
+    // Di bagian tengah kosong elips berongga (200, 100) -> jarak ke tepi terdekat adalah 14.0 -> MISS dengan tol 5.0
+    assert!(!hit_test_object(
+        &wide_ellipse,
+        Pos2::new(200.0, 100.0),
+        5.0
+    ));
+}
+
+#[test]
+fn test_track3_rotated_objects_hit_testing_and_bounds() {
+    let angles = [
+        0.0_f32,
+        std::f32::consts::FRAC_PI_4,
+        std::f32::consts::FRAC_PI_2,
+        std::f32::consts::PI,
+        1.15_f32,
+    ];
+    for &angle in &angles {
+        // 1. Rotated Hollow Diamond
+        let diamond = DrawObject::Shape {
+            id: "t3-rot-diamond".into(),
+            shape_type: ShapeKind::Diamond,
+            x: 100.0,
+            y: 100.0,
+            width: 120.0,
+            height: 60.0,
+            color: dummy_color(),
+            stroke_width: 3.0,
+            fill: None,
+            rotation: angle,
+            corner_radius: 0.0,
+            label: None,
+            locked: false,
+            curve_points: Vec::new(),
+        };
+        let verts = object_boundary_vertices(&diamond);
+        let b = object_bounds(&diamond);
+        for &v in &verts {
+            assert!(
+                b.contains(v),
+                "Simpul batas objek berotasi ({v:?}) wajib berada di dalam object_bounds ({b:?}) pada sudut {angle}"
+            );
+            assert!(
+                hit_test_object(&diamond, v, 1.0),
+                "Simpul batas objek berotasi wajib terkena hit_test_object pada sudut {angle}"
+            );
+        }
+        // Pusat diamond berongga (160, 130) harus MISS
+        assert!(!hit_test_object(&diamond, Pos2::new(160.0, 130.0), 2.0));
+
+        // 2. Rotated Text, StickyNote, Image, Equation
+        let text_obj = DrawObject::Text {
+            id: "t3-rot-text".into(),
+            x: 200.0,
+            y: 200.0,
+            text: "Precision Geometry".into(),
+            font_size: 20.0,
+            color: dummy_color(),
+            rotation: angle,
+            font_family: FontFamilyPreset::SansSerif,
+            bold: false,
+            italic: false,
+            alignment: TextAlign::Left,
+        };
+        let t_verts = object_boundary_vertices(&text_obj);
+        let t_center = Pos2::new(
+            (t_verts[0].x + t_verts[2].x) * 0.5,
+            (t_verts[0].y + t_verts[2].y) * 0.5,
+        );
+        assert!(hit_test_object(&text_obj, t_center, 1.0));
+
+        let eq_obj = DrawObject::Equation {
+            id: "t3-rot-eq".into(),
+            latex: r"\frac{a^2 + b^2}{c}".into(),
+            x: 300.0,
+            y: 250.0,
+            font_size: 22.0,
+            scale: 1.0,
+            color: dummy_color(),
+            rotation: angle,
+            locked: false,
+        };
+        let eq_verts = object_boundary_vertices(&eq_obj);
+        let eq_center = Pos2::new(
+            (eq_verts[0].x + eq_verts[2].x) * 0.5,
+            (eq_verts[0].y + eq_verts[2].y) * 0.5,
+        );
+        assert!(hit_test_object(&eq_obj, eq_center, 1.0));
+    }
+}
+
+#[test]
+fn test_track3_geometric_primitives_edge_cases() {
+    // 1. segments_cross edge cases
+    let a = Pos2::new(0.0, 0.0);
+    let b = Pos2::new(10.0, 0.0);
+
+    // Endpoint touching
+    assert!(segments_cross(
+        a,
+        b,
+        Pos2::new(10.0, 0.0),
+        Pos2::new(10.0, 10.0)
+    ));
+    // T-junction (endpoint di tengah segmen lain)
+    assert!(segments_cross(
+        a,
+        b,
+        Pos2::new(5.0, 0.0),
+        Pos2::new(5.0, 10.0)
+    ));
+    // Collinear overlapping
+    assert!(segments_cross(
+        a,
+        b,
+        Pos2::new(5.0, 0.0),
+        Pos2::new(15.0, 0.0)
+    ));
+    assert!(segments_cross(
+        a,
+        b,
+        Pos2::new(2.0, 0.0),
+        Pos2::new(8.0, 0.0)
+    ));
+    // Collinear disjoint
+    assert!(!segments_cross(
+        a,
+        b,
+        Pos2::new(10.1, 0.0),
+        Pos2::new(20.0, 0.0)
+    ));
+    // Degenerate zero-length segment di atas segmen lain vs di luar
+    assert!(segments_cross(
+        Pos2::new(4.0, 0.0),
+        Pos2::new(4.0, 0.0),
+        a,
+        b
+    ));
+    assert!(!segments_cross(
+        Pos2::new(4.0, 2.0),
+        Pos2::new(4.0, 2.0),
+        a,
+        b
+    ));
+
+    // 2. point_in_polygon edge cases (boundary, vertices, repeated vertices, CW & CCW)
+    let poly_with_dups = vec![
+        Pos2::new(0.0, 0.0),
+        Pos2::new(0.0, 0.0), // Duplikat simpul
+        Pos2::new(100.0, 0.0),
+        Pos2::new(100.0, 100.0),
+        Pos2::new(100.0, 100.0), // Duplikat simpul
+        Pos2::new(0.0, 100.0),
+    ];
+    // Tepat di simpul sudut
+    assert!(point_in_polygon(Pos2::new(0.0, 0.0), &poly_with_dups));
+    assert!(point_in_polygon(Pos2::new(100.0, 100.0), &poly_with_dups));
+    // Tepat di tepi horizontal & vertikal
+    assert!(point_in_polygon(Pos2::new(50.0, 0.0), &poly_with_dups));
+    assert!(point_in_polygon(Pos2::new(100.0, 50.0), &poly_with_dups));
+    assert!(point_in_polygon(Pos2::new(0.0, 50.0), &poly_with_dups));
+    // Poligon urutan terbalik (CW vs CCW)
+    let mut poly_rev = poly_with_dups.clone();
+    poly_rev.reverse();
+    assert!(point_in_polygon(Pos2::new(50.0, 50.0), &poly_rev));
+    assert!(point_in_polygon(Pos2::new(50.0, 0.0), &poly_rev));
+    assert!(!point_in_polygon(Pos2::new(150.0, 50.0), &poly_rev));
+
+    // 3. segment_to_segment_dist & point_to_polygon_dist
+    assert_eq!(
+        segment_to_segment_dist(
+            Pos2::new(0.0, 0.0),
+            Pos2::new(10.0, 0.0),
+            Pos2::new(5.0, -5.0),
+            Pos2::new(5.0, 5.0)
+        ),
+        0.0
+    );
+    assert!(
+        (segment_to_segment_dist(
+            Pos2::new(0.0, 0.0),
+            Pos2::new(10.0, 0.0),
+            Pos2::new(0.0, 4.0),
+            Pos2::new(10.0, 4.0)
+        ) - 4.0)
+            .abs()
+            < 1e-4
+    );
+    assert_eq!(point_to_polygon_dist(Pos2::new(50.0, 50.0), &poly_rev), 0.0);
+    assert!((point_to_polygon_dist(Pos2::new(106.0, 50.0), &poly_rev) - 6.0).abs() < 1e-4);
+}
+
+#[test]
+fn test_track3_connector_routing_and_attached_hit_testing() {
+    let shape_a = DrawObject::Shape {
+        id: "t3-sa".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 50.0,
+        y: 50.0,
+        width: 80.0,
+        height: 60.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    let shape_b = DrawObject::Shape {
+        id: "t3-sb".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 250.0,
+        y: 170.0,
+        width: 80.0,
+        height: 60.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    let conn = DrawObject::Connector {
+        id: "t3-conn".into(),
+        start: crate::model::ConnectorEnd::Attached {
+            shape_id: "t3-sa".into(),
+            site: ConnectionSite::Right,
+        },
+        end: crate::model::ConnectorEnd::Attached {
+            shape_id: "t3-sb".into(),
+            site: ConnectionSite::Left,
+        },
+        route: crate::model::ConnectorRoute::Orthogonal,
+        control_points: Vec::new(),
+        style: crate::model::ConnectorStyle {
+            stroke_color: dummy_color(),
+            stroke_width: 3.0,
+            start_marker: crate::model::MarkerKind::None,
+            end_marker: crate::model::MarkerKind::Arrow,
+        },
+        locked: false,
+    };
+    let objects = vec![shape_a, shape_b, conn.clone()];
+    let poly = connector_polyline(&conn, &objects).expect("connector polyline");
+
+    // Setiap titik sepanjang jalur orthogonal harus terdeteksi oleh hit_test_object_with_context
+    for pt in &poly {
+        assert!(
+            hit_test_object_with_context(&conn, pt.to_pos2(), 2.0, Some(&objects)),
+            "Titik jalur konektor {pt:?} harus terdeteksi oleh hit_test_object_with_context"
+        );
+    }
+    // Titik jauh dari konektor harus MISS
+    assert!(!hit_test_object_with_context(
+        &conn,
+        Pos2::new(10.0, 300.0),
+        4.0,
+        Some(&objects)
+    ));
+}
+
+#[test]
+fn test_track3_spatial_grid_equivalence_and_lifecycle() {
+    let mut objects = vec![
+        // 0: Horizontal line dengan height=0
+        DrawObject::Shape {
+            id: "sg-hline".into(),
+            shape_type: ShapeKind::Line,
+            x: 20.0,
+            y: 40.0,
+            width: 120.0,
+            height: 0.0,
+            color: dummy_color(),
+            stroke_width: 0.0,
+            fill: None,
+            rotation: 0.0,
+            corner_radius: 0.0,
+            label: None,
+            locked: false,
+            curve_points: Vec::new(),
+        },
+        // 1: Variable-pressure curved stroke
+        DrawObject::Stroke {
+            id: "sg-stroke".into(),
+            points: vec![
+                StrokePoint::new(50.0, 50.0, 0.2),
+                StrokePoint::new(120.0, 110.0, 0.9),
+                StrokePoint::new(200.0, 60.0, 0.5),
+            ],
+            color: dummy_color(),
+            width: 8.0,
+            is_highlighter: false,
+            style: StrokeStyle::Solid,
+        },
+        // 2: Rotated rounded rectangle
+        DrawObject::Shape {
+            id: "sg-rrect".into(),
+            shape_type: ShapeKind::Rectangle,
+            x: 180.0,
+            y: 140.0,
+            width: 110.0,
+            height: 70.0,
+            color: dummy_color(),
+            stroke_width: 3.0,
+            fill: Some(dummy_color()),
+            rotation: 0.65,
+            corner_radius: 16.0,
+            label: None,
+            locked: false,
+            curve_points: Vec::new(),
+        },
+        // 3: Attached orthogonal connector
+        DrawObject::Connector {
+            id: "sg-conn".into(),
+            start: crate::model::ConnectorEnd::Attached {
+                shape_id: "sg-rrect".into(),
+                site: ConnectionSite::Right,
+            },
+            end: crate::model::ConnectorEnd::Free { x: 420.0, y: 260.0 },
+            route: crate::model::ConnectorRoute::Orthogonal,
+            control_points: Vec::new(),
+            style: crate::model::ConnectorStyle::default(),
+            locked: false,
+        },
+    ];
+
+    let mut grid = SpatialGrid::new(80.0);
+    grid.rebuild(&objects);
+
+    // Verifikasi ekuivalensi penuh antara SpatialGrid dan brute-force pada jaring titik uji
+    let tol = 5.0;
+    for gx in (0..=450).step_by(15) {
+        for gy in (0..=300).step_by(15) {
+            let p = Pos2::new(gx as f32, gy as f32);
+            let grid_hits = grid.hit_test_all(&objects, p, tol);
+            let brute_hits: Vec<usize> = objects
+                .iter()
+                .enumerate()
+                .filter_map(|(i, obj)| {
+                    hit_test_object_with_context(obj, p, tol, Some(&objects)).then_some(i)
+                })
+                .collect();
+            assert_eq!(
+                grid_hits, brute_hits,
+                "SpatialGrid::hit_test_all harus identik dengan brute-force pada titik {p:?}"
+            );
+            let grid_top = grid.hit_test_topmost(&objects, p, tol).map(|(i, _)| i);
+            let brute_top = brute_hits.last().copied();
+            assert_eq!(grid_top, brute_top);
+        }
+    }
+
+    // Mutasi objek (move, rotate, scale, delete) lalu rebuild
+    translate_object(&mut objects[2], 60.0, 40.0);
+    rotate_object(&mut objects[2], Pos2::new(250.0, 200.0), 0.4);
+    scale_object(&mut objects[1], Pos2::new(50.0, 50.0), 1.3, 1.3);
+    objects.remove(0);
+    grid.rebuild(&objects);
+
+    for gx in (0..=450).step_by(25) {
+        for gy in (0..=300).step_by(25) {
+            let p = Pos2::new(gx as f32, gy as f32);
+            let grid_hits = grid.hit_test_all(&objects, p, tol);
+            let brute_hits: Vec<usize> = objects
+                .iter()
+                .enumerate()
+                .filter_map(|(i, obj)| {
+                    hit_test_object_with_context(obj, p, tol, Some(&objects)).then_some(i)
+                })
+                .collect();
+            assert_eq!(grid_hits, brute_hits);
+        }
+    }
+}
