@@ -8,9 +8,9 @@ use super::types::{ActiveTool, EraserMode, ResizeCorner};
 use crate::geometry::{
     ShapeTransformBox, TransformHandleKind, calculate_proportional_scale,
     calculate_single_axis_resize, combined_bounds, find_alignment_guides, find_connector_snap_site,
-    hit_test_connector_details, hit_test_connector_midpoint, hit_test_connector_with_objects,
-    hit_test_object, hit_test_transform_handles, insert_control_point_at, next_shape_rect,
-    object_bounds, object_in_lasso_mode_with_context, point_in_polygon,
+    hit_test_connector_details, hit_test_connector_midpoint, hit_test_object,
+    hit_test_transform_handles, insert_control_point_at, next_shape_rect, object_bounds,
+    object_in_lasso_mode_with_context, point_in_polygon,
     prune_all_invalid_connector_control_points, prune_collinear_control_points,
     recognize_handwriting_from_strokes, recognize_shape, resolve_connector_endpoints, scale_object,
     shape_connection_point, snap_point_to_grid, snap_value_to_grid, translate_object,
@@ -1956,18 +1956,14 @@ fn handle_primary_click(
             ui.ctx().request_repaint();
             return;
         }
-        let hit = page.objects.iter().rev().find(|obj| {
-            if let DrawObject::Connector { .. } = obj {
-                hit_test_connector_with_objects(
-                    obj,
-                    Point2D::new(page_p.x, page_p.y),
-                    8.0 / state.zoom,
-                    &page.objects,
-                )
-            } else {
-                hit_test_object(obj, page_p, 8.0 / state.zoom)
-            }
-        });
+        let tol = 8.0 / state.zoom;
+        if state.spatial_grid_page_id.as_deref() != Some(&page.id) {
+            state.rebuild_spatial_grid(&page.id, &page.objects);
+        }
+        let hit = state
+            .spatial_grid
+            .hit_test_topmost(&page.objects, page_p, tol)
+            .map(|(_, obj)| obj);
         if let Some(obj) = hit {
             let id = obj.id().to_string();
             if shift_held {
