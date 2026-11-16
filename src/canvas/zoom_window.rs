@@ -1,11 +1,15 @@
 use super::primitives::{draw_non_stroke_object, draw_paper_pattern};
+use super::sampling::{
+    PointerSamplePhase, PointerSource, RawPointerSample, RawScreenEvent, append_stroke_sample,
+    collect_frame_pointer_batch,
+};
 use super::state::CanvasState;
 use super::types::ActiveTool;
 use crate::geometry::{
-    object_bounds, recognize_handwriting_from_strokes, should_reject_palm_input,
-    smooth_stroke_points, tessellate_stroke_styled,
+    object_bounds, recognize_handwriting_from_strokes, smooth_stroke_points,
+    tessellate_stroke_styled,
 };
-use crate::model::{DrawObject, Page, StrokePoint};
+use crate::model::{DrawObject, Page};
 use eframe::egui::{self, Color32, PointerButton, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 use uuid::Uuid;
 
@@ -136,162 +140,239 @@ pub fn render_zoom_window_canvas(
         }
     }
 
-    // 4. Tangani input menulis / menghapus di dalam Zoom Window
+    // 4. Tangani input menulis / menghapus di dalam Zoom Window dengan high-precision sampling
     let mut modified = false;
     let pointer_pos = response.interact_pointer_pos();
     let adv_page_x = target.right() - target.width() * 0.25;
+    let (press_origin, multi_touch, frame_dt, batch) = ui.input(|i| {
+        let press_orig = i.pointer.press_origin();
+        let mt = i.multi_touch().is_some();
+        let dt = i.stable_dt.clamp(0.001, 0.1);
+        let b = collect_frame_pointer_batch(
+            &i.raw.events,
+            state.active_touch_id,
+            press_orig,
+            pointer_pos,
+        );
+        (press_orig, mt, dt, b)
+    });
 
-    if response.drag_started_by(PointerButton::Primary)
-        && let Some(pos) = pointer_pos
+    if batch.cancelled
+        && (state.zoom_draft_stroke.is_some() || response.is_pointer_button_down_on())
     {
-        let page_p = zw_to_page(pos);
-        match state.current_tool {
-            ActiveTool::Eraser => {
-                state.eraser_undo_pushed = false;
-                if state.erase_at(page, page_p, 12.0 / scale * state.zoom) {
-                    modified = true;
+        state.eraser_undo_pushed = false;
+        state.last_whole_erase_pos = None;
+        state.last_erase_sample_pos = None;
+        state.active_touch_id = None;
+        state.last_stroke_move_time = None;
+        state.zoom_draft_stroke = None;
+        state.zoom_raw_stroke_samples.clear();
+        state.zoom_wrote_in_advance_zone = false;
+    } else {
+        let mut started_this_frame = false;
+        if response.drag_started_by(PointerButton::Primary)
+            && let Some(pos) = pointer_pos
+        {
+            let start_pos = press_origin.unwrap_or(pos);
+            let page_p = zw_to_page(start_pos);
+            match state.current_tool {
+                ActiveTool::Eraser => {
+                    state.eraser_undo_pushed = false;
+                    state.last_whole_erase_pos = None;
+                    state.last_erase_sample_pos = Some(page_p);
+                    if state.erase_at(page, page_p, 12.0 / scale * state.zoom) {
+                        modified = true;
+                    }
                 }
-            }
-            _ => {
-                let (touch_id, touch_force) = ui.input(|i| {
-                    super::render::extract_touch_pressure(&i.raw.events, None, Some(pos))
-                });
-                state.active_touch_id = touch_id;
-                let raw_pressure = touch_force.unwrap_or(1.0).clamp(0.0, 1.0);
-                let is_highlighter = state.current_tool == ActiveTool::Highlighter;
-                let pressure = if is_highlighter && !state.highlighter_pressure_enabled {
-                    1.0
-                } else {
-                    state.effective_pressure(raw_pressure)
-                };
-                state.zoom_draft_stroke =
-                    Some(vec![StrokePoint::new(page_p.x, page_p.y, pressure)]);
-                state.last_stroke_move_time = Some(std::time::Instant::now());
-                state.zoom_wrote_in_advance_zone = page_p.x >= adv_page_x;
-            }
-        }
-    }
-
-    if response.dragged_by(PointerButton::Primary)
-        && let Some(pos) = pointer_pos
-    {
-        let page_p = zw_to_page(pos);
-        match state.current_tool {
-            ActiveTool::Eraser => {
-                if state.erase_at(page, page_p, 12.0 / scale * state.zoom) {
-                    modified = true;
-                }
-            }
-            _ => {
-                if state.zoom_draft_stroke.is_some() {
-                    let now = std::time::Instant::now();
-                    let dt_secs = state
-                        .last_stroke_move_time
-                        .map(|t| now.saturating_duration_since(t).as_secs_f32())
-                        .unwrap_or(0.016);
-                    let multi_touch = ui.input(|i| i.multi_touch().is_some());
-                    let min_dist = 1.5 / scale;
-                    let should_push = state.zoom_draft_stroke.as_ref().is_some_and(|pts| {
-                        let rejected = state.palm_rejection_enabled
-                            && should_reject_palm_input(pts, page_p, dt_secs, multi_touch);
-                        !rejected
-                            && pts
-                                .last()
-                                .is_none_or(|last| (page_p - last.to_pos2()).length() >= min_dist)
-                    });
-                    if should_push {
-                        let (tid, touch_force) = ui.input(|i| {
-                            super::render::extract_touch_pressure(
-                                &i.raw.events,
-                                state.active_touch_id,
-                                Some(pos),
-                            )
+                _ => {
+                    state.active_touch_id = batch.active_touch_id;
+                    let init_ev = batch
+                        .events
+                        .iter()
+                        .find(|e| (e.screen_pos - start_pos).length_sq() <= 4.0)
+                        .or_else(|| batch.events.first())
+                        .copied()
+                        .unwrap_or(RawScreenEvent {
+                            screen_pos: start_pos,
+                            raw_pressure: None,
+                            phase: PointerSamplePhase::Press,
+                            source: PointerSource::Mouse,
                         });
-                        if state.active_touch_id.is_none() {
-                            state.active_touch_id = tid;
-                        }
-                        let is_highlighter = state.current_tool == ActiveTool::Highlighter;
-                        let pressure = if (is_highlighter && !state.highlighter_pressure_enabled)
-                            || !state.pressure_sensitivity_enabled
-                        {
-                            1.0
-                        } else if let Some(f) = touch_force {
-                            state.effective_pressure(f.clamp(0.0, 1.0))
+                    let is_highlighter = state.current_tool == ActiveTool::Highlighter;
+                    let pressure =
+                        state.resolve_sample_pressure(init_ev.raw_pressure, is_highlighter, None);
+                    let first_sample = RawPointerSample {
+                        screen_pos: start_pos,
+                        page_pos: page_p,
+                        raw_pressure: init_ev.raw_pressure,
+                        effective_pressure: pressure,
+                        phase: PointerSamplePhase::Press,
+                        source: init_ev.source,
+                        sequence: 0,
+                        dt_secs: 0.0,
+                    };
+                    state.zoom_raw_stroke_samples = vec![first_sample];
+                    state.zoom_draft_stroke = Some(vec![first_sample.to_stroke_point()]);
+                    state.last_stroke_move_time = Some(std::time::Instant::now());
+                    state.zoom_wrote_in_advance_zone = page_p.x >= adv_page_x;
+                }
+            }
+            started_this_frame = true;
+        }
+
+        if response.dragged_by(PointerButton::Primary) {
+            let start_ref = press_origin.or(pointer_pos);
+            let sample_count = batch.events.len().max(1);
+            let dt_per_sample = frame_dt / (sample_count as f32);
+            let erase_r = 12.0 / scale * state.zoom;
+
+            for (idx, ev) in batch.events.iter().enumerate() {
+                if ev.phase == PointerSamplePhase::Cancel {
+                    continue;
+                }
+                if started_this_frame
+                    && idx == 0
+                    && start_ref.is_some_and(|s| (ev.screen_pos - s).length_sq() <= 1e-6)
+                {
+                    continue;
+                }
+                let page_p = zw_to_page(ev.screen_pos);
+                match state.current_tool {
+                    ActiveTool::Eraser => {
+                        let erased = if let Some(prev_p) = state.last_erase_sample_pos {
+                            state.erase_along_segment(page, prev_p, page_p, erase_r)
                         } else {
-                            state
+                            state.erase_at(page, page_p, erase_r)
+                        };
+                        state.last_erase_sample_pos = Some(page_p);
+                        if erased {
+                            modified = true;
+                        }
+                    }
+                    _ => {
+                        if state.zoom_draft_stroke.is_some() {
+                            if let PointerSource::Touch { id, .. } = ev.source
+                                && state.active_touch_id.is_none()
+                            {
+                                state.active_touch_id = Some(id);
+                            }
+                            let now = std::time::Instant::now();
+                            let dt_secs = state
+                                .last_stroke_move_time
+                                .map(|t| {
+                                    now.saturating_duration_since(t)
+                                        .as_secs_f32()
+                                        .max(dt_per_sample)
+                                })
+                                .unwrap_or(dt_per_sample);
+                            let is_highlighter = state.current_tool == ActiveTool::Highlighter;
+                            let prev_pressure = state
                                 .zoom_draft_stroke
                                 .as_ref()
-                                .and_then(|pts| pts.last().map(|p| p.pressure))
-                                .unwrap_or(1.0)
-                        };
-                        if let Some(pts) = &mut state.zoom_draft_stroke {
-                            pts.push(StrokePoint::new(page_p.x, page_p.y, pressure));
-                        }
-                        state.last_stroke_move_time = Some(now);
-                        if page_p.x >= adv_page_x {
-                            state.zoom_wrote_in_advance_zone = true;
+                                .and_then(|pts| pts.last().map(|p| p.pressure));
+                            let pressure = state.resolve_sample_pressure(
+                                ev.raw_pressure,
+                                is_highlighter,
+                                prev_pressure,
+                            );
+                            let seq = state.zoom_raw_stroke_samples.len() as u64;
+                            let sample = RawPointerSample {
+                                screen_pos: ev.screen_pos,
+                                page_pos: page_p,
+                                raw_pressure: ev.raw_pressure,
+                                effective_pressure: pressure,
+                                phase: ev.phase,
+                                source: ev.source,
+                                sequence: seq,
+                                dt_secs,
+                            };
+                            let mut draft_pts = state.zoom_draft_stroke.take().unwrap_or_default();
+                            let added = append_stroke_sample(
+                                &mut state.zoom_raw_stroke_samples,
+                                &mut draft_pts,
+                                sample,
+                                state.palm_rejection_enabled,
+                                multi_touch,
+                            );
+                            state.zoom_draft_stroke = Some(draft_pts);
+                            if added {
+                                state.last_stroke_move_time = Some(now);
+                                if page_p.x >= adv_page_x {
+                                    state.zoom_wrote_in_advance_zone = true;
+                                }
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
-    if response.drag_stopped() {
-        state.eraser_undo_pushed = false;
-        state.last_whole_erase_pos = None;
-        state.active_touch_id = None;
-        state.last_stroke_move_time = None;
-        if let Some(mut pts) = state.zoom_draft_stroke.take() {
-            if let Some(pos) = pointer_pos {
-                let page_p = zw_to_page(pos);
-                if page_p.x >= adv_page_x {
-                    state.zoom_wrote_in_advance_zone = true;
-                }
-                let should_append = pts
-                    .last()
-                    .is_none_or(|last| (page_p - last.to_pos2()).length() >= 0.5);
-                if should_append {
+        if response.drag_stopped() {
+            state.eraser_undo_pushed = false;
+            state.last_whole_erase_pos = None;
+            state.last_erase_sample_pos = None;
+            state.active_touch_id = None;
+            state.last_stroke_move_time = None;
+            if let Some(mut pts) = state.zoom_draft_stroke.take() {
+                if let Some(pos) = pointer_pos {
+                    let page_p = zw_to_page(pos);
+                    if page_p.x >= adv_page_x {
+                        state.zoom_wrote_in_advance_zone = true;
+                    }
                     let pressure = pts.last().map(|pt| pt.pressure).unwrap_or(1.0);
-                    pts.push(StrokePoint {
-                        x: page_p.x,
-                        y: page_p.y,
-                        pressure,
-                    });
+                    let seq = state.zoom_raw_stroke_samples.len() as u64;
+                    let release_sample = RawPointerSample {
+                        screen_pos: pos,
+                        page_pos: page_p,
+                        raw_pressure: None,
+                        effective_pressure: pressure,
+                        phase: PointerSamplePhase::Release,
+                        source: PointerSource::Mouse,
+                        sequence: seq,
+                        dt_secs: 0.0,
+                    };
+                    append_stroke_sample(
+                        &mut state.zoom_raw_stroke_samples,
+                        &mut pts,
+                        release_sample,
+                        false,
+                        false,
+                    );
                 }
-            }
-            if !pts.is_empty() {
-                state.push_undo(&page.id, &page.objects);
-                let is_highlighter = state.current_tool == ActiveTool::Highlighter;
-                let stroke_width = zoom_stroke_width(state);
-                let color = if is_highlighter {
-                    let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
-                    Color32::from_rgba_unmultiplied(
-                        state.stroke_color.r(),
-                        state.stroke_color.g(),
-                        state.stroke_color.b(),
-                        hl_alpha,
-                    )
-                } else {
-                    state.stroke_color
-                };
-                page.objects.push(DrawObject::Stroke {
-                    id: Uuid::new_v4().to_string(),
-                    points: pts,
-                    color: color.into(),
-                    width: stroke_width,
-                    is_highlighter,
-                    style: state.stroke_style,
-                });
-                state.rebuild_spatial_grid(&page.id, &page.objects);
-                // Fase 8.6: Perbarui indeks OCR tulisan tangan otomatis saat menulis di Zoom Window
-                page.ocr_text = recognize_handwriting_from_strokes(&page.objects);
-                modified = true;
+                state.zoom_raw_stroke_samples.clear();
+                if !pts.is_empty() {
+                    state.push_undo(&page.id, &page.objects);
+                    let is_highlighter = state.current_tool == ActiveTool::Highlighter;
+                    let stroke_width = zoom_stroke_width(state);
+                    let color = if is_highlighter {
+                        let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
+                        Color32::from_rgba_unmultiplied(
+                            state.stroke_color.r(),
+                            state.stroke_color.g(),
+                            state.stroke_color.b(),
+                            hl_alpha,
+                        )
+                    } else {
+                        state.stroke_color
+                    };
+                    page.objects.push(DrawObject::Stroke {
+                        id: Uuid::new_v4().to_string(),
+                        points: pts,
+                        color: color.into(),
+                        width: stroke_width,
+                        is_highlighter,
+                        style: state.stroke_style,
+                    });
+                    state.rebuild_spatial_grid(&page.id, &page.objects);
+                    // Fase 8.6: Perbarui indeks OCR tulisan tangan otomatis saat menulis di Zoom Window
+                    page.ocr_text = recognize_handwriting_from_strokes(&page.objects);
+                    modified = true;
 
-                // Auto-advance ke kanan jika pengguna menulis di zona kanan
-                if state.zoom_wrote_in_advance_zone {
-                    state.advance_zoom_target(page.width, page.height);
-                    state.zoom_wrote_in_advance_zone = false;
+                    // Auto-advance ke kanan jika pengguna menulis di zona kanan
+                    if state.zoom_wrote_in_advance_zone {
+                        state.advance_zoom_target(page.width, page.height);
+                        state.zoom_wrote_in_advance_zone = false;
+                    }
                 }
             }
         }

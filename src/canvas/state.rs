@@ -1,3 +1,4 @@
+use super::sampling::{RawPointerSample, RawScreenEvent};
 use super::types::{ActiveTool, EraserMode, LaserTrailPoint, ResizeCorner};
 use crate::geometry::{
     SpatialGrid, combined_bounds, distance_to_object, hit_test_object, split_stroke_by_eraser,
@@ -24,9 +25,15 @@ pub struct CanvasState {
     pub undo_page_order: Vec<String>,
     pub redo_page_order: Vec<String>,
 
-    // Active stroke / shape draft
+    // Active stroke / shape draft & high-precision raw input samples
     pub active_stroke_page_id: Option<String>,
     pub draft_stroke: Option<Vec<StrokePoint>>,
+    pub raw_stroke_samples: Vec<RawPointerSample>,
+    pub last_completed_raw_samples: Vec<RawPointerSample>,
+    pub pending_press_event: Option<RawScreenEvent>,
+    pub pointer_sample_seq: u64,
+    pub pointer_gesture_active: bool,
+    pub stroke_committed_this_frame: bool,
     pub draft_shape_start: Option<Pos2>,
     pub draft_shape_current: Option<Pos2>,
     pub last_stroke_move_time: Option<Instant>,
@@ -71,11 +78,13 @@ pub struct CanvasState {
     pub eraser_mode: EraserMode,
     pub eraser_undo_pushed: bool,
     pub last_whole_erase_pos: Option<Pos2>,
+    pub last_erase_sample_pos: Option<Pos2>,
 
     // Fase 8.3: Zoom Window state
     pub show_zoom_window: bool,
     pub zoom_target_rect: Rect,
     pub zoom_draft_stroke: Option<Vec<StrokePoint>>,
+    pub zoom_raw_stroke_samples: Vec<RawPointerSample>,
     pub zoom_wrote_in_advance_zone: bool,
 
     // Fase 8.5: Palm Rejection state
@@ -145,6 +154,12 @@ impl Default for CanvasState {
             redo_page_order: Vec::new(),
             active_stroke_page_id: None,
             draft_stroke: None,
+            raw_stroke_samples: Vec::new(),
+            last_completed_raw_samples: Vec::new(),
+            pending_press_event: None,
+            pointer_sample_seq: 0,
+            pointer_gesture_active: false,
+            stroke_committed_this_frame: false,
             draft_shape_start: None,
             draft_shape_current: None,
             last_stroke_move_time: None,
@@ -177,9 +192,11 @@ impl Default for CanvasState {
             eraser_mode: EraserMode::Partial,
             eraser_undo_pushed: false,
             last_whole_erase_pos: None,
+            last_erase_sample_pos: None,
             show_zoom_window: false,
             zoom_target_rect: Rect::from_min_size(Pos2::new(40.0, 90.0), Vec2::new(220.0, 80.0)),
             zoom_draft_stroke: None,
+            zoom_raw_stroke_samples: Vec::new(),
             zoom_wrote_in_advance_zone: false,
             palm_rejection_enabled: true,
             pressure_sensitivity_enabled: true,
@@ -226,6 +243,28 @@ impl CanvasState {
             self.pressure_multiplier,
             raw,
         )
+    }
+
+    /// Menghitung tekanan efektif untuk sampel pointer dengan memperhitungkan jenis tool,
+    /// konfigurasi pressure sensitivity, dan fallback perangkat (mouse vs stylus/touch).
+    #[inline]
+    pub fn resolve_sample_pressure(
+        &self,
+        raw_pressure: Option<f32>,
+        is_highlighter: bool,
+        previous_pressure: Option<f32>,
+    ) -> f32 {
+        if (is_highlighter && !self.highlighter_pressure_enabled)
+            || !self.pressure_sensitivity_enabled
+        {
+            1.0
+        } else if let Some(f) = raw_pressure {
+            self.effective_pressure(f.clamp(0.0, 1.0))
+        } else if self.active_touch_id.is_some() {
+            previous_pressure.unwrap_or_else(|| self.effective_pressure(1.0))
+        } else {
+            self.effective_pressure(1.0)
+        }
     }
 
     pub fn get_or_load_texture(
@@ -603,6 +642,33 @@ impl CanvasState {
         }
     }
 
+    /// Menghapus objek secara kontinu di sepanjang segmen pergerakan pointer (`from` -> `to`)
+    /// agar pergerakan penghapus yang cepat tidak melompati goresan di antara sampel.
+    pub fn erase_along_segment(
+        &mut self,
+        page: &mut Page,
+        from: Pos2,
+        to: Pos2,
+        radius: f32,
+    ) -> bool {
+        let delta = to - from;
+        let dist = delta.length();
+        let step_dist = (radius * 0.5).max(1.0);
+        if dist <= step_dist {
+            return self.erase_at(page, to, radius);
+        }
+        let steps = (dist / step_dist).ceil() as usize;
+        let mut any_erased = false;
+        for step in 1..=steps {
+            let t = step as f32 / steps as f32;
+            let p = from + delta * t;
+            if self.erase_at(page, p, radius) {
+                any_erased = true;
+            }
+        }
+        any_erased
+    }
+
     pub fn advance_zoom_target(&mut self, page_width: f32, page_height: f32) {
         let w = self.zoom_target_rect.width();
         let h = self.zoom_target_rect.height();
@@ -866,6 +932,10 @@ impl CanvasState {
     pub fn clear_active_draft_state(&mut self) {
         self.active_stroke_page_id = None;
         self.draft_stroke = None;
+        self.raw_stroke_samples.clear();
+        self.pending_press_event = None;
+        self.pointer_sample_seq = 0;
+        self.pointer_gesture_active = false;
         self.draft_shape_start = None;
         self.draft_shape_current = None;
         self.last_stroke_move_time = None;
@@ -876,6 +946,7 @@ impl CanvasState {
         self.draft_connector_start = None;
         self.draft_connector_current = None;
         self.connector_snap_candidate = None;
+        self.last_erase_sample_pos = None;
         self.lasso_points.clear();
     }
 }

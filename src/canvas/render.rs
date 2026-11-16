@@ -1,5 +1,4 @@
 use super::gizmo::{SelectionData, render_alignment_guides, render_selection_gizmo};
-pub(crate) use super::interaction::extract_touch_pressure;
 use super::interaction::{handle_pointer_drag_interaction, handle_post_render_pointer_interaction};
 use super::laser::render_laser_trail;
 use super::primitives::{

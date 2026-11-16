@@ -1,4 +1,8 @@
 use super::gizmo::SelectionData;
+use super::sampling::{
+    FramePointerBatch, PointerSamplePhase, PointerSource, RawPointerSample, RawScreenEvent,
+    append_lasso_sample, append_stroke_sample, collect_frame_pointer_batch, extract_touch_pressure,
+};
 use super::state::CanvasState;
 use super::types::{ActiveTool, EraserMode, ResizeCorner};
 use crate::geometry::{
@@ -9,18 +13,88 @@ use crate::geometry::{
     object_bounds, object_in_lasso_mode_with_context, point_in_polygon,
     prune_all_invalid_connector_control_points, prune_collinear_control_points,
     recognize_handwriting_from_strokes, recognize_shape, resolve_connector_endpoints, scale_object,
-    shape_connection_point, should_reject_palm_input, snap_point_to_grid, snap_value_to_grid,
-    translate_object,
+    shape_connection_point, snap_point_to_grid, snap_value_to_grid, translate_object,
 };
 use crate::model::{
     ColorData, ConnectionSite, ConnectorEnd, ConnectorRoute, ConnectorStyle, DrawObject,
-    MarkerKind, Page, Point2D, ShapeKind, StrokePoint,
+    MarkerKind, Page, Point2D, ShapeKind,
 };
 use eframe::egui::{self, Color32, Key, PointerButton, Pos2, Rect, Response, Ui, Vec2};
 use std::time::Instant;
 use uuid::Uuid;
 
-/// Menangani seluruh interaksi drag primer dan hold-to-snap pada kanvas halaman.
+/// Memeriksa apakah titik halaman `page_p` mengenai handle transformasi, garis, konektor,
+/// titik Quick Diagram, atau area seleksi aktif.
+fn hits_selection_or_diagram_handle(
+    page: &Page,
+    state: &CanvasState,
+    sel: &SelectionData,
+    page_p: Pos2,
+) -> bool {
+    if let Some((line_start, line_end)) = sel.single_line {
+        let handle_dist = 14.0 / state.zoom;
+        let dir = line_end - line_start;
+        let dir_norm = if dir.length() > 1e-3 {
+            dir / dir.length()
+        } else {
+            Vec2::new(1.0, 0.0)
+        };
+        let line_rot_handle = line_end + dir_norm * (22.0 / state.zoom);
+        if (page_p - line_rot_handle).length() <= handle_dist
+            || (page_p - line_end).length() <= handle_dist
+            || (page_p - line_start).length() <= handle_dist
+            || (state.current_tool == ActiveTool::Lasso
+                && crate::geometry::point_to_segment_dist(page_p, line_start, line_end)
+                    <= handle_dist)
+        {
+            return true;
+        }
+    } else if hit_test_quick_diagram_dot(sel, state, page_p).is_some() {
+        return true;
+    }
+
+    if let Some((conn_id, Some(poly))) = &sel.single_connector {
+        let is_conn_locked = page
+            .objects
+            .iter()
+            .any(|o| o.id() == conn_id && o.is_locked());
+        if !is_conn_locked {
+            let handle_dist = 14.0 / state.zoom;
+            let pt = Point2D::new(page_p.x, page_p.y);
+            if hit_test_connector_midpoint(pt, poly, handle_dist).is_some()
+                || hit_test_connector_details(pt, poly, handle_dist).is_some()
+            {
+                return true;
+            }
+        }
+    } else if matches!(state.current_tool, ActiveTool::Lasso | ActiveTool::Shape(_))
+        && let Some(frame) = &sel.frame
+        && !sel.is_selection_fully_locked
+    {
+        let handle_dist = 14.0 / state.zoom;
+        if hit_test_transform_handles(
+            &frame.handles,
+            Point2D::new(page_p.x, page_p.y),
+            handle_dist,
+        )
+        .is_some()
+        {
+            return true;
+        }
+        let inside_selection = if frame.rotation.abs() < 1e-4 {
+            sel.rect.map(|r| r.contains(page_p)).unwrap_or(false)
+        } else {
+            point_in_polygon(page_p, &frame.corners)
+        };
+        if inside_selection {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Menangani seluruh interaksi drag primer, sampling pointer berpresisi tinggi, dan hold-to-snap pada kanvas halaman.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_pointer_drag_interaction(
     ui: &Ui,
@@ -32,23 +106,214 @@ pub(crate) fn handle_pointer_drag_interaction(
     now: Instant,
     screen_to_page: impl Fn(Pos2) -> Pos2 + Copy,
 ) {
+    state.stroke_committed_this_frame = false;
+
+    let (press_origin, primary_down, multi_touch, frame_dt, batch) = ui.input(|i| {
+        let press_orig = i.pointer.press_origin();
+        let prim_down = i.pointer.primary_down();
+        let mt = i.multi_touch().is_some();
+        let dt = i.stable_dt.clamp(0.001, 0.1);
+        let b = collect_frame_pointer_batch(
+            &i.raw.events,
+            state.active_touch_id,
+            press_orig,
+            pointer_pos,
+        );
+        (press_orig, prim_down, mt, dt, b)
+    });
+
+    let owns_active_gesture = state.pointer_gesture_active
+        && (state.active_stroke_page_id.as_deref() == Some(&page.id)
+            || state.last_erase_sample_pos.is_some()
+            || state.laser_is_drawing
+            || state.is_dragging_selection
+            || state.resize_corner.is_some());
+
+    // Tangani pembatalan pointer (PointerGone atau TouchPhase::Cancel) secara aman
+    if batch.cancelled && (owns_active_gesture || response.is_pointer_button_down_on()) {
+        state.active_alignment_guides.clear();
+        state.eraser_undo_pushed = false;
+        state.last_whole_erase_pos = None;
+        state.last_erase_sample_pos = None;
+        state.is_dragging_selection = false;
+        state.drag_start_pos = None;
+        state.resize_corner = None;
+        state.laser_is_drawing = false;
+        state.current_laser_stroke.clear();
+        state.clear_active_draft_state();
+        return;
+    }
+
+    // Catat event tekan awal (Press) pada kanvas ini agar tekanan/sumber awal tidak hilang bila drag baru dimulai di frame berikutnya
+    if let Some(press_ev) = batch
+        .events
+        .iter()
+        .find(|e| e.phase == PointerSamplePhase::Press && response.rect.contains(e.screen_pos))
+    {
+        state.pending_press_event = Some(*press_ev);
+        if batch.active_touch_id.is_some() {
+            state.active_touch_id = batch.active_touch_id;
+        }
+    }
+
+    let mut started_this_frame = false;
     if response.drag_started_by(PointerButton::Primary)
         && let Some(pos) = pointer_pos
     {
-        handle_drag_started(ui, page, state, sel, pos, screen_to_page);
+        if !state.pointer_gesture_active {
+            handle_drag_started(ui, page, state, sel, pos, &batch, screen_to_page);
+            state.pointer_gesture_active = true;
+            started_this_frame = true;
+        }
+    } else if !state.pointer_gesture_active
+        && matches!(
+            state.current_tool,
+            ActiveTool::Pen
+                | ActiveTool::Pencil
+                | ActiveTool::Highlighter
+                | ActiveTool::Eraser
+                | ActiveTool::Lasso
+                | ActiveTool::Laser
+        )
+    {
+        // Tangkap goresan/gerakan sangat pendek (< threshold drag 6px egui) sejak pointer ditekan dan bergerak
+        let press_in_this_canvas = response.is_pointer_button_down_on()
+            || ((response.hovered() || response.clicked() || response.drag_stopped())
+                && batch.events.iter().any(|e| {
+                    e.phase == PointerSamplePhase::Press && response.rect.contains(e.screen_pos)
+                }));
+        let start_candidate = press_origin
+            .or_else(|| {
+                batch
+                    .events
+                    .iter()
+                    .find(|e| e.phase == PointerSamplePhase::Press)
+                    .map(|e| e.screen_pos)
+            })
+            .or(pointer_pos);
+
+        if press_in_this_canvas
+            && let Some(start_pos) = start_candidate
+            && response.rect.contains(start_pos)
+        {
+            let has_movement = batch
+                .events
+                .iter()
+                .any(|e| (e.screen_pos - start_pos).length_sq() > 1e-6)
+                || pointer_pos.is_some_and(|p| (p - start_pos).length_sq() > 1e-6);
+            let has_pressure_change = batch.events.len() >= 2
+                && batch
+                    .events
+                    .windows(2)
+                    .any(|w| match (w[0].raw_pressure, w[1].raw_pressure) {
+                        (Some(a), Some(b)) => (a - b).abs() > 1e-4,
+                        _ => false,
+                    });
+
+            let start_page_p = screen_to_page(start_pos);
+            if (has_movement || has_pressure_change)
+                && !hits_selection_or_diagram_handle(page, state, sel, start_page_p)
+            {
+                handle_drag_started(ui, page, state, sel, start_pos, &batch, screen_to_page);
+                state.pointer_gesture_active = true;
+                started_this_frame = true;
+            }
+        }
     }
 
-    if response.dragged_by(PointerButton::Primary)
-        && let Some(pos) = pointer_pos
-    {
-        handle_drag_moved(ui, response, page, state, sel, pos, now, screen_to_page);
+    let is_active_on_this_page = state.pointer_gesture_active
+        && (state.active_stroke_page_id.as_deref() == Some(&page.id)
+            || state.last_erase_sample_pos.is_some()
+            || state.laser_is_drawing
+            || state.is_dragging_selection
+            || state.resize_corner.is_some());
+
+    if response.dragged_by(PointerButton::Primary) || is_active_on_this_page {
+        let start_ref = press_origin.or(pointer_pos);
+        let sample_count = batch.events.len().max(1);
+        let dt_per_sample = frame_dt / (sample_count as f32);
+        let mut last_processed_screen_pos: Option<Pos2> = None;
+
+        for (idx, ev) in batch.events.iter().enumerate() {
+            if ev.phase == PointerSamplePhase::Cancel {
+                continue;
+            }
+            // Jika baru saja memulai gesture di frame ini pada titik awal yang sama dan tekanan yang sama, lewati sampel awal yang sudah dicatat
+            if started_this_frame
+                && idx == 0
+                && let Some(s_ref) = start_ref
+                && (ev.screen_pos - s_ref).length_sq() <= 1e-6
+                && state.raw_stroke_samples.first().is_some_and(|first| {
+                    ev.raw_pressure
+                        .is_none_or(|rp| first.raw_pressure == Some(rp))
+                })
+            {
+                last_processed_screen_pos = Some(ev.screen_pos);
+                continue;
+            }
+
+            handle_drag_moved(
+                ui,
+                response,
+                page,
+                state,
+                sel,
+                *ev,
+                dt_per_sample,
+                multi_touch,
+                now,
+                screen_to_page,
+            );
+            last_processed_screen_pos = Some(ev.screen_pos);
+        }
+
+        if let Some(pos) = pointer_pos
+            && last_processed_screen_pos.is_none_or(|last_p| (last_p - pos).length_sq() > 1e-6)
+            && !(started_this_frame
+                && start_ref.is_some_and(|s_ref| (s_ref - pos).length_sq() <= 1e-6))
+        {
+            let fallback_ev = RawScreenEvent {
+                screen_pos: pos,
+                raw_pressure: batch.events.last().and_then(|e| e.raw_pressure),
+                phase: PointerSamplePhase::Move,
+                source: batch
+                    .events
+                    .last()
+                    .map(|e| e.source)
+                    .unwrap_or(PointerSource::Mouse),
+            };
+            handle_drag_moved(
+                ui,
+                response,
+                page,
+                state,
+                sel,
+                fallback_ev,
+                dt_per_sample,
+                multi_touch,
+                now,
+                screen_to_page,
+            );
+        }
     }
 
     // Fase 8.1 & G4: Deteksi tahan pena (~500 ms) di akhir goresan untuk Shape Recognition
     update_hold_to_snap(ui, page, state, now);
 
-    if response.drag_stopped() {
-        handle_drag_stopped(ui, page, state, pointer_pos, screen_to_page);
+    let released_in_batch = batch
+        .events
+        .iter()
+        .any(|e| e.phase == PointerSamplePhase::Release);
+    if response.drag_stopped() || (is_active_on_this_page && (!primary_down || released_in_batch)) {
+        let stop_pos = batch
+            .events
+            .iter()
+            .rev()
+            .find(|e| e.phase == PointerSamplePhase::Release)
+            .map(|e| e.screen_pos)
+            .or(pointer_pos)
+            .or_else(|| batch.events.last().map(|e| e.screen_pos));
+        handle_drag_stopped(ui, page, state, stop_pos, &batch, screen_to_page);
     }
 }
 
@@ -59,6 +324,7 @@ fn handle_drag_started(
     state: &mut CanvasState,
     sel: &SelectionData,
     pos: Pos2,
+    batch: &FramePointerBatch,
     screen_to_page: impl Fn(Pos2) -> Pos2 + Copy,
 ) {
     // Gunakan titik tekan awal (press_origin) untuk hit-test handle agar seretan cepat tidak meleset
@@ -225,23 +491,45 @@ fn handle_drag_started(
             // Fase 8.5: Palm Rejection — tolak awal goresan jika multi-touch terdeteksi
             let multi_touch = ui.input(|i| i.multi_touch().is_some());
             if !(state.palm_rejection_enabled && multi_touch) {
+                let saved_press = state
+                    .pending_press_event
+                    .take()
+                    .filter(|e| (e.screen_pos - press_pos).length_sq() <= 4.0);
+                let saved_touch_id = state.active_touch_id;
                 state.clear_active_draft_state();
-                let (touch_id, touch_force) =
-                    ui.input(|i| extract_touch_pressure(&i.raw.events, None, Some(pos)));
-                state.active_touch_id = touch_id;
-                let raw_pressure = touch_force.unwrap_or(1.0).clamp(0.0, 1.0);
+                state.active_touch_id = batch.active_touch_id.or(saved_touch_id);
+                let init_event = saved_press
+                    .or_else(|| {
+                        batch
+                            .events
+                            .iter()
+                            .find(|e| (e.screen_pos - press_pos).length_sq() <= 4.0)
+                            .copied()
+                    })
+                    .or_else(|| batch.events.first().copied())
+                    .unwrap_or(RawScreenEvent {
+                        screen_pos: press_pos,
+                        raw_pressure: None,
+                        phase: PointerSamplePhase::Press,
+                        source: PointerSource::Mouse,
+                    });
                 let is_highlighter = state.current_tool == ActiveTool::Highlighter;
-                let pressure = if is_highlighter && !state.highlighter_pressure_enabled {
-                    1.0
-                } else {
-                    state.effective_pressure(raw_pressure)
+                let pressure =
+                    state.resolve_sample_pressure(init_event.raw_pressure, is_highlighter, None);
+                let first_sample = RawPointerSample {
+                    screen_pos: press_pos,
+                    page_pos: page_p,
+                    raw_pressure: init_event.raw_pressure,
+                    effective_pressure: pressure,
+                    phase: PointerSamplePhase::Press,
+                    source: init_event.source,
+                    sequence: 0,
+                    dt_secs: 0.0,
                 };
+                state.pointer_sample_seq = 1;
                 state.active_stroke_page_id = Some(page.id.clone());
-                state.draft_stroke = Some(vec![StrokePoint {
-                    x: page_p.x,
-                    y: page_p.y,
-                    pressure,
-                }]);
+                state.raw_stroke_samples = vec![first_sample];
+                state.draft_stroke = Some(vec![first_sample.to_stroke_point()]);
                 state.last_stroke_move_time = Some(Instant::now());
                 state.selected_ids.clear();
             }
@@ -286,6 +574,18 @@ fn handle_drag_started(
         ActiveTool::Eraser => {
             state.eraser_undo_pushed = false;
             state.last_whole_erase_pos = None;
+            state.last_erase_sample_pos = Some(page_p);
+            state.raw_stroke_samples = vec![RawPointerSample {
+                screen_pos: press_pos,
+                page_pos: page_p,
+                raw_pressure: None,
+                effective_pressure: 1.0,
+                phase: PointerSamplePhase::Press,
+                source: PointerSource::Mouse,
+                sequence: 0,
+                dt_secs: 0.0,
+            }];
+            state.pointer_sample_seq = 1;
             let erase_radius = match state.eraser_mode {
                 EraserMode::WholeStroke => (3.8 / state.zoom).clamp(1.8, 4.5),
                 EraserMode::Partial => (10.0 / state.zoom).clamp(4.0, 16.0),
@@ -296,12 +596,24 @@ fn handle_drag_started(
             state.clear_active_draft_state();
             state.active_stroke_page_id = Some(page.id.clone());
             state.selected_ids.clear();
+            let first_sample = RawPointerSample {
+                screen_pos: press_pos,
+                page_pos: page_p,
+                raw_pressure: None,
+                effective_pressure: 1.0,
+                phase: PointerSamplePhase::Press,
+                source: PointerSource::Mouse,
+                sequence: 0,
+                dt_secs: 0.0,
+            };
+            state.pointer_sample_seq = 1;
+            state.raw_stroke_samples = vec![first_sample];
             state.lasso_points = vec![page_p];
         }
         ActiveTool::Laser => {
             state.laser_is_drawing = true;
             state.laser_last_active = Instant::now();
-            state.current_laser_stroke = vec![pos];
+            state.current_laser_stroke = vec![press_pos];
             ui.ctx().request_repaint();
         }
         ActiveTool::Text => {
@@ -372,7 +684,7 @@ fn handle_drag_started(
     }
 }
 
-/// Menangani pergerakan drag primer: memindahkan seleksi, mengubah ukuran/rotasi handle, atau memperbarui draft alat.
+/// Menangani pergerakan drag primer per sampel event: memindahkan seleksi, mengubah ukuran/rotasi handle, atau memperbarui draft alat.
 #[allow(clippy::too_many_arguments)]
 fn handle_drag_moved(
     ui: &Ui,
@@ -380,10 +692,13 @@ fn handle_drag_moved(
     page: &mut Page,
     state: &mut CanvasState,
     sel: &SelectionData,
-    pos: Pos2,
+    ev: RawScreenEvent,
+    sample_dt_secs: f32,
+    multi_touch: bool,
     now: Instant,
     screen_to_page: impl Fn(Pos2) -> Pos2 + Copy,
 ) {
+    let pos = ev.screen_pos;
     let page_p = screen_to_page(pos);
 
     // Handle moving selection
@@ -811,59 +1126,56 @@ fn handle_drag_moved(
                                 // lingkaran atau bentuk besar menciut menjadi sangat kecil.
                             }
                         }
-                    } else if let Some(pts) = &mut state.draft_stroke {
+                    } else if state.draft_stroke.is_some() {
+                        if let PointerSource::Touch { id, .. } = ev.source
+                            && state.active_touch_id.is_none()
+                        {
+                            state.active_touch_id = Some(id);
+                        }
                         let dt_secs = state
                             .last_stroke_move_time
-                            .map(|t| now.saturating_duration_since(t).as_secs_f32())
-                            .unwrap_or(0.016);
-                        let multi_touch = ui.input(|i| i.multi_touch().is_some());
-                        // Fase 8.5: Palm Rejection — abaikan titik yang terindikasi sentuhan telapak tangan
-                        let rejected = state.palm_rejection_enabled
-                            && should_reject_palm_input(pts, page_p, dt_secs, multi_touch);
-                        let min_dist = (1.2 / state.zoom).max(0.5);
-                        if !rejected
-                            && let Some(last) = pts.last()
-                            && (page_p - last.to_pos2()).length() >= min_dist
-                        {
-                            let (touch_id, touch_force) = ui.input(|i| {
-                                extract_touch_pressure(
-                                    &i.raw.events,
-                                    state.active_touch_id,
-                                    Some(pos),
-                                )
-                            });
-                            if touch_id.is_some() && state.active_touch_id.is_none() {
-                                state.active_touch_id = touch_id;
+                            .map(|t| {
+                                now.saturating_duration_since(t)
+                                    .as_secs_f32()
+                                    .max(sample_dt_secs)
+                            })
+                            .unwrap_or(sample_dt_secs);
+                        let is_highlighter = state.current_tool == ActiveTool::Highlighter;
+                        let prev_pressure = state
+                            .draft_stroke
+                            .as_ref()
+                            .and_then(|pts| pts.last().map(|p| p.pressure));
+                        let pressure = state.resolve_sample_pressure(
+                            ev.raw_pressure,
+                            is_highlighter,
+                            prev_pressure,
+                        );
+                        let seq = state.pointer_sample_seq;
+                        let sample = RawPointerSample {
+                            screen_pos: pos,
+                            page_pos: page_p,
+                            raw_pressure: ev.raw_pressure,
+                            effective_pressure: pressure,
+                            phase: ev.phase,
+                            source: ev.source,
+                            sequence: seq,
+                            dt_secs,
+                        };
+                        let prev_screen_pos = state.raw_stroke_samples.last().map(|s| s.screen_pos);
+                        let mut draft_pts = state.draft_stroke.take().unwrap_or_default();
+                        let added = append_stroke_sample(
+                            &mut state.raw_stroke_samples,
+                            &mut draft_pts,
+                            sample,
+                            state.palm_rejection_enabled,
+                            multi_touch,
+                        );
+                        state.draft_stroke = Some(draft_pts);
+                        if added {
+                            state.pointer_sample_seq = seq + 1;
+                            if prev_screen_pos.is_none_or(|p| (pos - p).length_sq() >= 0.04) {
+                                state.last_stroke_move_time = Some(now);
                             }
-                            let is_highlighter = state.current_tool == ActiveTool::Highlighter;
-                            let pressure = if (is_highlighter
-                                && !state.highlighter_pressure_enabled)
-                                || !state.pressure_sensitivity_enabled
-                            {
-                                1.0
-                            } else if let Some(f) = touch_force {
-                                crate::model::calculate_effective_pressure(
-                                    state.pressure_sensitivity_enabled,
-                                    state.pressure_min,
-                                    state.pressure_multiplier,
-                                    f.clamp(0.0, 1.0),
-                                )
-                            } else if state.active_touch_id.is_some() {
-                                pts.last().map(|p| p.pressure).unwrap_or(1.0)
-                            } else {
-                                crate::model::calculate_effective_pressure(
-                                    state.pressure_sensitivity_enabled,
-                                    state.pressure_min,
-                                    state.pressure_multiplier,
-                                    1.0,
-                                )
-                            };
-                            pts.push(StrokePoint {
-                                x: page_p.x,
-                                y: page_p.y,
-                                pressure,
-                            });
-                            state.last_stroke_move_time = Some(Instant::now());
                         }
                     }
                 }
@@ -908,13 +1220,48 @@ fn handle_drag_moved(
                     EraserMode::WholeStroke => (3.8 / state.zoom).clamp(1.8, 4.5),
                     EraserMode::Partial => (10.0 / state.zoom).clamp(4.0, 16.0),
                 };
-                if state.erase_at(page, page_p, erase_radius) {
+                let seq = state.pointer_sample_seq;
+                state.pointer_sample_seq = seq + 1;
+                state.raw_stroke_samples.push(RawPointerSample {
+                    screen_pos: pos,
+                    page_pos: page_p,
+                    raw_pressure: ev.raw_pressure,
+                    effective_pressure: 1.0,
+                    phase: ev.phase,
+                    source: ev.source,
+                    sequence: seq,
+                    dt_secs: sample_dt_secs,
+                });
+                let erased = if let Some(prev_p) = state.last_erase_sample_pos {
+                    state.erase_along_segment(page, prev_p, page_p, erase_radius)
+                } else {
+                    state.erase_at(page, page_p, erase_radius)
+                };
+                state.last_erase_sample_pos = Some(page_p);
+                if erased {
                     ui.ctx().request_repaint();
                 }
             }
             ActiveTool::Lasso => {
                 if state.active_stroke_page_id.as_deref() == Some(&page.id) {
-                    state.lasso_points.push(page_p);
+                    let seq = state.pointer_sample_seq;
+                    let sample = RawPointerSample {
+                        screen_pos: pos,
+                        page_pos: page_p,
+                        raw_pressure: ev.raw_pressure,
+                        effective_pressure: 1.0,
+                        phase: ev.phase,
+                        source: ev.source,
+                        sequence: seq,
+                        dt_secs: sample_dt_secs,
+                    };
+                    if append_lasso_sample(
+                        &mut state.raw_stroke_samples,
+                        &mut state.lasso_points,
+                        sample,
+                    ) {
+                        state.pointer_sample_seq = seq + 1;
+                    }
                 }
             }
             ActiveTool::Laser => {
@@ -923,7 +1270,7 @@ fn handle_drag_moved(
                 let should_add = state
                     .current_laser_stroke
                     .last()
-                    .is_none_or(|last_p| last_p.distance(pos) > 2.0);
+                    .is_none_or(|last_p| last_p.distance(pos) > 0.5);
                 if should_add {
                     state.current_laser_stroke.push(pos);
                 }
@@ -939,15 +1286,32 @@ fn handle_drag_moved(
 
 /// Menangani akhir gesture drag: menyelesaikan laser, seleksi/resize, Quick Diagramming, goresan, bentuk, konektor, atau lasso.
 fn handle_drag_stopped(
-    ui: &Ui,
+    _ui: &Ui,
     page: &mut Page,
     state: &mut CanvasState,
     pointer_pos: Option<Pos2>,
+    batch: &FramePointerBatch,
     screen_to_page: impl Fn(Pos2) -> Pos2 + Copy,
 ) {
+    state.pointer_gesture_active = false;
     state.active_alignment_guides.clear();
+    if state.current_tool == ActiveTool::Eraser
+        && let Some(pos) = pointer_pos
+        && let Some(prev_p) = state.last_erase_sample_pos.take()
+    {
+        let page_p = screen_to_page(pos);
+        if (page_p - prev_p).length_sq() > 1e-6 {
+            let erase_radius = match state.eraser_mode {
+                EraserMode::WholeStroke => (3.8 / state.zoom).clamp(1.8, 4.5),
+                EraserMode::Partial => (10.0 / state.zoom).clamp(4.0, 16.0),
+            };
+            state.erase_along_segment(page, prev_p, page_p, erase_radius);
+        }
+        state.stroke_committed_this_frame = true;
+    }
     state.eraser_undo_pushed = false;
     state.last_whole_erase_pos = None;
+    state.last_erase_sample_pos = None;
     if state.laser_is_drawing {
         state.laser_is_drawing = false;
         if !state.current_laser_stroke.is_empty() {
@@ -1010,36 +1374,46 @@ fn handle_drag_stopped(
         state.last_stroke_move_time = None;
         let recognized_shape = state.recognized_draft_shape.take();
         if let Some(mut pts) = state.draft_stroke.take() {
-            // Ensure exact final point without overwriting genuine pressure
+            // Pastikan titik akhir pelepasan pointer tercatat secara akurat tanpa membuang gerakan kecil
             if let Some(pos) = pointer_pos {
                 let p = screen_to_page(pos);
-                let should_append = pts
-                    .last()
-                    .is_none_or(|last| (p - last.to_pos2()).length() >= 0.5);
-                if should_append {
-                    let (_, touch_force) = ui.input(|i| {
-                        extract_touch_pressure(&i.raw.events, state.active_touch_id, Some(pos))
-                    });
-                    let is_highlighter = state.current_tool == ActiveTool::Highlighter;
-                    let pressure = if (is_highlighter && !state.highlighter_pressure_enabled)
-                        || !state.pressure_sensitivity_enabled
-                    {
-                        1.0
-                    } else if let Some(f) = touch_force {
-                        state.effective_pressure(f.clamp(0.0, 1.0))
-                    } else {
-                        pts.last().map(|pt| pt.pressure).unwrap_or(1.0)
-                    };
-                    pts.push(StrokePoint {
-                        x: p.x,
-                        y: p.y,
-                        pressure,
-                    });
+                let release_ev = batch
+                    .events
+                    .iter()
+                    .rev()
+                    .find(|e| (e.screen_pos - pos).length_sq() <= 4.0)
+                    .or_else(|| batch.events.last());
+                let raw_force = release_ev.and_then(|e| e.raw_pressure);
+                let is_highlighter = state.current_tool == ActiveTool::Highlighter;
+                let prev_pressure = pts.last().map(|pt| pt.pressure);
+                let pressure =
+                    state.resolve_sample_pressure(raw_force, is_highlighter, prev_pressure);
+                let seq = state.pointer_sample_seq;
+                let release_sample = RawPointerSample {
+                    screen_pos: pos,
+                    page_pos: p,
+                    raw_pressure: raw_force,
+                    effective_pressure: pressure,
+                    phase: PointerSamplePhase::Release,
+                    source: release_ev.map(|e| e.source).unwrap_or(PointerSource::Mouse),
+                    sequence: seq,
+                    dt_secs: 0.0,
+                };
+                if append_stroke_sample(
+                    &mut state.raw_stroke_samples,
+                    &mut pts,
+                    release_sample,
+                    false,
+                    false,
+                ) {
+                    state.pointer_sample_seq = seq + 1;
                 }
             }
+            state.last_completed_raw_samples = std::mem::take(&mut state.raw_stroke_samples);
             state.active_touch_id = None;
 
             if !pts.is_empty() {
+                state.stroke_committed_this_frame = true;
                 state.push_undo(&page.id, &page.objects);
                 let is_highlighter = state.current_tool == ActiveTool::Highlighter;
                 let stroke_width = if is_highlighter {
@@ -1217,10 +1591,31 @@ fn handle_drag_stopped(
                 state.selected_ids = vec![new_id];
                 state.rebuild_spatial_grid(&page.id, &page.objects);
             }
-        } else if !state.lasso_points.is_empty()
-            && state.active_stroke_page_id.as_deref() == Some(&page.id)
-        {
+        } else if !state.lasso_points.is_empty() {
+            if let Some(pos) = pointer_pos {
+                let p = screen_to_page(pos);
+                let seq = state.pointer_sample_seq;
+                let release_sample = RawPointerSample {
+                    screen_pos: pos,
+                    page_pos: p,
+                    raw_pressure: None,
+                    effective_pressure: 1.0,
+                    phase: PointerSamplePhase::Release,
+                    source: PointerSource::Mouse,
+                    sequence: seq,
+                    dt_secs: 0.0,
+                };
+                if append_lasso_sample(
+                    &mut state.raw_stroke_samples,
+                    &mut state.lasso_points,
+                    release_sample,
+                ) {
+                    state.pointer_sample_seq = seq + 1;
+                }
+            }
+            state.last_completed_raw_samples = std::mem::take(&mut state.raw_stroke_samples);
             if state.lasso_points.len() > 2 {
+                state.stroke_committed_this_frame = true;
                 let mut selected = Vec::new();
                 for obj in &page.objects {
                     if object_in_lasso_mode_with_context(
@@ -1351,6 +1746,10 @@ fn handle_primary_click(
     pos: Pos2,
     screen_to_page: impl Fn(Pos2) -> Pos2 + Copy,
 ) {
+    if state.stroke_committed_this_frame {
+        state.stroke_committed_this_frame = false;
+        return;
+    }
     let page_p = screen_to_page(pos);
     let shift_held = ui.input(|i| i.modifiers.shift);
 
@@ -1476,22 +1875,39 @@ fn handle_primary_click(
         ActiveTool::Pen | ActiveTool::Pencil | ActiveTool::Highlighter
     ) {
         // Task 1: Dukung click-only / tap tunggal untuk menghasilkan titik goresan yang valid
-        let (_touch_id, touch_force) =
+        let (touch_id, touch_force) =
             ui.input(|i| extract_touch_pressure(&i.raw.events, state.active_touch_id, Some(pos)));
         let raw_pressure = touch_force.unwrap_or(1.0).clamp(0.0, 1.0);
         let is_highlighter = state.current_tool == ActiveTool::Highlighter;
-        let pressure = if is_highlighter && !state.highlighter_pressure_enabled {
+        let pressure = if (is_highlighter && !state.highlighter_pressure_enabled)
+            || !state.pressure_sensitivity_enabled
+        {
             1.0
         } else {
             state.effective_pressure(raw_pressure)
         };
-        let pts = state.draft_stroke.take().unwrap_or_else(|| {
-            vec![StrokePoint {
-                x: page_p.x,
-                y: page_p.y,
-                pressure,
-            }]
-        });
+        let single_sample = RawPointerSample {
+            screen_pos: pos,
+            page_pos: page_p,
+            raw_pressure: touch_force,
+            effective_pressure: pressure,
+            phase: PointerSamplePhase::Release,
+            source: touch_id.map_or(PointerSource::Mouse, |id| PointerSource::Touch {
+                device_id: egui::TouchDeviceId(0),
+                id,
+            }),
+            sequence: 0,
+            dt_secs: 0.0,
+        };
+        let pts = state
+            .draft_stroke
+            .take()
+            .unwrap_or_else(|| vec![single_sample.to_stroke_point()]);
+        if state.raw_stroke_samples.is_empty() {
+            state.last_completed_raw_samples = vec![single_sample];
+        } else {
+            state.last_completed_raw_samples = std::mem::take(&mut state.raw_stroke_samples);
+        }
         state.clear_active_draft_state();
         state.push_undo(&page.id, &page.objects);
         let stroke_width = if is_highlighter {
@@ -1917,46 +2333,5 @@ fn handle_quick_diagramming_shortcuts(
                 ui.ctx().request_repaint();
             }
         }
-    }
-}
-
-/// Mengambil TouchId dan gaya tekanan (pressure/force) dari daftar event egui.
-/// Jika `active_id` sudah ada, prioritaskan sentuhan dengan ID tersebut.
-/// Jika belum ada, cari sentuhan yang paling dekat dengan `reference_pos` (atau sentuhan pertama).
-pub(crate) fn extract_touch_pressure(
-    events: &[egui::Event],
-    active_id: Option<egui::TouchId>,
-    reference_pos: Option<Pos2>,
-) -> (Option<egui::TouchId>, Option<f32>) {
-    if let Some(target_id) = active_id {
-        // Cari event terbaru untuk sentuhan yang sedang aktif
-        for event in events.iter().rev() {
-            if let egui::Event::Touch { id, force, .. } = event
-                && *id == target_id
-            {
-                return (Some(target_id), *force);
-            }
-        }
-    }
-
-    // Jika belum ada ID aktif, cari sentuhan terdekat dengan posisi pointer
-    let mut best_candidate: Option<(egui::TouchId, Option<f32>, f32)> = None;
-    for event in events.iter().rev() {
-        if let egui::Event::Touch { id, pos, force, .. } = event {
-            let dist = reference_pos.map(|p| (*pos - p).length()).unwrap_or(0.0);
-            if let Some((_, _, best_dist)) = best_candidate {
-                if dist < best_dist {
-                    best_candidate = Some((*id, *force, dist));
-                }
-            } else {
-                best_candidate = Some((*id, *force, dist));
-            }
-        }
-    }
-
-    if let Some((id, force, _)) = best_candidate {
-        (Some(id), force)
-    } else {
-        (active_id, None)
     }
 }
