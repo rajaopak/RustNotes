@@ -3014,3 +3014,748 @@ fn test_moving_shape_prunes_covered_connector_control_points_through_canvas() {
         other => panic!("Expected Connector, got {other:?}"),
     }
 }
+
+fn step_test_canvas(
+    ctx: &eframe::egui::Context,
+    page: &mut Page,
+    state: &mut CanvasState,
+    events: Vec<eframe::egui::Event>,
+) -> Pos2 {
+    let mut origin = Pos2::ZERO;
+    let input = eframe::egui::RawInput {
+        screen_rect: Some(eframe::egui::Rect::from_min_size(
+            Pos2::ZERO,
+            Vec2::new(1200.0, 1200.0),
+        )),
+        events,
+        ..Default::default()
+    };
+    let _ = ctx.run(input, |ctx| {
+        eframe::egui::CentralPanel::default()
+            .frame(eframe::egui::Frame::NONE)
+            .show(ctx, |ui| {
+                origin = ui.next_widget_position();
+                let _ = render_page_canvas(ui, page, state);
+            });
+    });
+    origin
+}
+
+#[test]
+fn test_pointer_sampling_very_short_micro_stroke_and_single_point_tap() {
+    let ctx = eframe::egui::Context::default();
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Pen,
+        zoom: 1.0,
+        ..Default::default()
+    };
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "micro-stroke-page".to_string();
+
+    let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    let to_screen = |x: f32, y: f32| origin + Vec2::new(x, y);
+
+    // 1. Goresan sangat pendek (0.35 pt dan 0.70 pt, jauh di bawah threshold lama 1.2 pt dan drag threshold 6.0 px egui)
+    let p0 = to_screen(100.0, 100.0);
+    let p1 = to_screen(100.35, 100.15);
+    let p2 = to_screen(100.70, 100.30);
+
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(p0)],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: p0,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(p1),
+            eframe::egui::Event::PointerMoved(p2),
+        ],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: p2,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    assert_eq!(
+        page.objects.len(),
+        1,
+        "Micro-stroke harus menghasilkan tepat 1 objek Stroke"
+    );
+    match &page.objects[0] {
+        DrawObject::Stroke { points, .. } => {
+            assert_eq!(
+                points.len(),
+                3,
+                "Seluruh 3 titik micro-stroke (0.35 pt step) harus tersimpan tanpa terbuang oleh threshold"
+            );
+            assert!((points[0].x - 100.0).abs() < 1e-3);
+            assert!((points[1].x - 100.35).abs() < 1e-3);
+            assert!((points[2].x - 100.70).abs() < 1e-3);
+        }
+        other => panic!("Expected Stroke, got {other:?}"),
+    }
+    assert_eq!(state.last_completed_raw_samples.len(), 3);
+
+    // 2. Goresan satu titik (tap tanpa pergerakan)
+    let tap_pos = to_screen(200.0, 200.0);
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(tap_pos)],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: tap_pos,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: tap_pos,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    assert_eq!(page.objects.len(), 2);
+    match &page.objects[1] {
+        DrawObject::Stroke { points, .. } => {
+            assert_eq!(points.len(), 1);
+            assert!((points[0].x - 200.0).abs() < 1e-3);
+            assert!((points[0].y - 200.0).abs() < 1e-3);
+        }
+        other => panic!("Expected single-point Stroke, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_pointer_sampling_multiple_events_in_single_frame_and_directions() {
+    let ctx = eframe::egui::Context::default();
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Pen,
+        zoom: 1.0,
+        ..Default::default()
+    };
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "multi-event-page".to_string();
+
+    let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    let to_screen = |x: f32, y: f32| origin + Vec2::new(x, y);
+
+    // Uji goresan horizontal, vertikal, diagonal, dan perubahan arah tajam dalam satu frame burst
+    let path = [
+        (50.0, 50.0),
+        (52.0, 50.0), // Horizontal
+        (55.0, 50.0),
+        (55.0, 53.0), // Belokan tajam 90 derajat ke Vertikal
+        (55.0, 58.0),
+        (60.0, 63.0), // Diagonal
+        (65.0, 58.0), // Belokan tajam ke atas-kanan
+        (70.0, 64.0), // Titik lepas akhir
+    ];
+
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(to_screen(path[0].0, path[0].1)),
+            eframe::egui::Event::PointerButton {
+                pos: to_screen(path[0].0, path[0].1),
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+            eframe::egui::Event::PointerMoved(to_screen(path[1].0, path[1].1)),
+            eframe::egui::Event::PointerMoved(to_screen(path[2].0, path[2].1)),
+            eframe::egui::Event::PointerMoved(to_screen(path[3].0, path[3].1)),
+            eframe::egui::Event::PointerMoved(to_screen(path[4].0, path[4].1)),
+            eframe::egui::Event::PointerMoved(to_screen(path[5].0, path[5].1)),
+            eframe::egui::Event::PointerMoved(to_screen(path[6].0, path[6].1)),
+        ],
+    );
+
+    // Lepaskan pointer pada titik terakhir yang bergerak sedikit dari titik ke-6
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(to_screen(path[7].0, path[7].1)),
+            eframe::egui::Event::PointerButton {
+                pos: to_screen(path[7].0, path[7].1),
+                button: eframe::egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+
+    assert_eq!(page.objects.len(), 1);
+    match &page.objects[0] {
+        DrawObject::Stroke { points, .. } => {
+            assert_eq!(
+                points.len(),
+                path.len(),
+                "Seluruh 8 sampel event dalam satu frame + release wajib diproses secara berurutan"
+            );
+            for (i, &(ex, ey)) in path.iter().enumerate() {
+                assert!(
+                    (points[i].x - ex).abs() < 1e-3 && (points[i].y - ey).abs() < 1e-3,
+                    "Titik ke-{i} meleset: diharapkan ({ex}, {ey}), didapat ({}, {})",
+                    points[i].x,
+                    points[i].y
+                );
+            }
+        }
+        other => panic!("Expected Stroke, got {other:?}"),
+    }
+
+    // Pastikan raw samples menyimpan urutan sequence yang monoton dan konsisten
+    assert_eq!(state.last_completed_raw_samples.len(), path.len());
+    for (idx, sample) in state.last_completed_raw_samples.iter().enumerate() {
+        assert_eq!(sample.sequence, idx as u64);
+    }
+}
+
+#[test]
+fn test_pointer_sampling_pressure_pairing_and_mouse_fallback() {
+    let ctx = eframe::egui::Context::default();
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Pen,
+        zoom: 1.0,
+        pressure_sensitivity_enabled: true,
+        pressure_min: 0.2,
+        pressure_multiplier: 1.0,
+        ..Default::default()
+    };
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "pressure-pairing-page".to_string();
+
+    let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    let to_screen = |x: f32, y: f32| origin + Vec2::new(x, y);
+
+    let dev = eframe::egui::TouchDeviceId(0);
+    let tid = eframe::egui::TouchId::from(42_u64);
+    let p0 = to_screen(100.0, 100.0);
+    let p1 = to_screen(110.0, 105.0);
+    let p2 = to_screen(120.0, 110.0);
+    let p3 = to_screen(130.0, 115.0);
+
+    // 1. Input dengan variasi pressure pada beberapa Touch events dalam satu frame
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(p0),
+            eframe::egui::Event::Touch {
+                device_id: dev,
+                id: tid,
+                phase: eframe::egui::TouchPhase::Start,
+                pos: p0,
+                force: Some(0.0),
+            },
+            eframe::egui::Event::PointerButton {
+                pos: p0,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::Touch {
+                device_id: dev,
+                id: tid,
+                phase: eframe::egui::TouchPhase::Move,
+                pos: p1,
+                force: Some(0.25),
+            },
+            eframe::egui::Event::PointerMoved(p1),
+            eframe::egui::Event::Touch {
+                device_id: dev,
+                id: tid,
+                phase: eframe::egui::TouchPhase::Move,
+                pos: p2,
+                force: Some(0.50),
+            },
+            eframe::egui::Event::PointerMoved(p2),
+            eframe::egui::Event::Touch {
+                device_id: dev,
+                id: tid,
+                phase: eframe::egui::TouchPhase::Move,
+                pos: p3,
+                force: Some(1.0),
+            },
+            eframe::egui::Event::PointerMoved(p3),
+        ],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::Touch {
+                device_id: dev,
+                id: tid,
+                phase: eframe::egui::TouchPhase::End,
+                pos: p3,
+                force: Some(1.0),
+            },
+            eframe::egui::Event::PointerButton {
+                pos: p3,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+
+    assert_eq!(page.objects.len(), 1);
+    match &page.objects[0] {
+        DrawObject::Stroke { points, .. } => {
+            assert_eq!(points.len(), 4);
+            // Effective pressure = 0.2 + 0.8 * raw_force
+            assert!((points[0].pressure - 0.20).abs() < 1e-4);
+            assert!((points[1].pressure - 0.40).abs() < 1e-4);
+            assert!((points[2].pressure - 0.60).abs() < 1e-4);
+            assert!((points[3].pressure - 1.00).abs() < 1e-4);
+        }
+        other => panic!("Expected Stroke, got {other:?}"),
+    }
+
+    // 2. Input tanpa pressure (Mouse fallback -> effective_pressure(1.0) = 1.0)
+    let m0 = to_screen(200.0, 200.0);
+    let m1 = to_screen(220.0, 210.0);
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(m0),
+            eframe::egui::Event::PointerButton {
+                pos: m0,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+            eframe::egui::Event::PointerMoved(m1),
+        ],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: m1,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    assert_eq!(page.objects.len(), 2);
+    match &page.objects[1] {
+        DrawObject::Stroke { points, .. } => {
+            assert_eq!(points.len(), 2);
+            assert!((points[0].pressure - 1.0).abs() < 1e-4);
+            assert!((points[1].pressure - 1.0).abs() < 1e-4);
+        }
+        other => panic!("Expected Stroke, got {other:?}"),
+    }
+    assert!(
+        state
+            .last_completed_raw_samples
+            .iter()
+            .all(|s| s.raw_pressure.is_none() && s.source == PointerSource::Mouse)
+    );
+}
+
+#[test]
+fn test_pointer_sampling_cancellation_via_pointer_gone_and_touch_cancel() {
+    let ctx = eframe::egui::Context::default();
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Pen,
+        zoom: 1.0,
+        ..Default::default()
+    };
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "cancel-page".to_string();
+
+    let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    let to_screen = |x: f32, y: f32| origin + Vec2::new(x, y);
+
+    // 1. Mulai menggambar lalu batalkan dengan Event::PointerGone
+    let p0 = to_screen(80.0, 80.0);
+    let p1 = to_screen(100.0, 90.0);
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(p0),
+            eframe::egui::Event::PointerButton {
+                pos: p0,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+            eframe::egui::Event::PointerMoved(p1),
+        ],
+    );
+    assert!(state.draft_stroke.is_some());
+
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerGone],
+    );
+    assert!(
+        state.draft_stroke.is_none(),
+        "PointerGone harus membatalkan draft_stroke aktif"
+    );
+    assert!(state.raw_stroke_samples.is_empty());
+    assert!(
+        page.objects.is_empty(),
+        "Goresan yang dibatalkan tidak boleh disimpan ke page.objects"
+    );
+
+    // 2. Mulai menggambar dengan sentuhan lalu batalkan dengan TouchPhase::Cancel
+    let dev = eframe::egui::TouchDeviceId(0);
+    let tid = eframe::egui::TouchId::from(99_u64);
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(p0),
+            eframe::egui::Event::Touch {
+                device_id: dev,
+                id: tid,
+                phase: eframe::egui::TouchPhase::Start,
+                pos: p0,
+                force: Some(0.5),
+            },
+            eframe::egui::Event::PointerButton {
+                pos: p0,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+            eframe::egui::Event::Touch {
+                device_id: dev,
+                id: tid,
+                phase: eframe::egui::TouchPhase::Move,
+                pos: p1,
+                force: Some(0.6),
+            },
+            eframe::egui::Event::PointerMoved(p1),
+        ],
+    );
+    assert!(state.draft_stroke.is_some());
+
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::Touch {
+                device_id: dev,
+                id: tid,
+                phase: eframe::egui::TouchPhase::Cancel,
+                pos: p1,
+                force: None,
+            },
+            eframe::egui::Event::PointerButton {
+                pos: p1,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+    assert!(state.draft_stroke.is_none());
+    assert!(page.objects.is_empty());
+}
+
+#[test]
+fn test_pointer_sampling_zoom_low_normal_high_and_page_space_consistency() {
+    let ctx = eframe::egui::Context::default();
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "zoom-consistency-page".to_string();
+
+    for &zoom in &[0.4_f32, 1.0_f32, 2.5_f32] {
+        let mut state = CanvasState {
+            current_tool: ActiveTool::Pen,
+            zoom,
+            ..Default::default()
+        };
+        page.objects.clear();
+
+        let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+        let page_to_screen = |px: f32, py: f32| origin + Vec2::new(px * zoom, py * zoom);
+
+        // Gerakan kecil dalam page-space (step 0.25 pt) pada berbagai tingkat zoom
+        let p0 = page_to_screen(40.0, 50.0);
+        let p1 = page_to_screen(40.25, 50.25);
+        let p2 = page_to_screen(40.50, 50.50);
+
+        step_test_canvas(
+            &ctx,
+            &mut page,
+            &mut state,
+            vec![
+                eframe::egui::Event::PointerMoved(p0),
+                eframe::egui::Event::PointerButton {
+                    pos: p0,
+                    button: eframe::egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+                eframe::egui::Event::PointerMoved(p1),
+                eframe::egui::Event::PointerMoved(p2),
+            ],
+        );
+        step_test_canvas(
+            &ctx,
+            &mut page,
+            &mut state,
+            vec![eframe::egui::Event::PointerButton {
+                pos: p2,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+
+        assert_eq!(page.objects.len(), 1, "Failed at zoom {zoom}");
+        match &page.objects[0] {
+            DrawObject::Stroke { points, .. } => {
+                assert_eq!(points.len(), 3, "Points lost at zoom {zoom}");
+                assert!((points[0].x - 40.0).abs() < 1e-3);
+                assert!((points[1].x - 40.25).abs() < 1e-3);
+                assert!((points[2].x - 40.50).abs() < 1e-3);
+            }
+            other => panic!("Expected Stroke, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn test_lasso_and_eraser_high_frequency_sampling() {
+    let ctx = eframe::egui::Context::default();
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Lasso,
+        zoom: 1.0,
+        ..Default::default()
+    };
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "lasso-eraser-sampling".to_string();
+
+    // Tempatkan goresan titik kecil di (52.0, 52.0) untuk diuji dengan lasso pendek & cepat
+    page.objects.push(DrawObject::Stroke {
+        id: "tiny-dot".to_string(),
+        points: vec![StrokePoint::new(52.0, 52.0, 1.0)],
+        color: ColorData::from(Color32::BLACK),
+        width: 1.0,
+        is_highlighter: false,
+        style: StrokeStyle::Solid,
+    });
+    // Tempatkan 3 goresan vertikal di x=120, x=160, x=200 untuk diuji dengan sapuan eraser cepat
+    for (idx, x) in [120.0_f32, 160.0, 200.0].into_iter().enumerate() {
+        page.objects.push(DrawObject::Stroke {
+            id: format!("vline-{idx}"),
+            points: vec![
+                StrokePoint::new(x, 80.0, 1.0),
+                StrokePoint::new(x, 140.0, 1.0),
+            ],
+            color: ColorData::from(Color32::BLACK),
+            width: 2.0,
+            is_highlighter: false,
+            style: StrokeStyle::Solid,
+        });
+    }
+    state.rebuild_spatial_grid(&page.id, &page.objects);
+
+    let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    let to_screen = |x: f32, y: f32| origin + Vec2::new(x, y);
+
+    // 1. Lasso pendek (< 5px excursion) dengan banyak perubahan arah dalam satu frame
+    let l0 = to_screen(50.0, 50.0);
+    let l1 = to_screen(54.5, 50.0);
+    let l2 = to_screen(54.5, 54.5);
+    let l3 = to_screen(50.0, 54.5);
+
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(l0),
+            eframe::egui::Event::PointerButton {
+                pos: l0,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+            eframe::egui::Event::PointerMoved(l1),
+            eframe::egui::Event::PointerMoved(l2),
+            eframe::egui::Event::PointerMoved(l3),
+        ],
+    );
+    assert_eq!(
+        state.lasso_points.len(),
+        4,
+        "Seluruh 4 titik lasso dalam satu frame wajib terkumpul"
+    );
+
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: l3,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+    assert_eq!(
+        state.selected_ids,
+        vec!["tiny-dot".to_string()],
+        "Lasso pendek (< 6px) harus tetap berhasil memilih objek di dalamnya"
+    );
+
+    // 2. Eraser dengan gerakan cepat dari x=100 ke x=220 dalam satu langkah (melintasi x=120, 160, 200)
+    state.current_tool = ActiveTool::Eraser;
+    state.eraser_mode = EraserMode::WholeStroke;
+    let e_start = to_screen(100.0, 110.0);
+    let e_end = to_screen(220.0, 110.0);
+
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(e_start),
+            eframe::egui::Event::PointerButton {
+                pos: e_start,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+            eframe::egui::Event::PointerMoved(e_end),
+        ],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: e_end,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    assert_eq!(
+        page.objects.len(),
+        1,
+        "Gerakan cepat eraser dari x=100 ke x=220 harus menghapus ketiga garis vertikal tanpa melompati jalur"
+    );
+    assert_eq!(page.objects[0].id(), "tiny-dot");
+}
+
+#[test]
+fn test_sampling_engine_high_frequency_benchmark() {
+    let dev = eframe::egui::TouchDeviceId(0);
+    let tid = eframe::egui::TouchId::from(7_u64);
+    let mut raw_events = Vec::with_capacity(2000);
+    for i in 0..1000 {
+        let x = 50.0 + (i as f32) * 0.4;
+        let y = 100.0 + ((i as f32) * 0.1).sin() * 8.0;
+        let pos = Pos2::new(x, y);
+        let force = 0.3 + 0.6 * ((i as f32) * 0.05).cos().abs();
+        raw_events.push(eframe::egui::Event::Touch {
+            device_id: dev,
+            id: tid,
+            phase: if i == 0 {
+                eframe::egui::TouchPhase::Start
+            } else {
+                eframe::egui::TouchPhase::Move
+            },
+            pos,
+            force: Some(force),
+        });
+        raw_events.push(eframe::egui::Event::PointerMoved(pos));
+    }
+
+    let start_time = std::time::Instant::now();
+    let batch =
+        collect_frame_pointer_batch(&raw_events, Some(tid), Some(Pos2::new(50.0, 100.0)), None);
+    let mut raw_samples = Vec::with_capacity(batch.events.len());
+    let mut draft_stroke = Vec::with_capacity(batch.events.len());
+    for (seq, ev) in batch.events.iter().enumerate() {
+        let sample = RawPointerSample {
+            screen_pos: ev.screen_pos,
+            page_pos: ev.screen_pos,
+            raw_pressure: ev.raw_pressure,
+            effective_pressure: ev.raw_pressure.unwrap_or(1.0),
+            phase: ev.phase,
+            source: ev.source,
+            sequence: seq as u64,
+            dt_secs: 0.001,
+        };
+        append_stroke_sample(&mut raw_samples, &mut draft_stroke, sample, true, false);
+    }
+    let filtered = crate::geometry::filter_stroke_points_adaptive(&draft_stroke, 3.0, false);
+    let elapsed = start_time.elapsed();
+
+    assert_eq!(batch.events.len(), 1000);
+    assert_eq!(raw_samples.len(), 1000);
+    assert_eq!(draft_stroke.len(), 1000);
+    assert!(!filtered.is_empty());
+    assert!(
+        elapsed.as_millis() < 50,
+        "Pemrosesan 1000 sampel high-frequency harus sangat cepat (< 50ms), aktual: {elapsed:?}"
+    );
+}

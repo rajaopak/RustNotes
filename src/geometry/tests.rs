@@ -4328,3 +4328,57 @@ fn test_attached_connector_bounds_with_context_and_spatial_grid() {
         "Attached connector must be indexed at its actual coordinates, not (0,0)"
     );
 }
+
+#[test]
+fn test_adaptive_filtering_preserves_corners_pressure_and_short_strokes() {
+    // 1. Goresan sangat pendek (0.3 pt) dengan 2 titik wajib mempertahankan titik awal & akhir
+    let short_pts = vec![
+        StrokePoint::new(10.0, 10.0, 0.5),
+        StrokePoint::new(10.3, 10.0, 0.7),
+    ];
+    let filtered_short = filter_stroke_points_adaptive(&short_pts, 3.0, false);
+    assert_eq!(filtered_short.len(), 2);
+    assert_eq!(filtered_short[0], short_pts[0]);
+    assert_eq!(filtered_short[1], short_pts[1]);
+
+    // 2. Perubahan arah tajam (sudut V kecil dalam jarak < 1.0 pt) tidak boleh terhapus
+    let corner_pts = vec![
+        StrokePoint::new(50.0, 50.0, 0.5),
+        StrokePoint::new(50.2, 50.5, 0.5), // Puncak sudut tajam
+        StrokePoint::new(50.4, 50.0, 0.5),
+        StrokePoint::new(60.0, 50.0, 0.5),
+    ];
+    let filtered_corner = filter_stroke_points_adaptive(&corner_pts, 3.0, false);
+    assert!(
+        filtered_corner
+            .iter()
+            .any(|p| (p.x - 50.2).abs() < 1e-4 && (p.y - 50.5).abs() < 1e-4),
+        "Titik sudut tajam (50.2, 50.5) wajib dipertahankan oleh adaptive filter"
+    );
+
+    // 3. Perubahan pressure signifikan pada segmen lurus pendek wajib dipertahankan
+    let pressure_pts = vec![
+        StrokePoint::new(20.0, 20.0, 0.2),
+        StrokePoint::new(20.1, 20.0, 0.85),
+        StrokePoint::new(35.0, 20.0, 0.85),
+    ];
+    let filtered_pressure = filter_stroke_points_adaptive(&pressure_pts, 3.0, false);
+    assert!(
+        filtered_pressure
+            .iter()
+            .any(|p| (p.x - 20.1).abs() < 1e-4 && (p.pressure - 0.85).abs() < 1e-4),
+        "Titik dengan perubahan pressure signifikan wajib dipertahankan"
+    );
+
+    // 4. Titik kolinear yang sangat rapat dan bertekanan sama dapat disederhanakan tanpa menghapus ujung
+    let collinear_pts = vec![
+        StrokePoint::new(0.0, 0.0, 0.5),
+        StrokePoint::new(0.02, 0.0, 0.5),
+        StrokePoint::new(0.04, 0.0, 0.5),
+        StrokePoint::new(10.0, 0.0, 0.5),
+    ];
+    let filtered_collinear = filter_stroke_points_adaptive(&collinear_pts, 3.0, false);
+    assert_eq!(filtered_collinear.first().unwrap().x, 0.0);
+    assert_eq!(filtered_collinear.last().unwrap().x, 10.0);
+    assert!(filtered_collinear.len() < collinear_pts.len());
+}
