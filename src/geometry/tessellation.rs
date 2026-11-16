@@ -293,6 +293,125 @@ fn slice_stroke_by_dist(
     slice
 }
 
+/// Penyaringan adaptif untuk data rendering goresan (derived rendering data).
+/// Mempertahankan titik awal, titik akhir, detail goresan pendek, perubahan arah (sudut/belokan),
+/// kelengkungan jalur, dan perubahan pressure yang signifikan, sambil menyederhanakan titik
+/// kolinear yang berhimpit agar mesh tetap bersih dan bebas lipatan (ribbon folding).
+pub fn filter_stroke_points_adaptive(
+    points: &[StrokePoint],
+    page_base_width: f32,
+    is_highlighter: bool,
+) -> Vec<StrokePoint> {
+    if points.len() <= 1 {
+        return points.to_vec();
+    }
+    if points.len() == 2 {
+        let dist_sq = (points[1].to_pos2() - points[0].to_pos2()).length_sq();
+        if dist_sq <= 1e-8 {
+            let mut single = points[0].clone();
+            single.pressure = single.pressure.max(points[1].pressure);
+            return vec![single];
+        }
+        return points.to_vec();
+    }
+
+    let mut total_len = 0.0_f32;
+    for i in 1..points.len() {
+        total_len += (points[i].to_pos2() - points[i - 1].to_pos2()).length();
+    }
+
+    let eff_w = page_base_width.max(0.5);
+    let min_collinear_dist = if is_highlighter {
+        if total_len < eff_w {
+            (total_len * 0.20).clamp(0.15, 1.2)
+        } else {
+            (eff_w * 0.18).clamp(0.5, 2.5)
+        }
+    } else if total_len < (eff_w * 2.0).max(4.0) {
+        0.04
+    } else {
+        (eff_w * 0.08).clamp(0.08, 0.35)
+    };
+    let min_collinear_dist_sq = min_collinear_dist * min_collinear_dist;
+    let curvature_tol = (eff_w * 0.02).clamp(0.015, 0.10);
+
+    let mut filtered: Vec<StrokePoint> = Vec::with_capacity(points.len());
+    filtered.push(points[0].clone());
+
+    let last_idx = points.len() - 1;
+    for i in 1..last_idx {
+        let curr = &points[i];
+        let prev = filtered.last().unwrap();
+        let v_in = curr.to_pos2() - prev.to_pos2();
+        let dist_sq = v_in.length_sq();
+        let dp = (curr.pressure - prev.pressure).abs();
+
+        // Titik yang tepat berhimpit secara numerik
+        if dist_sq <= 1e-6 {
+            if !is_highlighter && dp >= 0.01 {
+                filtered.last_mut().unwrap().pressure = curr.pressure;
+            }
+            continue;
+        }
+
+        if dist_sq >= min_collinear_dist_sq {
+            filtered.push(curr.clone());
+            continue;
+        }
+
+        // Pertahankan jika terjadi perubahan tekanan (pressure) yang signifikan
+        if !is_highlighter && dp >= 0.025 {
+            filtered.push(curr.clone());
+            continue;
+        }
+
+        // Pertahankan jika terdapat perubahan arah (sudut) atau kelengkungan jalur yang penting
+        let next = &points[i + 1];
+        let v_out = next.to_pos2() - curr.to_pos2();
+        let out_len_sq = v_out.length_sq();
+        if out_len_sq > 1e-6 {
+            let in_dir = v_in / dist_sq.sqrt();
+            let out_dir = v_out / out_len_sq.sqrt();
+            let cos_turn = in_dir.dot(out_dir);
+            let turn_threshold = if is_highlighter { 0.75 } else { 0.965 };
+            if cos_turn < turn_threshold {
+                filtered.push(curr.clone());
+                continue;
+            }
+
+            if !is_highlighter {
+                let chord_dev = super::primitives::point_to_segment_dist(
+                    curr.to_pos2(),
+                    prev.to_pos2(),
+                    next.to_pos2(),
+                );
+                if chord_dev >= curvature_tol {
+                    filtered.push(curr.clone());
+                    continue;
+                }
+            }
+        }
+    }
+
+    // Selalu pertahankan titik akhir secara akurat
+    if let Some(last) = points.last() {
+        if let Some(prev) = filtered.last() {
+            let dist_sq = (last.to_pos2() - prev.to_pos2()).length_sq();
+            if dist_sq > 1e-6 {
+                filtered.push(last.clone());
+            } else if filtered.len() > 1 {
+                *filtered.last_mut().unwrap() = last.clone();
+            } else if !is_highlighter {
+                filtered[0].pressure = filtered[0].pressure.max(last.pressure);
+            }
+        } else {
+            filtered.push(last.clone());
+        }
+    }
+
+    filtered
+}
+
 fn tessellate_single_ribbon(
     points: &[StrokePoint],
     base_width: f32,
@@ -311,44 +430,19 @@ fn tessellate_single_ribbon(
         return;
     }
 
-    // Filter titik-titik yang terlalu rapat untuk mencegah pita melipat diri (ribbon folding overlap)
-    let min_dist_sq = if is_highlighter {
-        let r = (base_width / 2.0).max(1.0);
-        (r * 0.45).powi(2).max(12.0)
-    } else {
-        2.0
-    };
+    let coord_scale = (page_to_screen(Pos2::new(1.0, 0.0)) - page_to_screen(Pos2::ZERO))
+        .length()
+        .max(1e-4);
+    let page_base_width = base_width / coord_scale;
 
-    let mut filtered: Vec<StrokePoint> = Vec::with_capacity(points.len());
-    for pt in points {
-        if let Some(last) = filtered.last() {
-            let dx = pt.x - last.x;
-            let dy = pt.y - last.y;
-            if (dx * dx + dy * dy) < min_dist_sq {
-                continue;
-            }
-        }
-        filtered.push(pt.clone());
+    let filtered = filter_stroke_points_adaptive(points, page_base_width, is_highlighter);
+    if filtered.len() == 1 {
+        let center = page_to_screen(filtered[0].to_pos2());
+        let r = stroke_radius_at_pressure(base_width, filtered[0].pressure, is_highlighter);
+        add_round_cap(mesh, center, r, color, 12);
+        return;
     }
-    if let Some(last) = points.last() {
-        if let Some(prev) = filtered.last() {
-            let dx = last.x - prev.x;
-            let dy = last.y - prev.y;
-            if (dx * dx + dy * dy) >= min_dist_sq {
-                filtered.push(last.clone());
-            } else if filtered.len() > 1 {
-                *filtered.last_mut().unwrap() = last.clone();
-            }
-        } else {
-            filtered.push(last.clone());
-        }
-    }
-
-    let pts_to_use = if filtered.len() >= 2 {
-        &filtered[..]
-    } else {
-        points
-    };
+    let pts_to_use = &filtered[..];
 
     let mut screen_pts = Vec::with_capacity(pts_to_use.len());
     let mut radii = Vec::with_capacity(pts_to_use.len());
