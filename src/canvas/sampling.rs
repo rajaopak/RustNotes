@@ -208,74 +208,24 @@ pub fn collect_frame_pointer_batch(
                 } else {
                     PointerSamplePhase::Release
                 };
-                // Cari apakah ada event Touch dengan ID aktif di sekitar titik tombol ini
-                let matched_touch = raw_events.iter().rev().find_map(|e| {
-                    if let egui::Event::Touch {
-                        device_id,
-                        id,
-                        phase: t_phase,
-                        pos: t_pos,
-                        force,
-                    } = e
-                        && Some(*id) == resolved_touch_id
-                        && *t_phase != egui::TouchPhase::Cancel
-                        && (*t_pos - *pos).length_sq() <= 4.0
-                    {
-                        Some((
-                            PointerSource::Touch {
-                                device_id: *device_id,
-                                id: *id,
-                            },
-                            *force,
-                        ))
-                    } else {
-                        None
-                    }
-                });
-                let (src, force) = matched_touch.unwrap_or((current_source, current_force));
                 push_or_merge_screen_event(
                     &mut batch.events,
                     RawScreenEvent {
                         screen_pos: *pos,
-                        raw_pressure: force,
+                        raw_pressure: current_force,
                         phase,
-                        source: src,
+                        source: current_source,
                     },
                 );
             }
             egui::Event::PointerMoved(pos) => {
-                // Jika ada event Touch untuk ID aktif pada koordinat yang sama di frame ini, gunakan datanya
-                let matched_touch = raw_events.iter().rev().find_map(|e| {
-                    if let egui::Event::Touch {
-                        device_id,
-                        id,
-                        phase: t_phase,
-                        pos: t_pos,
-                        force,
-                    } = e
-                        && Some(*id) == resolved_touch_id
-                        && *t_phase != egui::TouchPhase::Cancel
-                        && (*t_pos - *pos).length_sq() <= 1e-4
-                    {
-                        Some((
-                            PointerSource::Touch {
-                                device_id: *device_id,
-                                id: *id,
-                            },
-                            *force,
-                        ))
-                    } else {
-                        None
-                    }
-                });
-                let (src, force) = matched_touch.unwrap_or((current_source, current_force));
                 push_or_merge_screen_event(
                     &mut batch.events,
                     RawScreenEvent {
                         screen_pos: *pos,
-                        raw_pressure: force,
+                        raw_pressure: current_force,
                         phase: PointerSamplePhase::Move,
-                        source: src,
+                        source: current_source,
                     },
                 );
             }
