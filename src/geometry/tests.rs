@@ -5214,3 +5214,576 @@ fn test_track3_spatial_grid_equivalence_and_lifecycle() {
         }
     }
 }
+
+#[test]
+fn test_track4_lasso_polygon_preparation_self_intersecting_and_degenerate() {
+    // 1. Degenerate polygons (kurang dari 3 titik unik atau seluruh simpul kolinear) wajib ditolak
+    assert!(prepare_lasso_polygon(&[]).is_none());
+    assert!(prepare_lasso_polygon(&[Pos2::new(0.0, 0.0), Pos2::new(10.0, 10.0)]).is_none());
+    let dup_two = [
+        Pos2::new(0.0, 0.0),
+        Pos2::new(10.0, 0.0),
+        Pos2::new(10.0, 0.0),
+    ];
+    assert!(prepare_lasso_polygon(&dup_two).is_none());
+    assert!(!point_in_polygon(Pos2::new(5.0, 0.0), &dup_two));
+
+    let collinear_three = [
+        Pos2::new(0.0, 0.0),
+        Pos2::new(5.0, 0.0),
+        Pos2::new(10.0, 0.0),
+    ];
+    assert!(prepare_lasso_polygon(&collinear_three).is_none());
+    assert!(!point_in_polygon(Pos2::new(5.0, 0.0), &collinear_three));
+
+    // 2. Simplifikasi adaptif non-destruktif pada jalur padat (> 32 titik) mempertahankan sudut & titik awal/akhir
+    let mut dense_loop = Vec::new();
+    for i in 0..=40 {
+        dense_loop.push(Pos2::new(i as f32 * 2.5, 0.0));
+    }
+    dense_loop.push(Pos2::new(100.0, 100.0));
+    dense_loop.push(Pos2::new(0.0, 100.0));
+    dense_loop.push(Pos2::new(0.0, 0.0)); // Titik penutup identik dengan titik pertama
+    let (cleaned, bounds) = prepare_lasso_polygon(&dense_loop).expect("valid dense polygon");
+    assert!(
+        cleaned.len() < dense_loop.len(),
+        "Titik kolinear berlebih harus disederhanakan"
+    );
+    assert_eq!(cleaned.first().copied(), Some(Pos2::new(0.0, 0.0)));
+    assert!(cleaned.contains(&Pos2::new(100.0, 0.0)));
+    assert!(cleaned.contains(&Pos2::new(100.0, 100.0)));
+    assert!(cleaned.contains(&Pos2::new(0.0, 100.0)));
+    assert_eq!(bounds.min, Pos2::new(0.0, 0.0));
+    assert_eq!(bounds.max, Pos2::new(100.0, 100.0));
+
+    // 3. Self-intersecting figure-8 lasso (Even-Odd Fill Rule):
+    // Loop kiri (x: 0..50) dan loop kanan (x: 50..100) bertemu di pusat (50, 50)
+    let figure8 = vec![
+        Pos2::new(0.0, 0.0),
+        Pos2::new(100.0, 100.0),
+        Pos2::new(100.0, 0.0),
+        Pos2::new(0.0, 100.0),
+    ];
+    assert!(prepare_lasso_polygon(&figure8).is_some());
+    // Titik (20, 50) berada di dalam loop segitiga kiri figure-8
+    let dot_left_loop = DrawObject::Stroke {
+        id: "f8-left".into(),
+        points: vec![StrokePoint::new(20.0, 50.0, 0.6)],
+        color: dummy_color(),
+        width: 2.0,
+        is_highlighter: false,
+        style: StrokeStyle::Solid,
+    };
+    // Titik (50, 20) berada di luar kedua loop figure-8 (di bagian atas tengah)
+    let dot_outside = DrawObject::Stroke {
+        id: "f8-out".into(),
+        points: vec![StrokePoint::new(50.0, 20.0, 0.6)],
+        color: dummy_color(),
+        width: 2.0,
+        is_highlighter: false,
+        style: StrokeStyle::Solid,
+    };
+    assert!(object_in_lasso_mode(
+        &dot_left_loop,
+        &figure8,
+        LassoSelectionMode::Containment
+    ));
+    assert!(object_in_lasso_mode(
+        &dot_left_loop,
+        &figure8,
+        LassoSelectionMode::Intersection
+    ));
+    assert!(!object_in_lasso_mode(
+        &dot_outside,
+        &figure8,
+        LassoSelectionMode::Containment
+    ));
+    assert!(!object_in_lasso_mode(
+        &dot_outside,
+        &figure8,
+        LassoSelectionMode::Intersection
+    ));
+
+    // 4. Poligon cekung berbentuk U: persegi panjang yang ke-4 sudutnya di dalam lengan U tetapi bagian tengahnya melintasi celah luar U
+    let u_lasso = vec![
+        Pos2::new(0.0, 0.0),
+        Pos2::new(100.0, 0.0),
+        Pos2::new(100.0, 100.0),
+        Pos2::new(70.0, 100.0),
+        Pos2::new(70.0, 30.0),
+        Pos2::new(30.0, 30.0),
+        Pos2::new(30.0, 100.0),
+        Pos2::new(0.0, 100.0),
+    ];
+    let bridging_rect = DrawObject::Shape {
+        id: "u-bridge".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 10.0,
+        y: 10.0,
+        width: 80.0,
+        height: 70.0, // Sisi bawah di y=80 melintasi celah kosong x=30..70!
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: Some(dummy_color()),
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    assert!(
+        !object_in_lasso_mode(&bridging_rect, &u_lasso, LassoSelectionMode::Containment),
+        "Objek yang melintasi celah luar poligon cekung tidak boleh terpilih pada mode Containment"
+    );
+    assert!(
+        object_in_lasso_mode(&bridging_rect, &u_lasso, LassoSelectionMode::Intersection),
+        "Objek yang berpotongan dengan poligon cekung harus terpilih pada mode Intersection"
+    );
+}
+
+#[test]
+fn test_track4_containment_and_intersection_stroke_thickness_and_pressure() {
+    let lasso = vec![
+        Pos2::new(0.0, 0.0),
+        Pos2::new(100.0, 0.0),
+        Pos2::new(100.0, 100.0),
+        Pos2::new(0.0, 100.0),
+    ];
+
+    // 1. Goresan tebal yang centerline-nya di dalam (y=5.0), tetapi radiusnya (r=8.0) menjorok keluar batas atas lasso (y=-3.0)
+    let overhanging_inside_stroke = DrawObject::Stroke {
+        id: "s-overhang-in".into(),
+        points: vec![
+            StrokePoint::new(20.0, 5.0, 1.0),
+            StrokePoint::new(80.0, 5.0, 1.0),
+        ],
+        color: dummy_color(),
+        width: 16.0, // is_highlighter=true -> r = 8.0
+        is_highlighter: true,
+        style: StrokeStyle::Solid,
+    };
+    assert!(
+        !object_in_lasso_mode(
+            &overhanging_inside_stroke,
+            &lasso,
+            LassoSelectionMode::Containment
+        ),
+        "Stroke tebal yang sebagian radiusnya keluar dari batas lasso wajib ditolak pada Containment Mode"
+    );
+    assert!(
+        object_in_lasso_mode(
+            &overhanging_inside_stroke,
+            &lasso,
+            LassoSelectionMode::Intersection
+        ),
+        "Stroke tebal yang beririsan dengan batas lasso wajib diterima pada Intersection Mode"
+    );
+
+    // 2. Goresan tebal yang tepi luarnya tepat menyentuh batas lasso dari dalam (y=5.0, r=5.0 -> tepi atas tepat di y=0.0)
+    let boundary_touching_inside_stroke = DrawObject::Stroke {
+        id: "s-touch-in".into(),
+        points: vec![
+            StrokePoint::new(20.0, 5.0, 1.0),
+            StrokePoint::new(80.0, 5.0, 1.0),
+        ],
+        color: dummy_color(),
+        width: 10.0, // is_highlighter=true -> r = 5.0
+        is_highlighter: true,
+        style: StrokeStyle::Solid,
+    };
+    assert!(
+        object_in_lasso_mode(
+            &boundary_touching_inside_stroke,
+            &lasso,
+            LassoSelectionMode::Containment
+        ),
+        "Stroke yang seluruh footprint-nya di dalam dan tepat menyentuh batas lasso wajib diterima pada Containment Mode"
+    );
+
+    // 3. Goresan tebal yang centerline-nya di luar lasso (y=-5.0), tetapi radiusnya (r=8.0) masuk ke dalam lasso (y=+3.0)
+    let overhanging_outside_stroke = DrawObject::Stroke {
+        id: "s-overhang-out".into(),
+        points: vec![
+            StrokePoint::new(20.0, -5.0, 1.0),
+            StrokePoint::new(80.0, -5.0, 1.0),
+        ],
+        color: dummy_color(),
+        width: 16.0, // r = 8.0
+        is_highlighter: true,
+        style: StrokeStyle::Solid,
+    };
+    assert!(!object_in_lasso_mode(
+        &overhanging_outside_stroke,
+        &lasso,
+        LassoSelectionMode::Containment
+    ));
+    assert!(
+        object_in_lasso_mode(
+            &overhanging_outside_stroke,
+            &lasso,
+            LassoSelectionMode::Intersection
+        ),
+        "Stroke di luar yang ketebalannya masuk ke area lasso wajib terpilih pada Intersection Mode"
+    );
+
+    // 4. Goresan dengan variasi pressure: ujung tipis (pressure 0.05) muat di dalam y=6.0, tetapi bagian tengah bertekanan penuh (pressure 1.0, r=10.0) keluar dari y=0.0
+    let pressure_bulge_stroke = DrawObject::Stroke {
+        id: "s-pressure-bulge".into(),
+        points: vec![
+            StrokePoint::new(20.0, 6.0, 0.05),
+            StrokePoint::new(50.0, 6.0, 1.0),
+            StrokePoint::new(80.0, 6.0, 0.05),
+        ],
+        color: dummy_color(),
+        width: 16.0, // Pada p=1.0, r = 8.0 * 1.25 = 10.0 > 6.0!
+        is_highlighter: false,
+        style: StrokeStyle::Solid,
+    };
+    assert!(
+        !object_in_lasso_mode(
+            &pressure_bulge_stroke,
+            &lasso,
+            LassoSelectionMode::Containment
+        ),
+        "Bagian tengah goresan yang menebal akibat pressure dan keluar batas lasso harus terdeteksi"
+    );
+    assert!(object_in_lasso_mode(
+        &pressure_bulge_stroke,
+        &lasso,
+        LassoSelectionMode::Intersection
+    ));
+}
+
+#[test]
+fn test_track4_all_object_types_rotated_and_no_aabb_false_positives() {
+    // 1. Rotated Rectangle 45 derajat: AABB-nya besar, namun sudut kiri-atas AABB kosong.
+    // Lasso di sudut kosong AABB TIDAK BOLEH memilih objek (0 AABB false positive).
+    let rot_rect = DrawObject::Shape {
+        id: "t4-rot-rect".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 50.0,
+        y: 90.0,
+        width: 100.0,
+        height: 20.0, // Pusat di (100, 100), sangat pipih
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: Some(dummy_color()),
+        rotation: std::f32::consts::FRAC_PI_4, // 45 deg: membentang diagonal dari kiri-atas ke kanan-bawah
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    // AABB dari rot_rect mencakup sekitar x: 57..143, y: 57..143.
+    // Daerah kanan-atas AABB (x: 118..140, y: 58..78) berada di dalam AABB tetapi jauh dari batang diagonal 45 derajat!
+    let empty_aabb_corner_lasso = vec![
+        Pos2::new(118.0, 58.0),
+        Pos2::new(140.0, 58.0),
+        Pos2::new(140.0, 78.0),
+        Pos2::new(118.0, 78.0),
+    ];
+    assert!(
+        object_bounds(&rot_rect).intersects(Rect::from_min_max(
+            Pos2::new(118.0, 58.0),
+            Pos2::new(140.0, 78.0)
+        )),
+        "Prasyarat uji: AABB objek berotasi beririsan dengan AABB lasso"
+    );
+    assert!(
+        !object_in_lasso_mode(
+            &rot_rect,
+            &empty_aabb_corner_lasso,
+            LassoSelectionMode::Intersection
+        ),
+        "Objek berotasi tidak boleh terpilih hanya karena AABB-nya beririsan dengan lasso!"
+    );
+
+    // 2. ShapeKind::Curve melengkung dari (0, 100) -> (50, 10) -> (100, 100):
+    // Daerah bawah tengah (x: 35..65, y: 75..98) berada di dalam AABB kurva tetapi di bawah lengkungan kurva!
+    let mut arch_curve = DrawObject::Shape {
+        id: "t4-arch-curve".into(),
+        shape_type: ShapeKind::Curve,
+        x: 0.0,
+        y: 0.0,
+        width: 100.0,
+        height: 100.0,
+        color: dummy_color(),
+        stroke_width: 3.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: vec![
+            Point2D::new(0.0, 100.0),
+            Point2D::new(50.0, 10.0),
+            Point2D::new(100.0, 100.0),
+        ],
+    };
+    let under_arch_lasso = vec![
+        Pos2::new(40.0, 80.0),
+        Pos2::new(60.0, 80.0),
+        Pos2::new(60.0, 98.0),
+        Pos2::new(40.0, 98.0),
+    ];
+    assert!(
+        !object_in_lasso_mode(
+            &arch_curve,
+            &under_arch_lasso,
+            LassoSelectionMode::Intersection
+        ),
+        "Lasso di kolong lengkungan kurva (pada garis lurus antara endpoint) tidak boleh memilih kurva!"
+    );
+    // Sebaliknya, lasso di puncak lengkungan (50, 10) wajib memilih kurva!
+    let top_arch_lasso = vec![
+        Pos2::new(40.0, 0.0),
+        Pos2::new(60.0, 0.0),
+        Pos2::new(60.0, 25.0),
+        Pos2::new(40.0, 25.0),
+    ];
+    assert!(object_in_lasso_mode(
+        &arch_curve,
+        &top_arch_lasso,
+        LassoSelectionMode::Intersection
+    ));
+
+    // Verifikasi translate_object & scale_object pada ShapeKind::Curve ikut memindahkan curve_points
+    translate_object(&mut arch_curve, 50.0, 30.0);
+    assert!(object_in_lasso_mode(
+        &arch_curve,
+        &[
+            Pos2::new(90.0, 30.0),
+            Pos2::new(110.0, 30.0),
+            Pos2::new(110.0, 55.0),
+            Pos2::new(90.0, 55.0),
+        ],
+        LassoSelectionMode::Intersection
+    ));
+    scale_object(&mut arch_curve, Pos2::new(50.0, 30.0), 2.0, 2.0);
+    if let DrawObject::Shape { curve_points, .. } = &arch_curve {
+        assert!((curve_points[1].x - 150.0).abs() < 1e-3);
+        assert!((curve_points[1].y - 50.0).abs() < 1e-3);
+    }
+
+    // 3. Objek tepat menyentuh boundary lasso dari dalam (Containment & Intersection)
+    let big_lasso = vec![
+        Pos2::new(0.0, 0.0),
+        Pos2::new(200.0, 0.0),
+        Pos2::new(200.0, 200.0),
+        Pos2::new(0.0, 200.0),
+    ];
+    let touching_rect = DrawObject::Shape {
+        id: "t4-touch-rect".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 0.0,
+        y: 0.0,
+        width: 60.0,
+        height: 60.0,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    assert!(
+        object_in_lasso_mode(&touching_rect, &big_lasso, LassoSelectionMode::Containment),
+        "Rectangle yang menyentuh batas lasso dari dalam harus diterima pada Containment Mode"
+    );
+    assert!(object_in_lasso_mode(
+        &touching_rect,
+        &big_lasso,
+        LassoSelectionMode::Intersection
+    ));
+}
+
+#[test]
+fn test_track4_spatial_grid_vs_brute_force_lasso_equivalence_and_benchmark() {
+    let mut objects = Vec::with_capacity(120);
+    for i in 0..30 {
+        let base_x = (i % 6) as f32 * 140.0 + 20.0;
+        let base_y = (i / 6) as f32 * 140.0 + 20.0;
+        let angle = (i as f32) * 0.35;
+
+        // 1. Stroke dengan pressure bervariasi
+        objects.push(DrawObject::Stroke {
+            id: format!("s-{i}"),
+            points: vec![
+                StrokePoint::new(base_x, base_y, 0.2),
+                StrokePoint::new(base_x + 30.0, base_y + 25.0, 0.95),
+                StrokePoint::new(base_x + 65.0, base_y + 5.0, 0.4),
+            ],
+            color: dummy_color(),
+            width: 3.0 + (i % 5) as f32 * 2.0,
+            is_highlighter: i % 4 == 0,
+            style: StrokeStyle::Solid,
+        });
+
+        // 2. Rotated Shape (Rectangle / Ellipse / Diamond / Triangle / Curve)
+        let shape_type = match i % 5 {
+            0 => ShapeKind::Rectangle,
+            1 => ShapeKind::Ellipse,
+            2 => ShapeKind::Diamond,
+            3 => ShapeKind::Triangle,
+            _ => ShapeKind::Curve,
+        };
+        let curve_points = if shape_type == ShapeKind::Curve {
+            vec![
+                Point2D::new(base_x + 10.0, base_y + 40.0),
+                Point2D::new(base_x + 45.0, base_y + 90.0),
+                Point2D::new(base_x + 85.0, base_y + 45.0),
+            ]
+        } else {
+            Vec::new()
+        };
+        objects.push(DrawObject::Shape {
+            id: format!("sh-{i}"),
+            shape_type,
+            x: base_x + 10.0,
+            y: base_y + 40.0,
+            width: 75.0,
+            height: 45.0,
+            color: dummy_color(),
+            stroke_width: 2.5,
+            fill: (i % 2 == 0).then(dummy_color),
+            rotation: angle,
+            corner_radius: if i % 5 == 0 { 8.0 } else { 0.0 },
+            label: None,
+            locked: false,
+            curve_points,
+        });
+
+        // 3. Text / StickyNote / Image / Equation
+        match i % 4 {
+            0 => objects.push(DrawObject::Text {
+                id: format!("tx-{i}"),
+                x: base_x + 25.0,
+                y: base_y + 95.0,
+                text: "RustNotes Lasso".into(),
+                font_size: 16.0,
+                color: dummy_color(),
+                rotation: angle * 0.5,
+                font_family: FontFamilyPreset::SansSerif,
+                bold: false,
+                italic: false,
+                alignment: TextAlign::Left,
+            }),
+            1 => objects.push(DrawObject::StickyNote {
+                id: format!("sn-{i}"),
+                x: base_x + 20.0,
+                y: base_y + 90.0,
+                width: 60.0,
+                height: 45.0,
+                text: "Note".into(),
+                color: dummy_color(),
+                text_color: dummy_color(),
+                font_size: 14.0,
+                font_family: FontFamilyPreset::SansSerif,
+                bold: false,
+                italic: false,
+                alignment: TextAlign::Left,
+                rotation: angle,
+            }),
+            2 => objects.push(DrawObject::Image {
+                id: format!("im-{i}"),
+                asset_id: "img.png".into(),
+                x: base_x + 15.0,
+                y: base_y + 90.0,
+                width: 65.0,
+                height: 40.0,
+                rotation: angle,
+                lock_aspect: true,
+            }),
+            _ => objects.push(DrawObject::Equation {
+                id: format!("eq-{i}"),
+                latex: r"x^2 + y^2 = r^2".into(),
+                x: base_x + 20.0,
+                y: base_y + 95.0,
+                font_size: 18.0,
+                scale: 1.0,
+                color: dummy_color(),
+                rotation: angle,
+                locked: false,
+            }),
+        }
+
+        // 4. Connector
+        objects.push(DrawObject::Connector {
+            id: format!("cn-{i}"),
+            start: crate::model::ConnectorEnd::Attached {
+                shape_id: format!("sh-{i}"),
+                site: ConnectionSite::Right,
+            },
+            end: crate::model::ConnectorEnd::Free {
+                x: base_x + 125.0,
+                y: base_y + 115.0,
+            },
+            route: if i % 2 == 0 {
+                crate::model::ConnectorRoute::Orthogonal
+            } else {
+                crate::model::ConnectorRoute::Curved
+            },
+            control_points: Vec::new(),
+            style: crate::model::ConnectorStyle::default(),
+            locked: false,
+        });
+    }
+
+    let mut grid = SpatialGrid::new(100.0);
+    grid.rebuild(&objects);
+
+    let lassos: Vec<Vec<Pos2>> = vec![
+        // Lasso kecil
+        vec![
+            Pos2::new(15.0, 15.0),
+            Pos2::new(120.0, 15.0),
+            Pos2::new(120.0, 110.0),
+            Pos2::new(15.0, 110.0),
+        ],
+        // Lasso besar melintasi banyak batas sel grid
+        vec![
+            Pos2::new(50.0, 50.0),
+            Pos2::new(520.0, 40.0),
+            Pos2::new(560.0, 420.0),
+            Pos2::new(40.0, 440.0),
+        ],
+        // Lasso cekung L-shape
+        vec![
+            Pos2::new(0.0, 0.0),
+            Pos2::new(450.0, 0.0),
+            Pos2::new(450.0, 200.0),
+            Pos2::new(220.0, 200.0),
+            Pos2::new(220.0, 450.0),
+            Pos2::new(0.0, 450.0),
+        ],
+        // Lasso self-intersecting figure-8
+        vec![
+            Pos2::new(100.0, 100.0),
+            Pos2::new(600.0, 500.0),
+            Pos2::new(600.0, 100.0),
+            Pos2::new(100.0, 500.0),
+        ],
+    ];
+
+    let start = std::time::Instant::now();
+    for lasso in &lassos {
+        for mode in [
+            LassoSelectionMode::Containment,
+            LassoSelectionMode::Intersection,
+        ] {
+            let grid_sel = grid.select_in_lasso(&objects, lasso, mode);
+            let brute_sel = select_objects_in_lasso_brute_force(&objects, lasso, mode);
+            assert_eq!(
+                grid_sel, brute_sel,
+                "SpatialGrid::select_in_lasso wajib 100% identik dengan brute-force pada mode {mode:?}"
+            );
+        }
+    }
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed.as_millis() < 50,
+        "Evaluasi 8 query lasso pada 120 objek kompleks harus sangat cepat (< 50ms), aktual: {elapsed:?}"
+    );
+}

@@ -3836,3 +3836,110 @@ fn test_track2_pen_pencil_highlighter_rendering_and_width_parity() {
         assert_eq!(state.mesh_cache.len(), 1);
     }
 }
+
+#[test]
+fn test_track4_canvas_lasso_selection_zoom_drag_and_stale_id_cleanup() {
+    let ctx = eframe::egui::Context::default();
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "track4-lasso-page".to_string();
+
+    // 1. Uji konsistensi seleksi lasso pada berbagai tingkat zoom (0.5x, 1.0x, 2.5x)
+    for &zoom in &[0.5_f32, 1.0_f32, 2.5_f32] {
+        let mut state = CanvasState {
+            current_tool: ActiveTool::Lasso,
+            lasso_selection_mode: crate::model::LassoSelectionMode::Containment,
+            zoom,
+            ..Default::default()
+        };
+        page.objects = vec![
+            DrawObject::Stroke {
+                id: "s-in".into(),
+                points: vec![
+                    StrokePoint::new(30.0, 30.0, 0.6),
+                    StrokePoint::new(60.0, 60.0, 0.6),
+                ],
+                color: ColorData::from(Color32::BLACK),
+                width: 3.0,
+                is_highlighter: false,
+                style: StrokeStyle::Solid,
+            },
+            DrawObject::Shape {
+                id: "sh-partial".into(),
+                shape_type: ShapeKind::Rectangle,
+                x: 70.0,
+                y: 30.0,
+                width: 60.0, // x: 70..130 (keluar dari lasso x: 10..100)
+                height: 40.0,
+                color: ColorData::from(Color32::BLUE),
+                stroke_width: 2.0,
+                fill: None,
+                rotation: 0.0,
+                corner_radius: 0.0,
+                label: None,
+                locked: false,
+                curve_points: Vec::new(),
+            },
+        ];
+        state.rebuild_spatial_grid(&page.id, &page.objects);
+
+        let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+        let to_screen = |px: f32, py: f32| origin + Vec2::new(px * zoom, py * zoom);
+
+        let p0 = to_screen(10.0, 10.0);
+        let p1 = to_screen(100.0, 10.0);
+        let p2 = to_screen(100.0, 100.0);
+        let p3 = to_screen(10.0, 100.0);
+
+        step_test_canvas(
+            &ctx,
+            &mut page,
+            &mut state,
+            vec![
+                eframe::egui::Event::PointerMoved(p0),
+                eframe::egui::Event::PointerButton {
+                    pos: p0,
+                    button: eframe::egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+                eframe::egui::Event::PointerMoved(p1),
+                eframe::egui::Event::PointerMoved(p2),
+                eframe::egui::Event::PointerMoved(p3),
+            ],
+        );
+        step_test_canvas(
+            &ctx,
+            &mut page,
+            &mut state,
+            vec![eframe::egui::Event::PointerButton {
+                pos: p3,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+
+        // Pada Containment mode, hanya "s-in" yang terpilih di semua level zoom
+        assert_eq!(
+            state.selected_ids,
+            vec!["s-in".to_string()],
+            "Hasil Containment lasso harus konsisten pada zoom={zoom}"
+        );
+        // Lasso tidak boleh menambahkan snapshot undo palsu
+        assert!(!state.can_undo(&page.id));
+    }
+
+    // 2. Uji penghapusan objek terpilih menggunakan Eraser: tidak boleh meninggalkan stale ID di selected_ids
+    let mut state = CanvasState {
+        selected_ids: vec!["s-in".to_string(), "sh-partial".to_string()],
+        eraser_mode: EraserMode::WholeStroke,
+        ..Default::default()
+    };
+    state.rebuild_spatial_grid(&page.id, &page.objects);
+    assert!(state.erase_at(&mut page, Pos2::new(45.0, 45.0), 6.0));
+    assert_eq!(
+        state.selected_ids,
+        vec!["sh-partial".to_string()],
+        "Objek yang dihapus dengan Eraser wajib langsung dibersihkan dari selected_ids (tanpa stale ID)"
+    );
+}
