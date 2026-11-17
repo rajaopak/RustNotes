@@ -430,9 +430,9 @@ pub fn shape_vertices(shape_type: ShapeKind, x: f32, y: f32, width: f32, height:
             let center = r.center();
             let rx = (r.width() * 0.5).abs();
             let ry = (r.height() * 0.5).abs();
-            let mut pts = Vec::with_capacity(16);
-            for i in 0..16 {
-                let theta = (i as f32) * (std::f32::consts::TAU / 16.0);
+            let mut pts = Vec::with_capacity(32);
+            for i in 0..32 {
+                let theta = (i as f32) * (std::f32::consts::TAU / 32.0);
                 pts.push(Pos2::new(
                     center.x + rx * theta.cos(),
                     center.y + ry * theta.sin(),
@@ -489,10 +489,113 @@ pub fn shape_vertices(shape_type: ShapeKind, x: f32, y: f32, width: f32, height:
     }
 }
 
+/// Menyaring, membersihkan, dan memvalidasi rangkaian titik mentah poligon Lasso (Track 4).
+/// - Menghapus koordinat non-finite dan simpul berurutan yang berhimpit.
+/// - Menyederhanakan titik kolinear mikro secara adaptif tanpa mengubah bentuk atau sudut belokan.
+/// - Menolak poligon degenerasi (kurang dari 3 simpul unik atau seluruh simpul segaris/kolinear).
+/// - Mengembalikan `(poligon_bersih, bounding_box_poligon)`.
+pub fn prepare_lasso_polygon(raw_points: &[Pos2]) -> Option<(Vec<Pos2>, Rect)> {
+    if raw_points.len() < 3 {
+        return None;
+    }
+    let mut deduped: Vec<Pos2> = Vec::with_capacity(raw_points.len());
+    for &p in raw_points {
+        if !p.x.is_finite() || !p.y.is_finite() {
+            continue;
+        }
+        if deduped
+            .last()
+            .is_none_or(|&prev| (p - prev).length_sq() > 1e-6)
+        {
+            deduped.push(p);
+        }
+    }
+    while deduped.len() >= 2 && (*deduped.last().unwrap() - deduped[0]).length_sq() <= 1e-6 {
+        deduped.pop();
+    }
+    if deduped.len() < 3 {
+        return None;
+    }
+
+    // Simplifikasi adaptif non-destruktif untuk jalur sangat padat (> 32 titik):
+    // hanya menggabungkan titik interior yang benar-benar kolinear (deviasi <= 0.05 pt) dan searah.
+    let cleaned = if deduped.len() > 32 {
+        let mut simplified = Vec::with_capacity(deduped.len());
+        simplified.push(deduped[0]);
+        for i in 1..deduped.len() - 1 {
+            let prev = *simplified.last().unwrap();
+            let curr = deduped[i];
+            let next = deduped[i + 1];
+            let v1 = curr - prev;
+            let v2 = next - curr;
+            let forward = v1.dot(v2) > 0.0;
+            let near_collinear = point_to_segment_dist(curr, prev, next) <= 0.05;
+            let short_span = (next - prev).length_sq() <= 64.0;
+            if !(forward && near_collinear && short_span) {
+                simplified.push(curr);
+            }
+        }
+        simplified.push(*deduped.last().unwrap());
+        simplified
+    } else {
+        deduped
+    };
+
+    if cleaned.len() < 3 {
+        return None;
+    }
+
+    // Pastikan poligon tidak degenerasi menjadi garis lurus 1D (mendukung poligon cekung maupun figure-8 self-intersecting)
+    let p0 = cleaned[0];
+    let mut has_area = false;
+    for i in 1..cleaned.len() - 1 {
+        let v1 = cleaned[i] - p0;
+        let v2 = cleaned[i + 1] - p0;
+        if (v1.x * v2.y - v1.y * v2.x).abs() > 1e-4 {
+            has_area = true;
+            break;
+        }
+    }
+    if !has_area {
+        return None;
+    }
+
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for &p in &cleaned {
+        min_x = min_x.min(p.x);
+        min_y = min_y.min(p.y);
+        max_x = max_x.max(p.x);
+        max_y = max_y.max(p.y);
+    }
+    let bounds = Rect::from_min_max(Pos2::new(min_x, min_y), Pos2::new(max_x, max_y));
+    Some((cleaned, bounds))
+}
+
+/// Menguji apakah titik `p` berada di dalam atau tepat pada batas poligon `polygon`
+/// menggunakan aturan *Even-Odd Fill Rule* yang konsisten untuk poligon konveks, cekung,
+/// urutan simpul CW/CCW, maupun poligon berpotongan diri (*self-intersecting*) (Track 3 & Track 4).
 pub fn point_in_polygon(p: Pos2, polygon: &[Pos2]) -> bool {
-    if polygon.len() < 3 {
+    if polygon.len() < 3 || !p.x.is_finite() || !p.y.is_finite() {
         return false;
     }
+    // Tolak poligon degenerasi yang seluruh simpulnya kolinear (luas 2D nol)
+    let p0 = polygon[0];
+    let mut has_area = false;
+    for i in 1..polygon.len() - 1 {
+        let v1 = polygon[i] - p0;
+        let v2 = polygon[i + 1] - p0;
+        if (v1.x * v2.y - v1.y * v2.x).abs() > 1e-4 {
+            has_area = true;
+            break;
+        }
+    }
+    if !has_area {
+        return false;
+    }
+
     const BOUNDARY_EPS: f32 = 1e-4;
     let mut inside = false;
     let mut j = polygon.len() - 1;
@@ -522,6 +625,53 @@ pub fn point_in_polygon(p: Pos2, polygon: &[Pos2]) -> bool {
         return false;
     }
     inside
+}
+
+/// Mengembalikan `true` hanya jika titik `p` berada secara ketat di bagian dalam poligon
+/// (tidak berada di luar dan tidak menyentuh garis tepi/simpul poligon) (Track 4).
+pub fn point_strictly_in_polygon(p: Pos2, polygon: &[Pos2]) -> bool {
+    if polygon.len() < 3 {
+        return false;
+    }
+    if point_to_polygon_outline_dist(p, polygon) <= 1e-3 {
+        return false;
+    }
+    point_in_polygon(p, polygon)
+}
+
+/// Mengembalikan `true` hanya jika dua segmen garis saling memotong secara transversal
+/// di bagian dalam kedua segmen (bukan sekadar menyentuh ujung atau berhimpit kolinear) (Track 4).
+pub fn segments_properly_cross(a: Pos2, b: Pos2, c: Pos2, d: Pos2) -> bool {
+    const EPS: f32 = 1e-4;
+    let ab_min_x = a.x.min(b.x);
+    let ab_max_x = a.x.max(b.x);
+    let ab_min_y = a.y.min(b.y);
+    let ab_max_y = a.y.max(b.y);
+    let cd_min_x = c.x.min(d.x);
+    let cd_max_x = c.x.max(d.x);
+    let cd_min_y = c.y.min(d.y);
+    let cd_max_y = c.y.max(d.y);
+    if ab_max_x <= cd_min_x || cd_max_x <= ab_min_x || ab_max_y <= cd_min_y || cd_max_y <= ab_min_y
+    {
+        return false;
+    }
+    if point_to_segment_dist(a, c, d) <= EPS
+        || point_to_segment_dist(b, c, d) <= EPS
+        || point_to_segment_dist(c, a, b) <= EPS
+        || point_to_segment_dist(d, a, b) <= EPS
+    {
+        return false;
+    }
+    let cross = |p1: Pos2, p2: Pos2, p3: Pos2| -> f32 {
+        (p2.x - p1.x) * (p3.y - p1.y) - (p2.y - p1.y) * (p3.x - p1.x)
+    };
+    let d1 = cross(a, b, c);
+    let d2 = cross(a, b, d);
+    let d3 = cross(c, d, a);
+    let d4 = cross(c, d, b);
+
+    ((d1 > EPS && d2 < -EPS) || (d1 < -EPS && d2 > EPS))
+        && ((d3 > EPS && d4 < -EPS) || (d3 < -EPS && d4 > EPS))
 }
 
 pub fn segments_cross(a: Pos2, b: Pos2, c: Pos2, d: Pos2) -> bool {

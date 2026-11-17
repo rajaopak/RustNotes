@@ -1,11 +1,12 @@
 use super::primitives::{
     curve_shape_polyline, equation_approx_size, object_boundary_vertices_with_context,
-    object_bounds, object_bounds_with_context, point_in_polygon, point_to_polygon_dist,
-    point_to_polygon_outline_dist, point_to_segment_dist, segments_cross, shape_vertices,
-    stroke_visual_samples, text_approx_size,
+    object_bounds, object_bounds_with_context, point_in_polygon, point_strictly_in_polygon,
+    point_to_polygon_dist, point_to_polygon_outline_dist, point_to_segment_dist,
+    prepare_lasso_polygon, segment_to_segment_dist, segments_cross, segments_properly_cross,
+    shape_vertices, stroke_visual_samples, text_approx_size,
 };
 use super::tessellation::stroke_radius_at_pressure;
-use crate::model::{DrawObject, ShapeKind};
+use crate::model::{DrawObject, LassoSelectionMode, ShapeKind};
 use eframe::egui::{Pos2, Rect, Vec2};
 
 /// Menghitung jarak terdekat dari titik `p` ke segmen kapsul meruncing (*tapered capsule*)
@@ -459,12 +460,41 @@ pub fn object_in_lasso_with_context(
     polygon: &[Pos2],
     all_objects: Option<&[DrawObject]>,
 ) -> bool {
+    let Some((clean_poly, lasso_bounds)) = prepare_lasso_polygon(polygon) else {
+        return false;
+    };
+    object_in_lasso_with_prepared_polygon(obj, &clean_poly, lasso_bounds, all_objects)
+}
+
+/// Evaluasi Intersection Mode menggunakan poligon lasso yang telah disanitasi dan `lasso_bounds` (Track 4).
+pub fn object_in_lasso_with_prepared_polygon(
+    obj: &DrawObject,
+    polygon: &[Pos2],
+    lasso_bounds: Rect,
+    all_objects: Option<&[DrawObject]>,
+) -> bool {
     if polygon.len() < 3 {
         return false;
     }
 
-    // 1. Jika poligon lasso berada sepenuhnya di dalam objek
-    if hit_test_object_with_context(obj, polygon[0], 0.0, all_objects) {
+    let obj_b = match all_objects {
+        Some(objs) => object_bounds_with_context(obj, objs),
+        None => object_bounds(obj),
+    };
+    let pad = match obj {
+        DrawObject::Stroke { width, .. } => (*width * 0.25).max(1.0),
+        DrawObject::Connector { .. } => 14.0,
+        _ => 1.0,
+    };
+    if !obj_b.is_finite() || !obj_b.expand(pad).intersects(lasso_bounds) {
+        return false;
+    }
+
+    // 1. Jika salah satu simpul poligon lasso berada di dalam atau menyentuh geometri objek
+    if polygon
+        .iter()
+        .any(|&lp| hit_test_object_with_context(obj, lp, 0.0, all_objects))
+    {
         return true;
     }
 
@@ -473,12 +503,12 @@ pub fn object_in_lasso_with_context(
         return false;
     }
 
-    // 2. Jika ada simpul batas objek yang berada di dalam poligon lasso
+    // 2. Jika ada simpul batas objek yang berada di dalam atau pada batas poligon lasso
     if verts.iter().any(|&v| point_in_polygon(v, polygon)) {
         return true;
     }
 
-    // 3. Jika ada segmen batas objek yang memotong segmen poligon lasso
+    // 3. Jika ada segmen batas objek yang memotong atau menyentuh segmen poligon lasso
     let is_closed = match obj {
         DrawObject::Stroke { .. } | DrawObject::Connector { .. } => false,
         DrawObject::Shape { shape_type, .. } => {
@@ -504,7 +534,7 @@ pub fn object_in_lasso_with_context(
         }
     }
 
-    // 4. Toleransi ketebalan & pressure untuk DrawObject::Stroke (pita visual kuas/stabilo)
+    // 4. Ketebalan & pressure per-titik untuk DrawObject::Stroke (pita kapsul visual & sampel asli)
     if let DrawObject::Stroke {
         points,
         width,
@@ -513,39 +543,47 @@ pub fn object_in_lasso_with_context(
     } = obj
     {
         let samples = stroke_visual_samples(points);
-        for p in polygon {
-            for i in 1..samples.len() {
-                let a = samples[i - 1].to_pos2();
-                let b = samples[i].to_pos2();
-                let ra =
-                    stroke_radius_at_pressure(*width, samples[i - 1].pressure, *is_highlighter);
-                let rb = stroke_radius_at_pressure(*width, samples[i].pressure, *is_highlighter);
-                if distance_to_stroke_segment_with_pressure(*p, a, b, ra, rb) <= 0.0 {
-                    return true;
+        for slice in [&samples[..], points.as_slice()] {
+            for p in polygon {
+                for i in 1..slice.len() {
+                    let a = slice[i - 1].to_pos2();
+                    let b = slice[i].to_pos2();
+                    let ra =
+                        stroke_radius_at_pressure(*width, slice[i - 1].pressure, *is_highlighter);
+                    let rb = stroke_radius_at_pressure(*width, slice[i].pressure, *is_highlighter);
+                    if distance_to_stroke_segment_with_pressure(*p, a, b, ra, rb) <= 0.0 {
+                        return true;
+                    }
                 }
             }
-        }
-        for pt in &samples {
-            let p = pt.to_pos2();
-            let r = stroke_radius_at_pressure(*width, pt.pressure, *is_highlighter);
-            for j in 0..polygon.len() {
-                let l1 = polygon[j];
-                let l2 = polygon[(j + 1) % polygon.len()];
-                if point_to_segment_dist(p, l1, l2) <= r {
-                    return true;
+            for pt in slice {
+                let p = pt.to_pos2();
+                let r = stroke_radius_at_pressure(*width, pt.pressure, *is_highlighter);
+                for j in 0..polygon.len() {
+                    let l1 = polygon[j];
+                    let l2 = polygon[(j + 1) % polygon.len()];
+                    if point_to_segment_dist(p, l1, l2) <= r {
+                        return true;
+                    }
                 }
             }
         }
     }
 
-    // 5. Toleransi ketebalan untuk DrawObject::Connector
-    if let DrawObject::Connector { style, .. } = obj {
-        let half_w = (style.stroke_width * 0.5).max(1.0);
-        for p in polygon {
-            for i in 1..verts.len() {
-                let a = verts[i - 1];
-                let b = verts[i];
-                if point_to_segment_dist(*p, a, b) <= half_w {
+    // 5. Ketebalan garis untuk DrawObject::Shape dan DrawObject::Connector
+    let edge_half_w = match obj {
+        DrawObject::Shape { stroke_width, .. } => *stroke_width * 0.5,
+        DrawObject::Connector { style, .. } => style.stroke_width * 0.5,
+        _ => 0.0,
+    };
+    if edge_half_w > 0.0 {
+        for i in 0..seg_count {
+            let p1 = verts[i];
+            let p2 = verts[(i + 1) % verts.len()];
+            for j in 0..polygon.len() {
+                let l1 = polygon[j];
+                let l2 = polygon[(j + 1) % polygon.len()];
+                if segment_to_segment_dist(p1, p2, l1, l2) <= edge_half_w {
                     return true;
                 }
             }
@@ -556,7 +594,7 @@ pub fn object_in_lasso_with_context(
 }
 
 /// Memeriksa apakah suatu objek secara penuh dilingkupi di dalam batas poligon lasso (Containment Mode).
-/// Menjamin seluruh geometri terlihat objek berada di dalam poligon lasso tanpa ada batas yang terpotong.
+/// Menjamin seluruh geometri terlihat objek berada di dalam atau tepat pada batas poligon lasso.
 pub fn object_contained_in_lasso(obj: &DrawObject, polygon: &[Pos2]) -> bool {
     object_contained_in_lasso_with_context(obj, polygon, None)
 }
@@ -568,6 +606,19 @@ pub fn object_contained_in_lasso_with_context(
     polygon: &[Pos2],
     all_objects: Option<&[DrawObject]>,
 ) -> bool {
+    let Some((clean_poly, lasso_bounds)) = prepare_lasso_polygon(polygon) else {
+        return false;
+    };
+    object_contained_in_lasso_with_prepared_polygon(obj, &clean_poly, lasso_bounds, all_objects)
+}
+
+/// Evaluasi Containment Mode menggunakan poligon lasso yang telah disanitasi dan `lasso_bounds` (Track 4).
+pub fn object_contained_in_lasso_with_prepared_polygon(
+    obj: &DrawObject,
+    polygon: &[Pos2],
+    lasso_bounds: Rect,
+    all_objects: Option<&[DrawObject]>,
+) -> bool {
     if polygon.len() < 3 {
         return false;
     }
@@ -577,18 +628,7 @@ pub fn object_contained_in_lasso_with_context(
         return false;
     }
 
-    // 1. Broad-phase vertex-bounds culling (berdasarkan rentang simpul riil objek, bukan AABB luar)
-    let mut poly_min_x = f32::INFINITY;
-    let mut poly_max_x = f32::NEG_INFINITY;
-    let mut poly_min_y = f32::INFINITY;
-    let mut poly_max_y = f32::NEG_INFINITY;
-    for p in polygon {
-        poly_min_x = poly_min_x.min(p.x);
-        poly_max_x = poly_max_x.max(p.x);
-        poly_min_y = poly_min_y.min(p.y);
-        poly_max_y = poly_max_y.max(p.y);
-    }
-
+    // 1. Broad-phase vertex-bounds culling terhadap lasso_bounds
     let mut vert_min_x = f32::INFINITY;
     let mut vert_max_x = f32::NEG_INFINITY;
     let mut vert_min_y = f32::INFINITY;
@@ -600,15 +640,15 @@ pub fn object_contained_in_lasso_with_context(
         vert_max_y = vert_max_y.max(v.y);
     }
 
-    if vert_min_x < poly_min_x - 0.5
-        || vert_max_x > poly_max_x + 0.5
-        || vert_min_y < poly_min_y - 0.5
-        || vert_max_y > poly_max_y + 0.5
+    if vert_min_x < lasso_bounds.min.x - 0.5
+        || vert_max_x > lasso_bounds.max.x + 0.5
+        || vert_min_y < lasso_bounds.min.y - 0.5
+        || vert_max_y > lasso_bounds.max.y + 0.5
     {
         return false;
     }
 
-    // Kasus khusus dan pemeriksaan radius ketebalan untuk DrawObject::Stroke
+    // 2. Evaluasi footprint presisi untuk DrawObject::Stroke (termasuk radius tekanan pena & ujung membulat)
     if let DrawObject::Stroke {
         points,
         width,
@@ -620,33 +660,77 @@ pub fn object_contained_in_lasso_with_context(
             return false;
         }
         let samples = stroke_visual_samples(points);
-        for pt in &samples {
+        const DIAG: f32 = std::f32::consts::FRAC_1_SQRT_2;
+        for pt in samples.iter().chain(points.iter()) {
             let p = pt.to_pos2();
             if !point_in_polygon(p, polygon) {
                 return false;
             }
             let r = stroke_radius_at_pressure(*width, pt.pressure, *is_highlighter);
-            let cardinals = [
+            let d = r * DIAG;
+            let perimeter = [
                 p + Vec2::new(r, 0.0),
                 p - Vec2::new(r, 0.0),
                 p + Vec2::new(0.0, r),
                 p - Vec2::new(0.0, r),
+                p + Vec2::new(d, d),
+                p + Vec2::new(-d, d),
+                p + Vec2::new(d, -d),
+                p + Vec2::new(-d, -d),
             ];
-            if !cardinals.iter().all(|&c| point_in_polygon(c, polygon)) {
+            if !perimeter.iter().all(|&c| point_in_polygon(c, polygon)) {
                 return false;
+            }
+            // Pastikan cakram berjari-jari r tidak melampaui segmen batas lasso mana pun
+            for j in 0..polygon.len() {
+                let l1 = polygon[j];
+                let l2 = polygon[(j + 1) % polygon.len()];
+                if point_to_segment_dist(p, l1, l2) + 1e-3 < r {
+                    return false;
+                }
             }
         }
         if samples.len() == 1 {
             return true;
         }
+
+        for i in 1..samples.len() {
+            let a = samples[i - 1].to_pos2();
+            let b = samples[i].to_pos2();
+            let mid = a + (b - a) * 0.5;
+            if !point_in_polygon(mid, polygon) {
+                return false;
+            }
+            let ra = stroke_radius_at_pressure(*width, samples[i - 1].pressure, *is_highlighter);
+            let rb = stroke_radius_at_pressure(*width, samples[i].pressure, *is_highlighter);
+            let ab = b - a;
+            let len_sq = ab.length_sq();
+            for j in 0..polygon.len() {
+                let l1 = polygon[j];
+                let l2 = polygon[(j + 1) % polygon.len()];
+                if segments_properly_cross(a, b, l1, l2) {
+                    return false;
+                }
+                if len_sq > 1e-6 {
+                    let t = ((l1 - a).dot(ab) / len_sq).clamp(0.0, 1.0);
+                    let proj = a + ab * t;
+                    let r_t = ra + (rb - ra) * t;
+                    if l1.distance(proj) + 1e-3 < r_t {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
     }
 
-    // 2. Seluruh simpul batas objek harus berada di dalam poligon
+    // 3. Seluruh simpul batas objek harus berada di dalam atau pada batas poligon
     if !verts.iter().all(|&v| point_in_polygon(v, polygon)) {
         return false;
     }
 
-    // 3. Tidak boleh ada segmen batas objek yang memotong batas poligon
+    // 4. Periksa setiap segmen batas objek: titik interior segmen harus berada di dalam poligon
+    //    dan tidak boleh ada segmen yang memotong keluar batas poligon secara transversal.
     let is_closed = match obj {
         DrawObject::Stroke { .. } | DrawObject::Connector { .. } => false,
         DrawObject::Shape { shape_type, .. } => {
@@ -663,10 +747,25 @@ pub fn object_contained_in_lasso_with_context(
     for i in 0..seg_count {
         let p1 = verts[i];
         let p2 = verts[(i + 1) % verts.len()];
+        let d = p2 - p1;
+        for frac in [0.25_f32, 0.5_f32, 0.75_f32] {
+            if !point_in_polygon(p1 + d * frac, polygon) {
+                return false;
+            }
+        }
         for j in 0..polygon.len() {
             let l1 = polygon[j];
             let l2 = polygon[(j + 1) % polygon.len()];
-            if segments_cross(p1, p2, l1, l2) {
+            if segments_properly_cross(p1, p2, l1, l2) {
+                return false;
+            }
+        }
+    }
+
+    // 5. Untuk objek poligon tertutup, pastikan tidak ada simpul poligon lasso yang menusuk ke dalam interior objek
+    if is_closed && verts.len() >= 3 {
+        for &lp in polygon {
+            if point_strictly_in_polygon(lp, &verts) {
                 return false;
             }
         }
@@ -676,11 +775,7 @@ pub fn object_contained_in_lasso_with_context(
 }
 
 /// Memilih objek menggunakan mode lasso yang dikonfigurasi.
-pub fn object_in_lasso_mode(
-    obj: &DrawObject,
-    polygon: &[Pos2],
-    mode: crate::model::LassoSelectionMode,
-) -> bool {
+pub fn object_in_lasso_mode(obj: &DrawObject, polygon: &[Pos2], mode: LassoSelectionMode) -> bool {
     object_in_lasso_mode_with_context(obj, polygon, mode, None)
 }
 
@@ -688,15 +783,58 @@ pub fn object_in_lasso_mode(
 pub fn object_in_lasso_mode_with_context(
     obj: &DrawObject,
     polygon: &[Pos2],
-    mode: crate::model::LassoSelectionMode,
+    mode: LassoSelectionMode,
+    all_objects: Option<&[DrawObject]>,
+) -> bool {
+    let Some((clean_poly, lasso_bounds)) = prepare_lasso_polygon(polygon) else {
+        return false;
+    };
+    object_in_lasso_mode_with_prepared_polygon(obj, &clean_poly, lasso_bounds, mode, all_objects)
+}
+
+/// Evaluasi seleksi lasso untuk sebuah objek menggunakan poligon yang sudah disanitasi dan `lasso_bounds` (Track 4).
+pub fn object_in_lasso_mode_with_prepared_polygon(
+    obj: &DrawObject,
+    clean_poly: &[Pos2],
+    lasso_bounds: Rect,
+    mode: LassoSelectionMode,
     all_objects: Option<&[DrawObject]>,
 ) -> bool {
     match mode {
-        crate::model::LassoSelectionMode::Containment => {
-            object_contained_in_lasso_with_context(obj, polygon, all_objects)
-        }
-        crate::model::LassoSelectionMode::Intersection => {
-            object_in_lasso_with_context(obj, polygon, all_objects)
+        LassoSelectionMode::Containment => object_contained_in_lasso_with_prepared_polygon(
+            obj,
+            clean_poly,
+            lasso_bounds,
+            all_objects,
+        ),
+        LassoSelectionMode::Intersection => {
+            object_in_lasso_with_prepared_polygon(obj, clean_poly, lasso_bounds, all_objects)
         }
     }
+}
+
+/// Mengevaluasi seleksi lasso secara brute-force pada seluruh daftar objek halaman (sebagai oracle validasi & fallback).
+/// Mengembalikan indeks objek yang terpilih dalam urutan Z-order dari bawah ke atas.
+pub fn select_objects_in_lasso_brute_force(
+    objects: &[DrawObject],
+    polygon: &[Pos2],
+    mode: LassoSelectionMode,
+) -> Vec<usize> {
+    let Some((clean_poly, lasso_bounds)) = prepare_lasso_polygon(polygon) else {
+        return Vec::new();
+    };
+    objects
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, obj)| {
+            object_in_lasso_mode_with_prepared_polygon(
+                obj,
+                &clean_poly,
+                lasso_bounds,
+                mode,
+                Some(objects),
+            )
+            .then_some(idx)
+        })
+        .collect()
 }

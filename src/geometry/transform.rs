@@ -10,12 +10,22 @@ pub fn translate_object(obj: &mut DrawObject, dx: f32, dy: f32) {
                 p.y += dy;
             }
         }
-        DrawObject::Shape { x, y, locked, .. } => {
+        DrawObject::Shape {
+            x,
+            y,
+            curve_points,
+            locked,
+            ..
+        } => {
             if *locked {
                 return;
             }
             *x += dx;
             *y += dy;
+            for cp in curve_points {
+                cp.x += dx;
+                cp.y += dy;
+            }
         }
         DrawObject::Text { x, y, .. } => {
             *x += dx;
@@ -71,6 +81,7 @@ pub fn scale_object(obj: &mut DrawObject, origin: Pos2, sx: f32, sy: f32) {
             height,
             stroke_width,
             corner_radius,
+            curve_points,
             locked,
             label,
             ..
@@ -82,6 +93,10 @@ pub fn scale_object(obj: &mut DrawObject, origin: Pos2, sx: f32, sy: f32) {
             *y = origin.y + (*y - origin.y) * sy;
             *width *= sx;
             *height *= sy;
+            for cp in curve_points {
+                cp.x = origin.x + (cp.x - origin.x) * sx;
+                cp.y = origin.y + (cp.y - origin.y) * sy;
+            }
             let avg_s = (sx.abs() + sy.abs()) / 2.0;
             *stroke_width *= avg_s;
             *corner_radius *= avg_s;

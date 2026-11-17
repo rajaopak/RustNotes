@@ -123,4 +123,34 @@ impl SpatialGrid {
         }
         None
     }
+
+    /// Menyeleksi seluruh objek yang memenuhi `mode` (Containment atau Intersection) terhadap poligon lasso
+    /// dengan menyaring kandidat menggunakan `SpatialGrid::query_rect` dilanjutkan evaluasi geometri presisi (Track 4).
+    /// Mengembalikan indeks objek terpilih dalam urutan Z-order dari bawah ke atas.
+    pub fn select_in_lasso(
+        &self,
+        objects: &[DrawObject],
+        polygon: &[Pos2],
+        mode: crate::model::LassoSelectionMode,
+    ) -> Vec<usize> {
+        let Some((clean_poly, lasso_bounds)) = super::primitives::prepare_lasso_polygon(polygon)
+        else {
+            return Vec::new();
+        };
+        let candidates = self.query_rect(lasso_bounds);
+        candidates
+            .into_iter()
+            .filter(|&idx| {
+                objects.get(idx).is_some_and(|obj| {
+                    super::hit_test::object_in_lasso_mode_with_prepared_polygon(
+                        obj,
+                        &clean_poly,
+                        lasso_bounds,
+                        mode,
+                        Some(objects),
+                    )
+                })
+            })
+            .collect()
+    }
 }
