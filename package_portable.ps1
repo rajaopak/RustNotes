@@ -104,10 +104,28 @@ Runtime Dependencies & Third-Party Notices:
 "@ | Set-Content -Path (Join-Path $portableDir "README.txt") -Encoding UTF8
 
     Write-Host "=== Validating Portable Runtime ===" -ForegroundColor Cyan
-    $verifyExe = Resolve-Path (Join-Path $portableDir "rustnotes.exe")
-    & $verifyExe --verify-runtime
-    if ($LASTEXITCODE -ne 0) {
-        throw "Portable runtime validation failed!"
+    $verifyExe = (Resolve-Path (Join-Path $portableDir "rustnotes.exe")).Path
+    $stdoutLog = Join-Path $env:TEMP "rustnotes-verify-stdout.txt"
+    $stderrLog = Join-Path $env:TEMP "rustnotes-verify-stderr.txt"
+    $proc = Start-Process -FilePath $verifyExe `
+        -ArgumentList "--verify-runtime" `
+        -WorkingDirectory $portableDir `
+        -Wait -PassThru -NoNewWindow `
+        -RedirectStandardOutput $stdoutLog `
+        -RedirectStandardError $stderrLog
+    if (Test-Path $stdoutLog) {
+        Get-Content $stdoutLog | Write-Host
+        Remove-Item -Force $stdoutLog -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $stderrLog) {
+        $errText = Get-Content $stderrLog -Raw
+        Remove-Item -Force $stderrLog -ErrorAction SilentlyContinue
+        if (-not [string]::IsNullOrWhiteSpace($errText)) {
+            Write-Host $errText -ForegroundColor Red
+        }
+    }
+    if ($proc.ExitCode -ne 0) {
+        throw "Portable runtime validation failed with exit code $($proc.ExitCode)!"
     }
     # Clean up the empty data dir created by the write probe so the ZIP starts clean
     $probeDataDir = Join-Path $portableDir "data"
