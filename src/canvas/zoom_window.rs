@@ -157,7 +157,7 @@ pub fn render_zoom_window_canvas(
         (press_orig, mt, dt, b)
     });
 
-    if batch.cancelled
+    if batch.should_cancel()
         && (state.zoom_draft_stroke.is_some() || response.is_pointer_button_down_on())
     {
         state.eraser_undo_pushed = false;
@@ -307,7 +307,7 @@ pub fn render_zoom_window_canvas(
             }
         }
 
-        if response.drag_stopped() {
+        if response.drag_stopped() || (state.zoom_draft_stroke.is_some() && batch.released) {
             state.eraser_undo_pushed = false;
             state.last_whole_erase_pos = None;
             state.last_erase_sample_pos = None;

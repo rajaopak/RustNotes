@@ -128,8 +128,9 @@ pub(crate) fn handle_pointer_drag_interaction(
             || state.is_dragging_selection
             || state.resize_corner.is_some());
 
-    // Tangani pembatalan pointer (PointerGone atau TouchPhase::Cancel) secara aman
-    if batch.cancelled && (owns_active_gesture || response.is_pointer_button_down_on()) {
+    // Tangani pembatalan pointer eksplisit (`TouchPhase::Cancel` pada sentuhan aktif,
+    // atau `PointerGone` tanpa pelepasan normal) secara aman.
+    if batch.should_cancel() && (owns_active_gesture || response.is_pointer_button_down_on()) {
         state.active_alignment_guides.clear();
         state.eraser_undo_pushed = false;
         state.last_whole_erase_pos = None;
@@ -299,10 +300,11 @@ pub(crate) fn handle_pointer_drag_interaction(
     // Fase 8.1 & G4: Deteksi tahan pena (~500 ms) di akhir goresan untuk Shape Recognition
     update_hold_to_snap(ui, page, state, now);
 
-    let released_in_batch = batch
-        .events
-        .iter()
-        .any(|e| e.phase == PointerSamplePhase::Release);
+    let released_in_batch = batch.released
+        || batch
+            .events
+            .iter()
+            .any(|e| e.phase == PointerSamplePhase::Release);
     if response.drag_stopped() || (is_active_on_this_page && (!primary_down || released_in_batch)) {
         let stop_pos = batch
             .events
@@ -1382,9 +1384,41 @@ fn handle_drag_stopped(
                     .events
                     .iter()
                     .rev()
-                    .find(|e| (e.screen_pos - pos).length_sq() <= 4.0)
-                    .or_else(|| batch.events.last());
+                    .find(|e| {
+                        e.phase == PointerSamplePhase::Release
+                            && (e.screen_pos - pos).length_sq() <= 4.0
+                    })
+                    .or_else(|| {
+                        batch
+                            .events
+                            .iter()
+                            .rev()
+                            .find(|e| e.phase == PointerSamplePhase::Release)
+                    })
+                    .or_else(|| {
+                        batch.events.iter().rev().find(|e| {
+                            e.phase != PointerSamplePhase::Cancel
+                                && (e.screen_pos - pos).length_sq() <= 4.0
+                        })
+                    })
+                    .or_else(|| {
+                        batch
+                            .events
+                            .iter()
+                            .rev()
+                            .find(|e| e.phase != PointerSamplePhase::Cancel)
+                    });
                 let raw_force = release_ev.and_then(|e| e.raw_pressure);
+                let release_source = release_ev
+                    .map(|e| e.source)
+                    .or_else(|| state.raw_stroke_samples.last().map(|s| s.source))
+                    .or_else(|| {
+                        state.active_touch_id.map(|id| PointerSource::Touch {
+                            device_id: egui::TouchDeviceId(0),
+                            id,
+                        })
+                    })
+                    .unwrap_or(PointerSource::Mouse);
                 let is_highlighter = state.current_tool == ActiveTool::Highlighter;
                 let prev_pressure = pts.last().map(|pt| pt.pressure);
                 let pressure =
@@ -1396,7 +1430,7 @@ fn handle_drag_stopped(
                     raw_pressure: raw_force,
                     effective_pressure: pressure,
                     phase: PointerSamplePhase::Release,
-                    source: release_ev.map(|e| e.source).unwrap_or(PointerSource::Mouse),
+                    source: release_source,
                     sequence: seq,
                     dt_secs: 0.0,
                 };
@@ -1595,14 +1629,36 @@ fn handle_drag_stopped(
         } else if !state.lasso_points.is_empty() {
             if let Some(pos) = pointer_pos {
                 let p = screen_to_page(pos);
+                let release_ev = batch
+                    .events
+                    .iter()
+                    .rev()
+                    .find(|e| e.phase == PointerSamplePhase::Release)
+                    .or_else(|| {
+                        batch
+                            .events
+                            .iter()
+                            .rev()
+                            .find(|e| e.phase != PointerSamplePhase::Cancel)
+                    });
+                let release_source = release_ev
+                    .map(|e| e.source)
+                    .or_else(|| state.raw_stroke_samples.last().map(|s| s.source))
+                    .or_else(|| {
+                        state.active_touch_id.map(|id| PointerSource::Touch {
+                            device_id: egui::TouchDeviceId(0),
+                            id,
+                        })
+                    })
+                    .unwrap_or(PointerSource::Mouse);
                 let seq = state.pointer_sample_seq;
                 let release_sample = RawPointerSample {
                     screen_pos: pos,
                     page_pos: p,
-                    raw_pressure: None,
+                    raw_pressure: release_ev.and_then(|e| e.raw_pressure),
                     effective_pressure: 1.0,
                     phase: PointerSamplePhase::Release,
-                    source: PointerSource::Mouse,
+                    source: release_source,
                     sequence: seq,
                     dt_secs: 0.0,
                 };

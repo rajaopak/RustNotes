@@ -60,7 +60,22 @@ pub struct RawScreenEvent {
 pub struct FramePointerBatch {
     pub active_touch_id: Option<egui::TouchId>,
     pub events: Vec<RawScreenEvent>,
+    /// Eksplisit dibatalkan oleh `TouchPhase::Cancel` pada sentuhan aktif.
     pub cancelled: bool,
+    /// Terjadi pelepasan normal (`TouchPhase::End` atau `PointerButton { pressed: false }`) pada batch ini.
+    pub released: bool,
+    /// Terjadi `egui::Event::PointerGone` pada batch ini.
+    pub pointer_gone: bool,
+}
+
+impl FramePointerBatch {
+    /// Mengembalikan `true` hanya jika interaksi aktif harus dibatalkan:
+    /// - Terjadi `TouchPhase::Cancel` eksplisit pada sentuhan aktif (`cancelled == true`), atau
+    /// - Terjadi `PointerGone` tanpa adanya pelepasan normal (`released == false`) pada batch ini.
+    #[inline]
+    pub fn should_cancel(&self) -> bool {
+        self.cancelled || (self.pointer_gone && !self.released)
+    }
 }
 
 /// Mengambil TouchId dan gaya tekanan (pressure/force) dari daftar event egui.
@@ -154,6 +169,8 @@ pub fn collect_frame_pointer_batch(
         active_touch_id: resolved_touch_id,
         events: Vec::with_capacity(raw_events.len().max(1)),
         cancelled: false,
+        released: false,
+        pointer_gone: false,
     };
 
     for ev in raw_events {
@@ -169,7 +186,7 @@ pub fn collect_frame_pointer_batch(
                     resolved_touch_id = Some(*id);
                     batch.active_touch_id = resolved_touch_id;
                 }
-                if resolved_touch_id == Some(*id) || resolved_touch_id.is_none() {
+                if resolved_touch_id == Some(*id) {
                     let src = PointerSource::Touch {
                         device_id: *device_id,
                         id: *id,
@@ -180,7 +197,10 @@ pub fn collect_frame_pointer_batch(
                     let sample_phase = match phase {
                         egui::TouchPhase::Start => PointerSamplePhase::Press,
                         egui::TouchPhase::Move => PointerSamplePhase::Move,
-                        egui::TouchPhase::End => PointerSamplePhase::Release,
+                        egui::TouchPhase::End => {
+                            batch.released = true;
+                            PointerSamplePhase::Release
+                        }
                         egui::TouchPhase::Cancel => {
                             batch.cancelled = true;
                             PointerSamplePhase::Cancel
@@ -206,6 +226,7 @@ pub fn collect_frame_pointer_batch(
                 let phase = if *pressed {
                     PointerSamplePhase::Press
                 } else {
+                    batch.released = true;
                     PointerSamplePhase::Release
                 };
                 push_or_merge_screen_event(
@@ -230,26 +251,28 @@ pub fn collect_frame_pointer_batch(
                 );
             }
             egui::Event::PointerGone => {
-                batch.cancelled = true;
-                let last_pos = batch
-                    .events
-                    .last()
-                    .map(|e| e.screen_pos)
-                    .or(fallback_pos)
-                    .or(reference_pos)
-                    .unwrap_or(Pos2::ZERO);
-                batch.events.push(RawScreenEvent {
-                    screen_pos: last_pos,
-                    raw_pressure: None,
-                    phase: PointerSamplePhase::Cancel,
-                    source: current_source,
-                });
+                batch.pointer_gone = true;
+                if !batch.released {
+                    let last_pos = batch
+                        .events
+                        .last()
+                        .map(|e| e.screen_pos)
+                        .or(fallback_pos)
+                        .or(reference_pos)
+                        .unwrap_or(Pos2::ZERO);
+                    batch.events.push(RawScreenEvent {
+                        screen_pos: last_pos,
+                        raw_pressure: None,
+                        phase: PointerSamplePhase::Cancel,
+                        source: current_source,
+                    });
+                }
             }
             _ => {}
         }
     }
 
-    if !batch.cancelled
+    if !batch.should_cancel()
         && batch.events.is_empty()
         && let Some(pos) = fallback_pos
     {
