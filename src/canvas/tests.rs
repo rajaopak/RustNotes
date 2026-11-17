@@ -4187,3 +4187,111 @@ fn test_hotfix_unrelated_touch_cancel_and_short_stylus_stroke_with_pointer_gone(
     );
     assert!(state.draft_stroke.is_none());
 }
+
+#[test]
+fn test_canvas_1000_percent_zoom_drawing_lasso_and_eraser() {
+    assert!((CanvasState::MAX_ZOOM - 10.0).abs() < 1e-6);
+
+    let ctx = eframe::egui::Context::default();
+    let zoom = CanvasState::MAX_ZOOM;
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Pen,
+        zoom,
+        ..Default::default()
+    };
+    let mut page = Page::new(PageTemplate::Grid);
+    page.id = "zoom-1000-page".to_string();
+
+    let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    let to_screen = |px: f32, py: f32| origin + Vec2::new(px * zoom, py * zoom);
+
+    // 1. Gambar goresan presisi di zoom 1000%
+    let p0 = to_screen(10.0, 10.0);
+    let p1 = to_screen(12.5, 11.5);
+    let p2 = to_screen(15.0, 10.0);
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(p0),
+            eframe::egui::Event::PointerButton {
+                pos: p0,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+            eframe::egui::Event::PointerMoved(p1),
+            eframe::egui::Event::PointerMoved(p2),
+        ],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: p2,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    assert_eq!(page.objects.len(), 1);
+    if let DrawObject::Stroke { points, .. } = &page.objects[0] {
+        assert_eq!(points.len(), 3);
+        assert!((points[0].x - 10.0).abs() < 1e-3);
+        assert!((points[1].x - 12.5).abs() < 1e-3);
+        assert!((points[2].x - 15.0).abs() < 1e-3);
+    } else {
+        panic!("Expected Stroke");
+    }
+
+    // 2. Render mesh cache pada zoom 1000%
+    step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    assert_eq!(state.mesh_cache.len(), 1);
+
+    // 3. Lasso selection pada zoom 1000%
+    state.current_tool = ActiveTool::Lasso;
+    state.lasso_selection_mode = crate::model::LassoSelectionMode::Containment;
+    let l0 = to_screen(5.0, 5.0);
+    let l1 = to_screen(20.0, 5.0);
+    let l2 = to_screen(20.0, 18.0);
+    let l3 = to_screen(5.0, 18.0);
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(l0),
+            eframe::egui::Event::PointerButton {
+                pos: l0,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+            eframe::egui::Event::PointerMoved(l1),
+            eframe::egui::Event::PointerMoved(l2),
+            eframe::egui::Event::PointerMoved(l3),
+        ],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: l3,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+    assert_eq!(state.selected_ids.len(), 1);
+
+    // 4. Eraser pada zoom 1000%
+    let erase_radius = (3.8 / state.zoom).clamp(1.8, 4.5);
+    state.eraser_mode = EraserMode::WholeStroke;
+    assert!(state.erase_at(&mut page, Pos2::new(12.5, 11.5), erase_radius));
+    assert!(page.objects.is_empty());
+    assert!(state.selected_ids.is_empty());
+}

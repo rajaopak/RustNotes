@@ -234,6 +234,8 @@ impl Default for CanvasState {
 
 impl CanvasState {
     pub const MAX_UNDO_DEPTH: usize = 200;
+    pub const MIN_ZOOM: f32 = 0.4;
+    pub const MAX_ZOOM: f32 = 10.0;
 
     #[inline]
     pub fn effective_pressure(&self, raw: f32) -> f32 {

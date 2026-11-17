@@ -159,7 +159,10 @@ impl RustNotesApp {
         anchor_screen_pos: Option<Pos2>,
     ) {
         let old_zoom = self.canvas_state.zoom;
-        let clamped_zoom = new_zoom.clamp(0.4, 2.5);
+        let clamped_zoom = new_zoom.clamp(
+            crate::canvas::CanvasState::MIN_ZOOM,
+            crate::canvas::CanvasState::MAX_ZOOM,
+        );
         if (clamped_zoom - old_zoom).abs() < 1e-4 {
             return;
         }

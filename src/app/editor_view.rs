@@ -74,7 +74,10 @@ impl RustNotesApp {
             (zd, ptr, sd)
         });
         if zoom_delta != 0.0 {
-            let target_zoom = (self.canvas_state.zoom + zoom_delta).clamp(0.4, 2.5);
+            let target_zoom = (self.canvas_state.zoom + zoom_delta).clamp(
+                crate::canvas::CanvasState::MIN_ZOOM,
+                crate::canvas::CanvasState::MAX_ZOOM,
+            );
             self.apply_zoom_anchored(nb_idx, target_zoom, pointer_pos);
         }
 
@@ -1047,8 +1050,12 @@ impl RustNotesApp {
                                     let mut slider_zoom = self.canvas_state.zoom;
                                     if ui
                                         .add(
-                                            egui::Slider::new(&mut slider_zoom, 0.4..=2.5)
-                                                .show_value(false),
+                                            egui::Slider::new(
+                                                &mut slider_zoom,
+                                                crate::canvas::CanvasState::MIN_ZOOM
+                                                    ..=crate::canvas::CanvasState::MAX_ZOOM,
+                                            )
+                                            .show_value(false),
                                         )
                                         .on_hover_text("Geser untuk mengatur tingkat Zoom kanvas")
                                         .changed()
@@ -1069,7 +1076,8 @@ impl RustNotesApp {
                                         .on_hover_text("Perbesar Zoom (+10%)")
                                         .clicked()
                                     {
-                                        let z = (self.canvas_state.zoom + 0.1).min(2.5);
+                                        let z = (self.canvas_state.zoom + 0.1)
+                                            .min(crate::canvas::CanvasState::MAX_ZOOM);
                                         self.apply_zoom_anchored(nb_idx, z, None);
                                     }
 

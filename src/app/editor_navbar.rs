@@ -1631,13 +1631,14 @@ impl RustNotesApp {
                         ui.label(RichText::new("🔎 Canvas Zoom").color(Color32::WHITE));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui.small_button("+").clicked() {
-                                let z = (self.canvas_state.zoom + 0.1).min(2.5);
+                                let z = (self.canvas_state.zoom + 0.1)
+                                    .min(crate::canvas::CanvasState::MAX_ZOOM);
                                 self.apply_zoom_anchored(nb_idx, z, None);
                             }
                             if ui
                                 .small_button(format!(
                                     "{}%",
-                                    (self.canvas_state.zoom * 100.0) as i32
+                                    (self.canvas_state.zoom * 100.0).round() as i32
                                 ))
                                 .on_hover_text("Klik untuk reset Zoom ke 100%")
                                 .clicked()
@@ -1646,7 +1647,8 @@ impl RustNotesApp {
                                 self.canvas_pan_offset = Vec2::ZERO;
                             }
                             if ui.small_button("-").clicked() {
-                                let z = (self.canvas_state.zoom - 0.1).max(0.4);
+                                let z = (self.canvas_state.zoom - 0.1)
+                                    .max(crate::canvas::CanvasState::MIN_ZOOM);
                                 self.apply_zoom_anchored(nb_idx, z, None);
                             }
                         });
