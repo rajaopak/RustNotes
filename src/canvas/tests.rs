@@ -3943,3 +3943,247 @@ fn test_track4_canvas_lasso_selection_zoom_drag_and_stale_id_cleanup() {
         "Objek yang dihapus dengan Eraser wajib langsung dibersihkan dari selected_ids (tanpa stale ID)"
     );
 }
+
+#[test]
+fn test_hotfix_stylus_touch_end_with_pointer_gone_commits_once_and_preserves_metadata() {
+    let ctx = eframe::egui::Context::default();
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Pen,
+        zoom: 1.0,
+        pressure_sensitivity_enabled: true,
+        pressure_min: 0.2,
+        pressure_multiplier: 1.0,
+        ..Default::default()
+    };
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "stylus-pointer-gone-page".to_string();
+
+    let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    let to_screen = |x: f32, y: f32| origin + Vec2::new(x, y);
+
+    let dev = eframe::egui::TouchDeviceId(1);
+    let tid = eframe::egui::TouchId::from(42_u64);
+    let p0 = to_screen(40.0, 50.0);
+    let p1 = to_screen(80.0, 70.0);
+    let p2 = to_screen(120.0, 90.0);
+
+    // Frame 1: Stylus Start -> Move
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::Touch {
+                device_id: dev,
+                id: tid,
+                phase: eframe::egui::TouchPhase::Start,
+                pos: p0,
+                force: Some(0.30),
+            },
+            eframe::egui::Event::PointerButton {
+                pos: p0,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+            eframe::egui::Event::Touch {
+                device_id: dev,
+                id: tid,
+                phase: eframe::egui::TouchPhase::Move,
+                pos: p1,
+                force: Some(0.75),
+            },
+            eframe::egui::Event::PointerMoved(p1),
+        ],
+    );
+    assert!(state.draft_stroke.is_some());
+
+    // Frame 2: Stylus Move -> TouchPhase::End + PointerButton(released) + PointerGone dalam batch yang sama
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::Touch {
+                device_id: dev,
+                id: tid,
+                phase: eframe::egui::TouchPhase::End,
+                pos: p2,
+                force: Some(0.45),
+            },
+            eframe::egui::Event::PointerButton {
+                pos: p2,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            },
+            eframe::egui::Event::PointerGone,
+        ],
+    );
+
+    // Wajib commit tepat 1 stroke ke page.objects, tidak ada draft tersisa, tidak ada duplikat
+    assert_eq!(
+        page.objects.len(),
+        1,
+        "Goresan stylus wajib tersimpan permanen meski PointerGone menyertai TouchPhase::End"
+    );
+    assert!(state.draft_stroke.is_none());
+    assert!(state.active_stroke_page_id.is_none());
+    assert!(!state.pointer_gesture_active);
+    assert!(state.active_touch_id.is_none());
+
+    match &page.objects[0] {
+        DrawObject::Stroke { points, .. } => {
+            assert_eq!(points.len(), 3);
+            assert!((points[2].x - 120.0).abs() < 1e-3);
+            assert!((points[2].y - 90.0).abs() < 1e-3);
+            let expected_end_p = state.effective_pressure(0.45);
+            assert!(
+                (points[2].pressure - expected_end_p).abs() < 1e-4,
+                "Pressure titik akhir stylus harus terjaga ({} vs {expected_end_p})",
+                points[2].pressure
+            );
+        }
+        other => panic!("Expected Stroke, got {other:?}"),
+    }
+
+    // Release sample metadata wajib mempertahankan PointerSource::Touch, bukan Mouse
+    let last_sample = state
+        .last_completed_raw_samples
+        .last()
+        .expect("raw samples recorded");
+    assert_eq!(last_sample.phase, PointerSamplePhase::Release);
+    assert_eq!(
+        last_sample.source,
+        PointerSource::Touch {
+            device_id: dev,
+            id: tid,
+        }
+    );
+    assert_eq!(last_sample.raw_pressure, Some(0.45));
+
+    // Frame 3: Frame berikutnya yang hanya berisi PointerGone tidak boleh merusak stroke yang sudah ter-commit
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerGone],
+    );
+    assert_eq!(page.objects.len(), 1);
+
+    // Undo/Redo setelah stylus finalization harus bekerja normal (hanya 1 undo snapshot)
+    assert_eq!(state.undo_stacks.get(&page.id).unwrap().len(), 1);
+    state.undo(&mut page);
+    assert!(page.objects.is_empty());
+    state.redo(&mut page);
+    assert_eq!(page.objects.len(), 1);
+}
+
+#[test]
+fn test_hotfix_unrelated_touch_cancel_and_short_stylus_stroke_with_pointer_gone() {
+    let ctx = eframe::egui::Context::default();
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Pen,
+        zoom: 1.0,
+        ..Default::default()
+    };
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "stylus-unrelated-cancel".to_string();
+
+    let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    let to_screen = |x: f32, y: f32| origin + Vec2::new(x, y);
+
+    let dev = eframe::egui::TouchDeviceId(1);
+    let stylus_tid = eframe::egui::TouchId::from(10_u64);
+    let palm_tid = eframe::egui::TouchId::from(99_u64);
+    let p0 = to_screen(50.0, 50.0);
+    let p1 = to_screen(52.0, 51.0); // Goresan pendek (< 6px drag threshold)
+
+    // 1. Pembatalan TouchId lain (mis. telapak tangan) tidak boleh membatalkan goresan stylus aktif
+    let batch_with_unrelated_cancel = collect_frame_pointer_batch(
+        &[
+            eframe::egui::Event::Touch {
+                device_id: dev,
+                id: palm_tid,
+                phase: eframe::egui::TouchPhase::Cancel,
+                pos: to_screen(200.0, 200.0),
+                force: None,
+            },
+            eframe::egui::Event::PointerMoved(p1),
+        ],
+        None,
+        None,
+        None,
+    );
+    assert!(
+        !batch_with_unrelated_cancel.should_cancel(),
+        "TouchPhase::Cancel tanpa sentuhan aktif tidak boleh membatalkan interaksi mouse"
+    );
+
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::Touch {
+                device_id: dev,
+                id: stylus_tid,
+                phase: eframe::egui::TouchPhase::Start,
+                pos: p0,
+                force: Some(0.6),
+            },
+            eframe::egui::Event::PointerButton {
+                pos: p0,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+    assert!(state.active_touch_id == Some(stylus_tid));
+
+    // Frame dengan pembatalan palm_tid di tengah goresan stylus_tid + selesai dengan goresan pendek + PointerGone
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::Touch {
+                device_id: dev,
+                id: palm_tid,
+                phase: eframe::egui::TouchPhase::Cancel,
+                pos: to_screen(250.0, 250.0),
+                force: None,
+            },
+            eframe::egui::Event::Touch {
+                device_id: dev,
+                id: stylus_tid,
+                phase: eframe::egui::TouchPhase::Move,
+                pos: p1,
+                force: Some(0.8),
+            },
+            eframe::egui::Event::PointerMoved(p1),
+            eframe::egui::Event::Touch {
+                device_id: dev,
+                id: stylus_tid,
+                phase: eframe::egui::TouchPhase::End,
+                pos: p1,
+                force: Some(0.5),
+            },
+            eframe::egui::Event::PointerButton {
+                pos: p1,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            },
+            eframe::egui::Event::PointerGone,
+        ],
+    );
+
+    assert_eq!(
+        page.objects.len(),
+        1,
+        "Goresan pendek stylus tetap wajib ter-commit meski ada TouchPhase::Cancel dari ID lain dan PointerGone"
+    );
+    assert!(state.draft_stroke.is_none());
+}
