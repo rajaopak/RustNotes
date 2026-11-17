@@ -25,6 +25,13 @@ impl eframe::App for RustNotesApp {
         // Fase 8.9: Aktifkan AccessKit bawaan egui untuk pembaca layar & aksesibilitas
         ctx.enable_accesskit();
 
+        // Nonaktifkan zoom UI bawaan egui (Ctrl +/-) agar navbar & toolbar tidak berubah ukuran/rusak;
+        // shortcut Ctrl +/- diarahkan ke zoom kertas/kanvas di editor_view.
+        ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        if (ctx.zoom_factor() - 1.0).abs() > 1e-4 {
+            ctx.set_zoom_factor(1.0);
+        }
+
         // Fase 8.5 & G4.4 & Task 1: Sinkronkan status Palm Rejection, AutoShape & Pressure Sensitivity ke CanvasState
         self.canvas_state.palm_rejection_enabled = self.settings.palm_rejection;
         self.canvas_state.auto_shape_enabled = self.settings.auto_shape_enabled;

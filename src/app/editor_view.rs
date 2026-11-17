@@ -183,6 +183,24 @@ impl RustNotesApp {
                 self.toast_message = Some("🔍 Zoom di-reset ke 100%.".to_string());
             }
 
+            // Keyboard canvas zoom (Ctrl++ / Ctrl+= / Ctrl+-) terbatas pada rentang MIN_ZOOM..=MAX_ZOOM
+            // tanpa mengubah skala UI/navbar.
+            let (kbd_zoom_in, kbd_zoom_out) = ctx.input(|i| {
+                if !i.modifiers.command || self.canvas_state.editing_text_id.is_some() {
+                    return (false, false);
+                }
+                let zoom_in = i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals);
+                let zoom_out = i.key_pressed(egui::Key::Minus);
+                (zoom_in, zoom_out)
+            });
+            if kbd_zoom_in {
+                let z = (self.canvas_state.zoom + 0.1).min(crate::canvas::CanvasState::MAX_ZOOM);
+                self.apply_zoom_anchored(nb_idx, z, None);
+            } else if kbd_zoom_out {
+                let z = (self.canvas_state.zoom - 0.1).max(crate::canvas::CanvasState::MIN_ZOOM);
+                self.apply_zoom_anchored(nb_idx, z, None);
+            }
+
             // Select all objects on current page
             if ctx.input(|i| {
                 crate::app::is_action_triggered(
@@ -1042,7 +1060,8 @@ impl RustNotesApp {
                                         .on_hover_text("Perkecil Zoom (-10%)")
                                         .clicked()
                                     {
-                                        let z = (self.canvas_state.zoom - 0.1).max(0.4);
+                                        let z = (self.canvas_state.zoom - 0.1)
+                                            .max(crate::canvas::CanvasState::MIN_ZOOM);
                                         self.apply_zoom_anchored(nb_idx, z, None);
                                     }
 
