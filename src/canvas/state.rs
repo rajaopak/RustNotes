@@ -550,6 +550,7 @@ impl CanvasState {
                         std::slice::from_ref(&rem_id),
                     );
                     self.mesh_cache.retain(|(k, _), _| k != &rem_id);
+                    self.selected_ids.retain(|id| id != &rem_id);
                     page.objects.remove(target_idx);
                     self.rebuild_spatial_grid(&page.id, &page.objects);
                     self.last_whole_erase_pos = Some(page_p);
@@ -597,6 +598,7 @@ impl CanvasState {
                     if let Some(mod_entry) = modifications.remove(&idx) {
                         let old_id = obj.id().to_string();
                         self.mesh_cache.retain(|(k, _), _| k != &old_id);
+                        self.selected_ids.retain(|id| id != &old_id);
                         if let DrawObject::Shape { id, .. } = &obj {
                             deleted_shape_ids.push(id.clone());
                         }

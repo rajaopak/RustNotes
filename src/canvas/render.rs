@@ -521,6 +521,13 @@ fn render_active_draft_and_lasso(
             let p2 = page_to_screen(state.lasso_points[i]);
             painter.line_segment([p1, p2], stroke);
         }
+        if state.lasso_points.len() > 2 {
+            let p_last = page_to_screen(*state.lasso_points.last().unwrap());
+            let p_first = page_to_screen(state.lasso_points[0]);
+            let close_stroke =
+                Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(0, 114, 206, 95));
+            painter.line_segment([p_last, p_first], close_stroke);
+        }
     }
 }
 

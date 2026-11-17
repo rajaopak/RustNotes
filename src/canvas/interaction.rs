@@ -10,8 +10,7 @@ use crate::geometry::{
     calculate_single_axis_resize, combined_bounds, find_alignment_guides, find_connector_snap_site,
     hit_test_connector_details, hit_test_connector_midpoint, hit_test_object,
     hit_test_transform_handles, insert_control_point_at, next_shape_rect, object_bounds,
-    object_in_lasso_mode_with_context, point_in_polygon,
-    prune_all_invalid_connector_control_points, prune_collinear_control_points,
+    point_in_polygon, prune_all_invalid_connector_control_points, prune_collinear_control_points,
     recognize_handwriting_from_strokes, recognize_shape, resolve_connector_endpoints, scale_object,
     shape_connection_point, snap_point_to_grid, snap_value_to_grid, translate_object,
 };
@@ -1325,6 +1324,7 @@ fn handle_drag_stopped(
         state.drag_start_pos = None;
         // Task 8.5: Periksa bila ada shape bergerak yang menimpa control points pada connector tanpa clone objek
         prune_all_invalid_connector_control_points(&mut page.objects);
+        state.clean_redundant_top_undo(&page.id, &page.objects);
         state.rebuild_spatial_grid(&page.id, &page.objects);
     } else if let Some(corner) = state.resize_corner.take() {
         let drag_start_pos = state.drag_start_pos.take();
@@ -1368,6 +1368,7 @@ fn handle_drag_stopped(
                 .unwrap_or(Pos2::ZERO);
             complete_quick_diagram_dot_interaction(page, state, site, drag_start_pos, stop_page_p);
         }
+        state.clean_redundant_top_undo(&page.id, &page.objects);
         state.rebuild_spatial_grid(&page.id, &page.objects);
     } else if state.active_stroke_page_id.as_deref() == Some(&page.id) {
         state.active_stroke_page_id = None;
@@ -1616,18 +1617,18 @@ fn handle_drag_stopped(
             state.last_completed_raw_samples = std::mem::take(&mut state.raw_stroke_samples);
             if state.lasso_points.len() > 2 {
                 state.stroke_committed_this_frame = true;
-                let mut selected = Vec::new();
-                for obj in &page.objects {
-                    if object_in_lasso_mode_with_context(
-                        obj,
-                        &state.lasso_points,
-                        state.lasso_selection_mode,
-                        Some(&page.objects),
-                    ) {
-                        selected.push(obj.id().to_string());
-                    }
+                if state.spatial_grid_page_id.as_deref() != Some(&page.id) {
+                    state.rebuild_spatial_grid(&page.id, &page.objects);
                 }
-                state.selected_ids = selected;
+                let selected_indices = state.spatial_grid.select_in_lasso(
+                    &page.objects,
+                    &state.lasso_points,
+                    state.lasso_selection_mode,
+                );
+                state.selected_ids = selected_indices
+                    .into_iter()
+                    .filter_map(|idx| page.objects.get(idx).map(|o| o.id().to_string()))
+                    .collect();
             }
             state.lasso_points.clear();
         }
