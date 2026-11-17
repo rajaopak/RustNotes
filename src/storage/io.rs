@@ -18,11 +18,48 @@ pub fn app_storage_dir() -> PathBuf {
     test_isolation::thread_storage_dir()
 }
 
-/// Lokasi data pengguna yang sebenarnya di sistem operasi.
-fn user_storage_dir() -> PathBuf {
+/// Menentukan apakah direktori executable `exe_dir` berjalan dalam Portable Mode.
+/// Portable Mode aktif jika terdapat berkas penanda `portable.txt` / `.portable`
+/// atau folder `data/` di samping `rustnotes.exe`, atau env `RUSTNOTES_PORTABLE=1`.
+pub fn is_portable_mode_for_exe(exe_dir: &Path) -> bool {
+    if let Ok(val) = std::env::var("RUSTNOTES_PORTABLE")
+        && (val == "1" || val.eq_ignore_ascii_case("true"))
+    {
+        return true;
+    }
+    exe_dir.join("portable.txt").exists()
+        || exe_dir.join(".portable").exists()
+        || exe_dir.join("data").is_dir()
+}
+
+/// Mengembalikan `true` jika aplikasi berjalan dalam Portable Mode.
+pub fn is_portable_mode() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(is_portable_mode_for_exe))
+        .unwrap_or(false)
+}
+
+/// Menentukan lokasi penyimpanan pengguna berdasarkan direktori executable.
+/// - Portable Mode: `<exe_dir>/data`
+/// - Installed / Standard Mode: `%LOCALAPPDATA%\RustNotes`
+pub fn resolve_storage_dir_for_exe(exe_dir: Option<&Path>) -> PathBuf {
+    if let Some(dir) = exe_dir
+        && is_portable_mode_for_exe(dir)
+    {
+        return dir.join("data");
+    }
     dirs::data_local_dir()
         .map(|p| p.join("RustNotes"))
         .unwrap_or_else(|| PathBuf::from("./rustnotes_data"))
+}
+
+/// Lokasi data pengguna yang sebenarnya di sistem operasi.
+fn user_storage_dir() -> PathBuf {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    resolve_storage_dir_for_exe(exe_dir.as_deref())
 }
 
 /// Rotasi berkas backup notebook hingga `max_generations` generasi.
@@ -191,5 +228,24 @@ mod test_isolation {
             .join()
             .expect("thread panicked");
         assert_ne!(here, other);
+    }
+
+    #[test]
+    fn test_portable_mode_detection_and_storage_resolution() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let exe_dir = temp.path();
+
+        // Tanpa penanda portabel -> kembali ke %LOCALAPPDATA%\RustNotes
+        assert!(!super::is_portable_mode_for_exe(exe_dir));
+        let installed_dir = super::resolve_storage_dir_for_exe(Some(exe_dir));
+        assert!(installed_dir.ends_with("RustNotes"));
+
+        // Dengan berkas penanda portable.txt -> gunakan <exe_dir>/data
+        std::fs::write(exe_dir.join("portable.txt"), b"portable").expect("write marker");
+        assert!(super::is_portable_mode_for_exe(exe_dir));
+        assert_eq!(
+            super::resolve_storage_dir_for_exe(Some(exe_dir)),
+            exe_dir.join("data")
+        );
     }
 }

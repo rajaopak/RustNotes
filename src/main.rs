@@ -8,8 +8,22 @@ fn main() -> eframe::Result<()> {
     // Fase 7.7: Logging & Crash Handler (tulis log crash ke %APPDATA%\RustNotes\logs\)
     setup_panic_handler();
 
-    // Fase 7.3: File Association & CLI args (jika dipanggil dengan berkas .rnote / .zip)
+    // Validasi runtime non-GUI untuk pengujian distribusi (portable / installer)
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--verify-runtime") {
+        match rustnotes::storage::validate_runtime_environment() {
+            Ok(summary) => {
+                println!("{summary}");
+                return Ok(());
+            }
+            Err(err) => {
+                eprintln!("RUNTIME VALIDATION FAILED:\n{err}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Fase 7.3: File Association & CLI args (jika dipanggil dengan berkas .rnote / .zip)
     let initial_file = if args.len() > 1 {
         let p = std::path::PathBuf::from(&args[1]);
         if p.exists() && p.is_file() {

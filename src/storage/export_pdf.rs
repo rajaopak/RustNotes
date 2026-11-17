@@ -153,6 +153,39 @@ pub fn get_pdfium() -> Result<Pdfium, String> {
     }
 }
 
+/// Memvalidasi dependensi runtime dan direktori penyimpanan untuk rilis Windows:
+/// 1. Direktori penyimpanan (`app_storage_dir()`) dapat dibuat dan ditulisi.
+/// 2. Pustaka dinamis `pdfium.dll` ditemukan, berarsitektur cocok, dan berhasil dimuat.
+pub fn validate_runtime_environment() -> Result<String, String> {
+    let storage_dir = super::app_storage_dir();
+    std::fs::create_dir_all(&storage_dir).map_err(|e| {
+        format!(
+            "Gagal membuat direktori penyimpanan '{}': {e}",
+            storage_dir.display()
+        )
+    })?;
+    let probe_path = storage_dir.join(".runtime_write_probe");
+    std::fs::write(&probe_path, b"ok").map_err(|e| {
+        format!(
+            "Direktori penyimpanan '{}' tidak dapat ditulisi: {e}",
+            storage_dir.display()
+        )
+    })?;
+    let _ = std::fs::remove_file(&probe_path);
+
+    let _pdfium = get_pdfium()?;
+    let mode = if super::is_portable_mode() {
+        "Portable"
+    } else {
+        "Installed"
+    };
+    Ok(format!(
+        "RustNotes v{} runtime OK (mode={mode}, storage='{}', pdfium=loaded)",
+        env!("CARGO_PKG_VERSION"),
+        storage_dir.display()
+    ))
+}
+
 pub fn import_pdf_to_pages(
     dir: &Path,
     notebook_id: &str,

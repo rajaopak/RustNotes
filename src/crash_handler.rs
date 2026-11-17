@@ -66,13 +66,7 @@ pub fn get_logs_dir() -> PathBuf {
 
 #[cfg(not(test))]
 pub fn get_logs_dir() -> PathBuf {
-    if let Some(mut base) = dirs::data_dir() {
-        base.push("RustNotes");
-        base.push("logs");
-        base
-    } else {
-        PathBuf::from("logs")
-    }
+    crate::storage::app_storage_dir().join("logs")
 }
 
 #[cfg(test)]
