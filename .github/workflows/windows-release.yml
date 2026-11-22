@@ -54,7 +54,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'build.rs', 'pdfium.dll') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
 
@@ -86,7 +86,15 @@ jobs:
         run: cargo test --verbose
 
       - name: Build release executable (x86_64-pc-windows-msvc)
-        run: cargo build --release --target x86_64-pc-windows-msvc
+        shell: pwsh
+        run: |
+          cargo build --release --target x86_64-pc-windows-msvc
+          $buildDir = "target\x86_64-pc-windows-msvc\release"
+          $destDll = Join-Path $buildDir "pdfium.dll"
+          if (-not (Test-Path $destDll)) {
+            Write-Host "pdfium.dll not present in $buildDir (Cargo cache skipped build.rs); syncing from repository root."
+            Copy-Item "pdfium.dll" -Destination $destDll -Force
+          }
 
       - name: Validate release build outputs before packaging
         shell: pwsh
