@@ -35,7 +35,8 @@ try {
     }
 
     $exeSrc = Join-Path $TargetDir "rustnotes.exe"
-    $dllSrc = "pdfium.dll"
+    $targetDll = Join-Path $TargetDir "pdfium.dll"
+    $dllSrc = if (Test-Path $targetDll) { $targetDll } else { "pdfium.dll" }
     $iconIco = "assets\icon.ico"
     $iconPng = "assets\icon.png"
     $licenseSrc = "LICENSE"

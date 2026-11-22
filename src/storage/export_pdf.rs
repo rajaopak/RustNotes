@@ -5,6 +5,47 @@ use pdfium_render::prelude::*;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+fn inspect_pe_architecture(path: &Path) -> Result<u16, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("gagal membaca berkas ({e})"))?;
+    if bytes.len() < 0x40 || &bytes[0..2] != b"MZ" {
+        return Err(format!(
+            "bukan biner Windows PE/DLL yang valid ({} byte)",
+            bytes.len()
+        ));
+    }
+    let pe_offset =
+        u32::from_le_bytes([bytes[0x3C], bytes[0x3D], bytes[0x3E], bytes[0x3F]]) as usize;
+    if pe_offset + 6 > bytes.len() || &bytes[pe_offset..pe_offset + 4] != b"PE\0\0" {
+        return Err("signature PE tidak valid".to_string());
+    }
+    Ok(u16::from_le_bytes([
+        bytes[pe_offset + 4],
+        bytes[pe_offset + 5],
+    ]))
+}
+
+fn diagnose_pdfium_load_failure(path: &Path, err: &dyn std::fmt::Display) -> String {
+    match inspect_pe_architecture(path) {
+        Err(pe_err) => format!("berkas ada, tetapi tidak valid: {pe_err}"),
+        Ok(machine) => {
+            #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+            if machine != 0x8664 {
+                let arch_label = match machine {
+                    0x014C => "x86 (32-bit)",
+                    0xAA64 => "ARM64",
+                    _ => "tidak dikenal",
+                };
+                return format!(
+                    "arsitektur DLL tidak cocok: ditemukan {arch_label} (0x{machine:04X}), dibutuhkan x64 (0x8664)"
+                );
+            }
+            format!(
+                "arsitektur PE valid (0x{machine:04X}), tetapi gagal dimuat/inisialisasi (kemungkinan DLL dependensi hilang atau inisialisasi PDFium gagal): {err}"
+            )
+        }
+    }
+}
+
 pub fn get_pdfium() -> Result<Pdfium, String> {
     let mut searched_locations = Vec::new();
     let mut tested_paths = HashSet::new();
@@ -29,17 +70,19 @@ pub fn get_pdfium() -> Result<Pdfium, String> {
         match Pdfium::bind_to_library(lib_path_str) {
             Ok(bindings) => Some(Pdfium::new(bindings)),
             Err(e) => {
-                searched_locations.push(format!(
-                    "{desc}: '{}' (berkas ada, tetapi gagal dimuat: {e})",
-                    candidate.display()
-                ));
+                let detail = diagnose_pdfium_load_failure(&candidate, &e);
+                searched_locations.push(format!("{desc}: '{}' ({detail})", candidate.display()));
                 None
             }
         }
     };
 
-    // 1. Cek environment variable PDFIUM_PATH / PDFIUM_DYNAMIC_LIB_PATH
-    for env_var in &["PDFIUM_PATH", "PDFIUM_DYNAMIC_LIB_PATH"] {
+    // 1. Cek environment variable RUSTNOTES_PDFIUM_PATH / PDFIUM_PATH / PDFIUM_DYNAMIC_LIB_PATH
+    for env_var in &[
+        "RUSTNOTES_PDFIUM_PATH",
+        "PDFIUM_PATH",
+        "PDFIUM_DYNAMIC_LIB_PATH",
+    ] {
         if let Ok(env_val) = std::env::var(env_var) {
             let p = PathBuf::from(&env_val);
             let candidate = if p.is_dir() { p.join("pdfium.dll") } else { p };
@@ -147,7 +190,7 @@ pub fn get_pdfium() -> Result<Pdfium, String> {
             msg.push_str("\nLangkah Penyelesaian:\n");
             msg.push_str("1. Pastikan berkas 'pdfium.dll' (arsitektur 64-bit / x86_64) diletakkan di direktori yang sama dengan berkas 'rustnotes.exe'.\n");
             msg.push_str("2. Atau letakkan berkas 'pdfium.dll' di direktori data aplikasi (%LOCALAPPDATA%\\RustNotes\\pdfium.dll).\n");
-            msg.push_str("3. Atau atur variabel lingkungan PDFIUM_PATH mengarah ke berkas atau folder 'pdfium.dll'.\n");
+            msg.push_str("3. Atau atur variabel lingkungan RUSTNOTES_PDFIUM_PATH (atau PDFIUM_PATH) mengarah ke berkas atau folder 'pdfium.dll'.\n");
             Err(msg)
         }
     }
@@ -155,7 +198,7 @@ pub fn get_pdfium() -> Result<Pdfium, String> {
 
 /// Memvalidasi dependensi runtime dan direktori penyimpanan untuk rilis Windows:
 /// 1. Direktori penyimpanan (`app_storage_dir()`) dapat dibuat dan ditulisi.
-/// 2. Pustaka dinamis `pdfium.dll` ditemukan, berarsitektur cocok, dan berhasil dimuat.
+/// 2. Pustaka dinamis `pdfium.dll` ditemukan, berarsitektur cocok, dan berhasil diinisialisasi.
 pub fn validate_runtime_environment() -> Result<String, String> {
     let storage_dir = super::app_storage_dir();
     std::fs::create_dir_all(&storage_dir).map_err(|e| {
@@ -173,14 +216,19 @@ pub fn validate_runtime_environment() -> Result<String, String> {
     })?;
     let _ = std::fs::remove_file(&probe_path);
 
-    let _pdfium = get_pdfium()?;
+    let pdfium = get_pdfium()?;
+    // Pastikan pustaka PDFium benar-benar dapat diinisialisasi di memori (bukan sekadar DLL ada)
+    let _doc = pdfium
+        .create_new_pdf()
+        .map_err(|e| format!("PDFium DLL dimuat, tetapi gagal diinisialisasi: {e}"))?;
+
     let mode = if super::is_portable_mode() {
         "Portable"
     } else {
         "Installed"
     };
     Ok(format!(
-        "RustNotes v{} runtime OK (mode={mode}, storage='{}', pdfium=loaded)",
+        "RustNotes v{} runtime OK (mode={mode}, storage='{}', pdfium=initialized)",
         env!("CARGO_PKG_VERSION"),
         storage_dir.display()
     ))
@@ -332,4 +380,37 @@ pub fn export_notebook_to_pdf(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_runtime_environment_initializes_pdfium() {
+        let summary = validate_runtime_environment().expect("PDFium runtime should initialize");
+        assert!(summary.contains("pdfium=initialized"));
+    }
+
+    #[test]
+    fn test_diagnose_pdfium_load_failure_distinguishes_pe_and_arch() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bad_pe = temp.path().join("bad.dll");
+        std::fs::write(&bad_pe, b"not a dll").expect("write bad file");
+        let dummy_err = "LoadLibrary failed";
+        let msg_bad = diagnose_pdfium_load_failure(&bad_pe, &dummy_err);
+        assert!(msg_bad.contains("bukan biner Windows PE/DLL yang valid"));
+
+        // Minimal synthetic x86 (0x014C) PE header
+        let mut x86_pe = vec![0u8; 0x90];
+        x86_pe[0..2].copy_from_slice(b"MZ");
+        x86_pe[0x3C..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        x86_pe[0x80..0x84].copy_from_slice(b"PE\0\0");
+        x86_pe[0x84..0x86].copy_from_slice(&0x014Cu16.to_le_bytes());
+        let x86_path = temp.path().join("x86.dll");
+        std::fs::write(&x86_path, &x86_pe).expect("write x86 pe");
+        let msg_arch = diagnose_pdfium_load_failure(&x86_path, &dummy_err);
+        assert!(msg_arch.contains("0x014C"));
+        assert!(msg_arch.contains("0x8664"));
+    }
 }

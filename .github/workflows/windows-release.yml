@@ -21,6 +21,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Validate PDFium source DLL before compilation
+        shell: pwsh
+        run: |
+          $dll = "pdfium.dll"
+          if (-not (Test-Path $dll)) {
+            throw "Required source file '$dll' is missing from repository root."
+          }
+          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $dll))
+          if ($bytes.Length -lt 1024 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+            throw "'$dll' is not a valid Windows PE binary ($($bytes.Length) bytes)."
+          }
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          if ($machine -ne 0x8664) {
+            throw ("'$dll' architecture mismatch: expected 0x8664 (x64), found 0x{0:X4}" -f $machine)
+          }
+          Write-Host ("Validated pdfium.dll ({0:N2} MB, PE 0x{1:X4})" -f ($bytes.Length / 1MB), $machine)
+
       - name: Setup Rust toolchain (x86_64-pc-windows-msvc)
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -70,6 +88,24 @@ jobs:
       - name: Build release executable (x86_64-pc-windows-msvc)
         run: cargo build --release --target x86_64-pc-windows-msvc
 
+      - name: Validate release build outputs before packaging
+        shell: pwsh
+        run: |
+          $buildDir = "target\x86_64-pc-windows-msvc\release"
+          foreach ($file in @("rustnotes.exe", "pdfium.dll")) {
+            $full = Join-Path $buildDir $file
+            if (-not (Test-Path $full)) {
+              throw "Required build output missing: $full"
+            }
+            $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $full))
+            $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+            $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+            if ($machine -ne 0x8664) {
+              throw ("'$full' architecture mismatch: expected 0x8664 (x64), found 0x{0:X4}" -f $machine)
+            }
+            Write-Host ("Verified {0} ({1:N2} MB, PE 0x{2:X4})" -f $full, ($bytes.Length / 1MB), $machine)
+          }
+
       - name: Build Portable ZIP & validate runtime
         shell: pwsh
         run: |
@@ -99,10 +135,19 @@ jobs:
         shell: pwsh
         run: |
           $ver = "${{ steps.meta.outputs.version }}"
-          iscc "/DMyAppVersion=$ver" "/DBuildDir=..\target\x86_64-pc-windows-msvc\release" "installer\rustnotes.iss"
+          $buildDir = "target\x86_64-pc-windows-msvc\release"
+          if (-not (Test-Path (Join-Path $buildDir "rustnotes.exe")) -or -not (Test-Path (Join-Path $buildDir "pdfium.dll"))) {
+            throw "BuildDir '$buildDir' is missing rustnotes.exe or pdfium.dll"
+          }
+          iscc "/DMyAppVersion=$ver" "/DBuildDir=..\$buildDir" "installer\rustnotes.iss"
           if (-not (Test-Path "dist\RustNotes-Setup.exe")) {
             throw "Expected dist\RustNotes-Setup.exe was not generated"
           }
+
+      - name: Smoke-test Windows Installer (Silent Install + PDFium Init)
+        shell: pwsh
+        run: |
+          .\scripts\verify_installer.ps1 -InstallerPath "dist\RustNotes-Setup.exe"
 
       - name: Upload Windows distribution artifacts
         uses: actions/upload-artifact@v4
