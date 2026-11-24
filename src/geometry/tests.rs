@@ -6385,3 +6385,137 @@ fn test_tessellate_stroke_styled_aa_emits_transparent_outer_skirt_without_spikes
         );
     }
 }
+
+#[test]
+fn test_spatial_grid_handles_huge_and_nonfinite_bounds_without_oom() {
+    let normal_text = DrawObject::Text {
+        id: "normal-text".into(),
+        x: 50.0,
+        y: 60.0,
+        text: "Normal".into(),
+        font_size: 16.0,
+        color: dummy_color(),
+        rotation: 0.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
+    };
+    let huge_text = DrawObject::Text {
+        id: "huge-text".into(),
+        x: 100.0,
+        y: 100.0,
+        text: "Exploded font size".into(),
+        font_size: 1.0e8,
+        color: dummy_color(),
+        rotation: 0.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
+    };
+    let huge_shape = DrawObject::Shape {
+        id: "huge-shape".into(),
+        shape_type: ShapeKind::Rectangle,
+        x: 0.0,
+        y: 0.0,
+        width: 1.0e9,
+        height: 1.0e9,
+        color: dummy_color(),
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    };
+    let nan_text = DrawObject::Text {
+        id: "nan-text".into(),
+        x: f32::NAN,
+        y: 100.0,
+        text: "NaN".into(),
+        font_size: 16.0,
+        color: dummy_color(),
+        rotation: 0.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
+    };
+    let objects = vec![normal_text, huge_text, huge_shape, nan_text];
+
+    let start = std::time::Instant::now();
+    let mut grid = SpatialGrid::new(100.0);
+    grid.rebuild(&objects);
+    let q_pt = grid.query_point(Pos2::new(60.0, 70.0), 15.0);
+    let q_huge_rect = grid.query_rect(Rect::from_min_max(
+        Pos2::new(-1.0e8, -1.0e8),
+        Pos2::new(1.0e8, 1.0e8),
+    ));
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed.as_millis() < 100,
+        "SpatialGrid rebuild/query with huge/non-finite objects must finish rapidly without OOM, took {elapsed:?}"
+    );
+    assert!(q_pt.contains(&0), "normal text (idx 0) must be indexed");
+    assert!(
+        q_pt.contains(&2),
+        "huge valid shape (idx 2) must remain queryable via overflow bucket"
+    );
+    assert!(
+        !q_pt.contains(&3) && !q_huge_rect.contains(&3),
+        "NaN text (idx 3) must be safely skipped"
+    );
+}
+
+#[test]
+fn test_scale_object_clamps_text_font_size_and_rejects_nonfinite() {
+    let origin = Pos2::new(100.0, 100.0);
+    let mut txt = DrawObject::Text {
+        id: "t-clamp".into(),
+        x: 120.0,
+        y: 140.0,
+        text: "Test".into(),
+        font_size: 16.0,
+        color: dummy_color(),
+        rotation: 0.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
+    };
+
+    // 1. Scale up far beyond maximum -> font_size clamps to MAX_TEXT_FONT_SIZE and position tracks eff_s
+    scale_object(&mut txt, origin, 1000.0, 1000.0);
+    if let DrawObject::Text {
+        x, y, font_size, ..
+    } = txt
+    {
+        assert_eq!(font_size, MAX_TEXT_FONT_SIZE);
+        let eff_s = MAX_TEXT_FONT_SIZE / 16.0;
+        assert!((x - (100.0 + 20.0 * eff_s)).abs() < 1e-3);
+        assert!((y - (100.0 + 40.0 * eff_s)).abs() < 1e-3);
+    } else {
+        panic!("Expected Text");
+    }
+
+    // 2. Non-finite scale must be ignored completely
+    let snapshot = txt.clone();
+    scale_object(&mut txt, origin, f32::NAN, 1.0);
+    scale_object(&mut txt, origin, 1.0, f32::INFINITY);
+    assert_eq!(txt, snapshot);
+
+    // 3. Scale down far below minimum -> font_size clamps to MIN_TEXT_FONT_SIZE and stays finite
+    scale_object(&mut txt, origin, 0.0001, 0.0001);
+    if let DrawObject::Text {
+        x, y, font_size, ..
+    } = txt
+    {
+        assert_eq!(font_size, MIN_TEXT_FONT_SIZE);
+        assert!(x.is_finite() && y.is_finite());
+    } else {
+        panic!("Expected Text");
+    }
+}

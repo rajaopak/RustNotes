@@ -5506,3 +5506,321 @@ fn test_autoshape_line_always_renders_rounded_caps_even_at_thin_width() {
         );
     }
 }
+
+#[test]
+fn test_lasso_resize_text_multi_event_frame_is_stable_and_never_explodes() {
+    let ctx = eframe::egui::Context::default();
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "text-resize-stability".to_string();
+    page.objects.push(DrawObject::Text {
+        id: "txt-1".to_string(),
+        x: 150.0,
+        y: 180.0,
+        text: "Hello RustNotes".to_string(),
+        font_size: 16.0,
+        color: ColorData::from(Color32::BLACK),
+        rotation: 0.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
+    });
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Lasso,
+        zoom: 1.0,
+        selected_ids: vec!["txt-1".to_string()],
+        ..Default::default()
+    };
+
+    // Frame 0: layout canvas
+    let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    let to_screen = |x: f32, y: f32| origin + Vec2::new(x, y);
+
+    let sel = super::gizmo::SelectionData::compute(&page, &state);
+    let init_rect = sel.rect.expect("Text object must have selection rect");
+
+    // 1. Tarik handle SouthEast hingga 2x ukuran awal dengan 10 event PointerMoved dalam 1 frame
+    let se_start = to_screen(init_rect.right(), init_rect.bottom());
+    let se_2x = to_screen(
+        init_rect.left() + init_rect.width() * 2.0,
+        init_rect.top() + init_rect.height() * 2.0,
+    );
+
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(se_start),
+            eframe::egui::Event::PointerButton {
+                pos: se_start,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+
+    let mut enlarge_moves = Vec::new();
+    for step in 1..=10 {
+        let t = step as f32 / 10.0;
+        enlarge_moves.push(eframe::egui::Event::PointerMoved(se_start.lerp(se_2x, t)));
+    }
+    step_test_canvas(&ctx, &mut page, &mut state, enlarge_moves);
+
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: se_2x,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    let (x1, y1, fs1) = match &page.objects[0] {
+        DrawObject::Text {
+            x, y, font_size, ..
+        } => (*x, *y, *font_size),
+        other => panic!("Expected Text, got {other:?}"),
+    };
+    assert!(x1.is_finite() && y1.is_finite());
+    assert!(
+        (x1 - 150.0).abs() < 1e-2 && (y1 - 180.0).abs() < 1e-2,
+        "Top-left anchor must remain pinned during SE resize, got ({x1}, {y1})"
+    );
+    assert!(
+        (26.0..=38.0).contains(&fs1),
+        "10 sub-frame events enlarging 2x must yield ~32pt font (no 2^10 blowup), got {fs1}"
+    );
+
+    // 2. Perkecil ekstrem via SouthEast (sampai melewati origin) dengan 10 event dalam 1 frame
+    let sel_after_enlarge = super::gizmo::SelectionData::compute(&page, &state);
+    let r2 = sel_after_enlarge.rect.unwrap();
+    let se_curr = to_screen(r2.right(), r2.bottom());
+    let past_origin = to_screen(r2.left() - 60.0, r2.top() - 40.0);
+
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(se_curr),
+            eframe::egui::Event::PointerButton {
+                pos: se_curr,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+    let mut shrink_moves = Vec::new();
+    for step in 1..=10 {
+        let t = step as f32 / 10.0;
+        shrink_moves.push(eframe::egui::Event::PointerMoved(
+            se_curr.lerp(past_origin, t),
+        ));
+    }
+    step_test_canvas(&ctx, &mut page, &mut state, shrink_moves);
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: past_origin,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    let (x2, y2, fs2) = match &page.objects[0] {
+        DrawObject::Text {
+            x, y, font_size, ..
+        } => (*x, *y, *font_size),
+        other => panic!("Expected Text, got {other:?}"),
+    };
+    assert!(x2.is_finite() && y2.is_finite() && (0.0..=600.0).contains(&x2));
+    assert!(
+        (crate::geometry::MIN_TEXT_FONT_SIZE..=crate::geometry::MAX_TEXT_FONT_SIZE).contains(&fs2),
+        "Shrunk text font_size must remain clamped cleanly above minimum, got {fs2}"
+    );
+
+    // 3. Test resize via side handle (East) dan NorthWest handle untuk memastikan tidak ada drift/hilang
+    let sel_east = super::gizmo::SelectionData::compute(&page, &state)
+        .rect
+        .unwrap();
+    let east_h = to_screen(sel_east.right(), sel_east.center().y);
+    let east_out = to_screen(
+        sel_east.left() + sel_east.width() * 2.5,
+        sel_east.center().y,
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(east_h),
+            eframe::egui::Event::PointerButton {
+                pos: east_h,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(east_out),
+            eframe::egui::Event::PointerMoved(east_out),
+        ],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: east_out,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+    let bounds_after_east = crate::geometry::object_bounds(&page.objects[0]);
+    assert!(bounds_after_east.is_finite());
+    assert!(
+        bounds_after_east.width() > sel_east.width() * 1.5,
+        "East handle resize on Text must enlarge cleanly (~2.5x), got {} vs init {}",
+        bounds_after_east.width(),
+        sel_east.width()
+    );
+    assert!(bounds_after_east.left() >= 0.0 && bounds_after_east.right() <= page.width);
+
+    // 4. Test resize via NorthWest handle (top-left) untuk memperbesar ke kiri-atas
+    let sel_nw = super::gizmo::SelectionData::compute(&page, &state)
+        .rect
+        .unwrap();
+    let nw_h = to_screen(sel_nw.left(), sel_nw.top());
+    let nw_out = to_screen(
+        sel_nw.right() - sel_nw.width() * 1.5,
+        sel_nw.bottom() - sel_nw.height() * 1.5,
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(nw_h),
+            eframe::egui::Event::PointerButton {
+                pos: nw_h,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(nw_out),
+            eframe::egui::Event::PointerMoved(nw_out),
+        ],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: nw_out,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+    let final_bounds = crate::geometry::object_bounds(&page.objects[0]);
+    assert!(final_bounds.is_finite());
+    assert!(
+        final_bounds.width() > sel_nw.width(),
+        "NorthWest handle outward drag must enlarge Text cleanly, got {} vs {}",
+        final_bounds.width(),
+        sel_nw.width()
+    );
+    assert!(final_bounds.left() >= 0.0 && final_bounds.right() <= page.width);
+}
+
+#[test]
+fn test_inline_text_editor_has_no_opaque_background_fill() {
+    let ctx = eframe::egui::Context::default();
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "inline-editor-bg".to_string();
+    page.objects.push(DrawObject::Text {
+        id: "t-edit".to_string(),
+        x: 80.0,
+        y: 90.0,
+        text: "Editing transparent".to_string(),
+        font_size: 18.0,
+        color: ColorData::from(Color32::BLACK),
+        rotation: 0.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
+    });
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Text,
+        zoom: 1.0,
+        editing_text_id: Some("t-edit".to_string()),
+        focus_text_edit: true,
+        ..Default::default()
+    };
+
+    let out = ctx.run(
+        eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                Pos2::ZERO,
+                Vec2::new(600.0, 400.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            eframe::egui::CentralPanel::default()
+                .frame(eframe::egui::Frame::NONE)
+                .show(ctx, |ui| {
+                    let painter = ui.painter().clone();
+                    super::widgets::render_inline_text_editor(
+                        ui,
+                        &painter,
+                        &mut page,
+                        &mut state,
+                        |p| p,
+                    );
+                });
+        },
+    );
+
+    fn inspect_shape_for_white_fill(shape: &eframe::egui::Shape) -> bool {
+        match shape {
+            eframe::egui::Shape::Rect(r) => {
+                r.fill.a() > 0 && r.fill.r() >= 200 && r.fill.g() >= 200 && r.fill.b() >= 200
+            }
+            eframe::egui::Shape::Vec(shapes) => shapes.iter().any(inspect_shape_for_white_fill),
+            _ => false,
+        }
+    }
+
+    let has_opaque_white_box = out
+        .shapes
+        .iter()
+        .any(|clipped| inspect_shape_for_white_fill(&clipped.shape));
+    assert!(
+        !has_opaque_white_box,
+        "Inline text editor must not draw an opaque/translucent white background fill behind text"
+    );
+}
