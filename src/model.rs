@@ -1378,6 +1378,7 @@ impl AppSettings {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ShortcutAction {
     ToolPen,
+    ToolPencil,
     ToolHighlighter,
     ToolEraser,
     ToolLasso,
@@ -1386,6 +1387,8 @@ pub enum ShortcutAction {
     ToolConnector,
     ToolStickyNote,
     ToolEquation,
+    ToolLaser,
+    ToolHand,
     Undo,
     Redo,
     Save,
@@ -1404,16 +1407,19 @@ pub enum ShortcutAction {
 }
 
 impl ShortcutAction {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 27] = [
         Self::ToolPen,
+        Self::ToolPencil,
         Self::ToolHighlighter,
         Self::ToolEraser,
-        Self::ToolLasso,
-        Self::ToolText,
         Self::ToolShape,
         Self::ToolConnector,
+        Self::ToolLasso,
+        Self::ToolText,
         Self::ToolStickyNote,
         Self::ToolEquation,
+        Self::ToolLaser,
+        Self::ToolHand,
         Self::Undo,
         Self::Redo,
         Self::Save,
@@ -1435,6 +1441,8 @@ impl ShortcutAction {
         match (self, lang) {
             (Self::ToolPen, AppLanguage::Indonesian) => "Alat Pena (Pen)",
             (Self::ToolPen, AppLanguage::English) => "Pen Tool",
+            (Self::ToolPencil, AppLanguage::Indonesian) => "Alat Pensil (Pencil)",
+            (Self::ToolPencil, AppLanguage::English) => "Pencil Tool",
             (Self::ToolHighlighter, AppLanguage::Indonesian) => "Alat Penstabilo (Highlighter)",
             (Self::ToolHighlighter, AppLanguage::English) => "Highlighter Tool",
             (Self::ToolEraser, AppLanguage::Indonesian) => "Alat Penghapus (Eraser)",
@@ -1451,6 +1459,10 @@ impl ShortcutAction {
             (Self::ToolStickyNote, AppLanguage::English) => "Sticky Note Tool",
             (Self::ToolEquation, AppLanguage::Indonesian) => "Formula Matematika (LaTeX)",
             (Self::ToolEquation, AppLanguage::English) => "Math Equation Tool (LaTeX)",
+            (Self::ToolLaser, AppLanguage::Indonesian) => "Penunjuk Laser (Laser Pointer)",
+            (Self::ToolLaser, AppLanguage::English) => "Laser Pointer Tool",
+            (Self::ToolHand, AppLanguage::Indonesian) => "Mode Tangan / Geser Kanvas (Hand)",
+            (Self::ToolHand, AppLanguage::English) => "Hand / Pan Mode",
             (Self::Undo, AppLanguage::Indonesian) => "Batalkan (Undo)",
             (Self::Undo, AppLanguage::English) => "Undo",
             (Self::Redo, AppLanguage::Indonesian) => "Ulangi (Redo)",
@@ -1487,6 +1499,7 @@ impl ShortcutAction {
     pub fn default_binding(self) -> KeyBinding {
         match self {
             Self::ToolPen => KeyBinding::plain("P"),
+            Self::ToolPencil => KeyBinding::plain("B"),
             Self::ToolHighlighter => KeyBinding::plain("H"),
             Self::ToolEraser => KeyBinding::plain("E"),
             Self::ToolLasso => KeyBinding::plain("L"),
@@ -1495,6 +1508,8 @@ impl ShortcutAction {
             Self::ToolConnector => KeyBinding::plain("C"),
             Self::ToolStickyNote => KeyBinding::plain("N"),
             Self::ToolEquation => KeyBinding::alt("E"),
+            Self::ToolLaser => KeyBinding::plain("R"),
+            Self::ToolHand => KeyBinding::plain("Space"),
             Self::Undo => KeyBinding::ctrl("Z"),
             Self::Redo => KeyBinding::ctrl("Y"),
             Self::Save => KeyBinding::ctrl("S"),
@@ -2363,6 +2378,39 @@ mod tests {
         assert_eq!(
             settings.get(ShortcutAction::ToolPen),
             KeyBinding::plain("P")
+        );
+    }
+
+    #[test]
+    fn test_all_shortcut_actions_have_unique_non_empty_defaults_and_legacy_fallback() {
+        let mut seen = std::collections::HashSet::new();
+        for action in ShortcutAction::ALL {
+            let binding = action.default_binding();
+            let disp = binding.display_string();
+            assert!(!disp.trim().is_empty(), "{action:?} must not be empty");
+            assert!(
+                seen.insert(disp.clone()),
+                "Duplicate default shortcut binding '{disp}' on {action:?}"
+            );
+        }
+
+        // Legacy JSON missing ToolPencil, ToolLaser, ToolHand must fall back cleanly to defaults
+        let legacy_json =
+            r#"{"bindings":{"ToolPen":{"key":"K","ctrl":false,"alt":false,"shift":false}}}"#;
+        let decoded: ShortcutSettings =
+            serde_json::from_str(legacy_json).expect("deserialize legacy shortcuts");
+        assert_eq!(decoded.get(ShortcutAction::ToolPen), KeyBinding::plain("K"));
+        assert_eq!(
+            decoded.get(ShortcutAction::ToolPencil),
+            KeyBinding::plain("B")
+        );
+        assert_eq!(
+            decoded.get(ShortcutAction::ToolLaser),
+            KeyBinding::plain("R")
+        );
+        assert_eq!(
+            decoded.get(ShortcutAction::ToolHand),
+            KeyBinding::plain("Space")
         );
     }
 }
