@@ -400,9 +400,9 @@ pub fn render_page_to_rgba_image(
 
     // 3. Two-Pass Layering:
     // Pass 1: Highlighters (Underlay Layer) — sits beneath ink handwriting, text, and diagrams.
-    // Overlapping strokes of the same color are composited via a coverage buffer (max alpha)
+    // Overlapping strokes of the same color are composited via shared coverage mask (max alpha)
     // so turns, overlaps, and repeated highlighting do not create dark accumulation spots.
-    let highlighter_strokes: Vec<_> = page
+    let highlighter_inputs: Vec<crate::geometry::HighlighterStrokeInput<'_>> = page
         .objects
         .iter()
         .filter_map(|obj| {
@@ -411,11 +411,18 @@ pub fn render_page_to_rgba_image(
                 color,
                 width,
                 is_highlighter: true,
+                style,
                 ..
             } = obj
             {
                 if !points.is_empty() {
-                    Some((points, color, *width))
+                    Some(crate::geometry::HighlighterStrokeInput {
+                        points,
+                        rgb: (color.r, color.g, color.b),
+                        width: *width,
+                        alpha: crate::geometry::resolve_highlighter_alpha(color.a, None),
+                        style: *style,
+                    })
                 } else {
                     None
                 }
@@ -425,99 +432,34 @@ pub fn render_page_to_rgba_image(
         })
         .collect();
 
-    if !highlighter_strokes.is_empty() {
-        struct PngHighlighterStroke<'a> {
-            points: &'a [crate::model::StrokePoint],
-            width: f32,
-            alpha: u8,
-        }
+    if !highlighter_inputs.is_empty() {
+        let color_groups = crate::geometry::group_highlighters_by_rgb(highlighter_inputs);
+        let mut mask = vec![0u8; (width_px * height_px) as usize];
+        let transform = crate::geometry::MaskTransform {
+            origin_x: 0.0,
+            origin_y: 0.0,
+            scale,
+        };
 
-        let mut color_groups: std::collections::BTreeMap<(u8, u8, u8), Vec<PngHighlighterStroke>> =
-            std::collections::BTreeMap::new();
-
-        for (points, color, width) in highlighter_strokes {
-            let alpha = if color.a > 0 && color.a != 255 {
-                color.a
-            } else {
-                crate::model::HIGHLIGHTER_ALPHA
-            };
-            color_groups
-                .entry((color.r, color.g, color.b))
-                .or_default()
-                .push(PngHighlighterStroke {
-                    points,
-                    width,
-                    alpha,
-                });
-        }
-
-        for ((r, g, b), strokes) in color_groups {
-            let mut mask = vec![0u8; (width_px * height_px) as usize];
-            for s in strokes {
-                let width = s.width;
-                let alpha = s.alpha;
-                let smoothed = crate::geometry::smooth_stroke_points(s.points, 3);
-                if smoothed.len() == 1 {
-                    let p = eframe::egui::Pos2::new(smoothed[0].x * scale, smoothed[0].y * scale);
-                    let radius = (width * scale * 0.5 * smoothed[0].pressure).max(1.5);
-                    let px_min = (p.x - radius - 1.0).floor().max(0.0) as i32;
-                    let px_max = (p.x + radius + 1.0).ceil().min(width_px as f32 - 1.0) as i32;
-                    let py_min = (p.y - radius - 1.0).floor().max(0.0) as i32;
-                    let py_max = (p.y + radius + 1.0).ceil().min(height_px as f32 - 1.0) as i32;
-                    for py in py_min..=py_max {
-                        for px in px_min..=px_max {
-                            let pt = eframe::egui::Pos2::new(px as f32 + 0.5, py as f32 + 0.5);
-                            let d = (pt - p).length();
-                            if d <= radius + 0.5 {
-                                let cov = (radius + 0.5 - d).clamp(0.0, 1.0);
-                                let eff_a = (alpha as f32 * cov).round() as u8;
-                                let idx = (py as u32 * width_px + px as u32) as usize;
-                                mask[idx] = mask[idx].max(eff_a);
-                            }
-                        }
-                    }
-                } else {
-                    let r = (width * scale * 0.5).max(1.5);
-                    let mut min_x = f32::INFINITY;
-                    let mut min_y = f32::INFINITY;
-                    let mut max_x = f32::NEG_INFINITY;
-                    let mut max_y = f32::NEG_INFINITY;
-                    for pt in &smoothed {
-                        min_x = min_x.min(pt.x * scale);
-                        min_y = min_y.min(pt.y * scale);
-                        max_x = max_x.max(pt.x * scale);
-                        max_y = max_y.max(pt.y * scale);
-                    }
-                    let px_min = (min_x - r - 1.0).floor().max(0.0) as i32;
-                    let px_max = (max_x + r + 1.0).ceil().min(width_px as f32 - 1.0) as i32;
-                    let py_min = (min_y - r - 1.0).floor().max(0.0) as i32;
-                    let py_max = (max_y + r + 1.0).ceil().min(height_px as f32 - 1.0) as i32;
-
-                    for py in py_min..=py_max {
-                        for px in px_min..=px_max {
-                            let p = eframe::egui::Pos2::new(px as f32 + 0.5, py as f32 + 0.5);
-                            let mut min_d = f32::INFINITY;
-                            for w in smoothed.windows(2) {
-                                let a = eframe::egui::Pos2::new(w[0].x * scale, w[0].y * scale);
-                                let b = eframe::egui::Pos2::new(w[1].x * scale, w[1].y * scale);
-                                min_d = min_d.min(crate::geometry::point_to_segment_dist(p, a, b));
-                            }
-                            if min_d <= r + 0.5 {
-                                let cov = (r + 0.5 - min_d).clamp(0.0, 1.0);
-                                let eff_a = (alpha as f32 * cov).round() as u8;
-                                let idx = (py as u32 * width_px + px as u32) as usize;
-                                mask[idx] = mask[idx].max(eff_a);
-                            }
-                        }
-                    }
-                }
+        for (group_idx, group) in color_groups.iter().enumerate() {
+            if group_idx > 0 {
+                mask.fill(0);
             }
+            crate::geometry::rasterize_highlighter_group_mask(
+                &mut mask,
+                width_px as usize,
+                height_px as usize,
+                group,
+                transform,
+                3,
+            );
+            let (r, g, b) = group.rgb;
 
             // Blend mask ke gambar sekali jalan
             for py in 0..height_px {
+                let row_off = (py * width_px) as usize;
                 for px in 0..width_px {
-                    let idx = (py * width_px + px) as usize;
-                    let a = mask[idx];
+                    let a = mask[row_off + px as usize];
                     if a > 0 {
                         blend_pixel(&mut img, px as i32, py as i32, [r, g, b, a]);
                     }

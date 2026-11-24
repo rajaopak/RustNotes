@@ -1243,3 +1243,115 @@ fn test_export_svg_renders_page_background_image_and_ignores_traversal() {
     let bad_svg = export_page_to_svg(&bad_page);
     assert!(!bad_svg.contains("<image"));
 }
+
+#[test]
+fn test_highlighter_png_and_svg_rounded_caps_and_non_stacking_consistency() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut page = Page::new(PageTemplate::Blank);
+    page.width = 240.0;
+    page.height = 180.0;
+
+    // Two crossing yellow highlighters + one single-point yellow tap + one cyan crossing highlighter
+    page.objects.push(DrawObject::Stroke {
+        id: "hl_horiz".to_string(),
+        points: vec![
+            StrokePoint::new(40.0, 60.0, 1.0),
+            StrokePoint::new(140.0, 60.0, 1.0),
+        ],
+        color: ColorData {
+            r: 255,
+            g: 235,
+            b: 59,
+            a: 95,
+        },
+        width: 20.0, // r = 10.0 page units -> 20px at 2x PNG scale
+        is_highlighter: true,
+        style: StrokeStyle::Solid,
+    });
+    page.objects.push(DrawObject::Stroke {
+        id: "hl_vert".to_string(),
+        points: vec![
+            StrokePoint::new(90.0, 20.0, 1.0),
+            StrokePoint::new(90.0, 120.0, 1.0),
+        ],
+        color: ColorData {
+            r: 255,
+            g: 235,
+            b: 59,
+            a: 95,
+        },
+        width: 20.0,
+        is_highlighter: true,
+        style: StrokeStyle::Solid,
+    });
+    page.objects.push(DrawObject::Stroke {
+        id: "hl_dot".to_string(),
+        points: vec![StrokePoint::new(200.0, 60.0, 0.1)], // low pressure must not shrink highlighter dot
+        color: ColorData {
+            r: 255,
+            g: 235,
+            b: 59,
+            a: 95,
+        },
+        width: 20.0,
+        is_highlighter: true,
+        style: StrokeStyle::Solid,
+    });
+    page.objects.push(DrawObject::Stroke {
+        id: "hl_cyan".to_string(),
+        points: vec![
+            StrokePoint::new(60.0, 100.0, 1.0),
+            StrokePoint::new(120.0, 100.0, 1.0),
+        ],
+        color: ColorData {
+            r: 0,
+            g: 200,
+            b: 255,
+            a: 95,
+        },
+        width: 20.0,
+        is_highlighter: true,
+        style: StrokeStyle::Solid,
+    });
+
+    // 1. PNG Export checks (2x scale: page (x,y) -> pixel (2x, 2y))
+    let img = super::export_png::render_page_to_rgba_image(tmp.path(), "nb_hl_cons", &page)
+        .expect("render PNG");
+    // Overlap of same yellow color at (90, 60) -> (180, 120) must equal non-overlap interior (55, 60) -> (110, 120)
+    assert_eq!(
+        img.get_pixel(180, 120),
+        img.get_pixel(110, 120),
+        "Overlapping same-color highlighters in PNG export must not darken"
+    );
+    // Rounded cap at (140, 60): centerline extension (145, 60) -> (290, 120) is yellow,
+    // while square corner (148, 68) -> (296, 136) (dist=11.3 > r=10) stays paper white
+    let cap_tip = img.get_pixel(290, 120);
+    let square_corner = img.get_pixel(296, 136);
+    assert_eq!(cap_tip, img.get_pixel(110, 120));
+    assert_eq!(
+        square_corner.0,
+        [
+            page.paper_color.r,
+            page.paper_color.g,
+            page.paper_color.b,
+            255
+        ]
+    );
+    // Single-point highlighter at (200, 60) has full radius 10 (pressure-independent): (208, 60) -> (416, 120) is tinted
+    assert_eq!(img.get_pixel(416, 120), img.get_pixel(110, 120));
+    // Different colors overlap at (90, 100) -> (180, 200) differs from pure yellow and pure cyan
+    assert_ne!(img.get_pixel(180, 200), img.get_pixel(110, 120));
+    assert_ne!(img.get_pixel(180, 200), img.get_pixel(140, 200));
+
+    // 2. SVG Export checks
+    let svg = export_page_to_svg(&page);
+    assert!(svg.contains("stroke-linecap=\"round\" stroke-linejoin=\"round\""));
+    // Single-point highlighter dot must use radius 10.00 (not 1.00 from pressure 0.1)
+    assert!(
+        svg.contains("<circle cx=\"200.0\" cy=\"60.0\" r=\"10.00\""),
+        "Single-point highlighter in SVG must ignore pressure, got:\n{svg}"
+    );
+    // Two distinct color groups under <g id="highlighters">
+    assert!(svg.contains("stroke=\"rgb(255,235,59)\""));
+    assert!(svg.contains("stroke=\"rgb(0,200,255)\""));
+}

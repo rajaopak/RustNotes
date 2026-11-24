@@ -231,7 +231,7 @@ pub fn export_page_to_svg(page: &Page) -> String {
     // 3. DrawObjects Two-Pass Layering:
     // Pass 1: Highlighters (Underlay Layer) — sits beneath ink handwriting, text, and diagrams.
     // Grouped by RGB color with group-level opacity so overlapping strokes within the group do not multiply alpha.
-    let highlighter_strokes: Vec<_> = page
+    let highlighter_inputs: Vec<crate::geometry::HighlighterStrokeInput<'_>> = page
         .objects
         .iter()
         .filter_map(|obj| {
@@ -245,7 +245,13 @@ pub fn export_page_to_svg(page: &Page) -> String {
             } = obj
             {
                 if !points.is_empty() {
-                    Some((points, color, *width, *style))
+                    Some(crate::geometry::HighlighterStrokeInput {
+                        points,
+                        rgb: (color.r, color.g, color.b),
+                        width: *width,
+                        alpha: crate::geometry::resolve_highlighter_alpha(color.a, None),
+                        style: *style,
+                    })
                 } else {
                     None
                 }
@@ -255,49 +261,27 @@ pub fn export_page_to_svg(page: &Page) -> String {
         })
         .collect();
 
-    if !highlighter_strokes.is_empty() {
-        struct SvgHighlighterStroke<'a> {
-            points: &'a [crate::model::StrokePoint],
-            stroke_w: f32,
-            style: crate::model::StrokeStyle,
-            opacity: f32,
-        }
-
+    if !highlighter_inputs.is_empty() {
         out.push_str("<g id=\"highlighters\">\n");
-        let mut color_groups: std::collections::BTreeMap<(u8, u8, u8), Vec<SvgHighlighterStroke>> =
-            std::collections::BTreeMap::new();
+        let color_groups = crate::geometry::group_highlighters_by_rgb(highlighter_inputs);
 
-        for (points, color, width, style) in highlighter_strokes {
-            let opacity = if color.a > 0 && color.a != 255 {
-                color.a as f32 / 255.0
-            } else {
-                crate::model::HIGHLIGHTER_OPACITY_F32
-            };
-            color_groups
-                .entry((color.r, color.g, color.b))
-                .or_default()
-                .push(SvgHighlighterStroke {
-                    points,
-                    stroke_w: width,
-                    style,
-                    opacity,
-                });
-        }
-
-        for ((r, g, b), strokes) in color_groups {
-            let avg_opacity = strokes
-                .first()
-                .map(|s| s.opacity)
-                .unwrap_or(crate::model::HIGHLIGHTER_OPACITY_F32);
+        for group in color_groups {
+            let (r, g, b) = group.rgb;
+            let group_opacity = group.max_alpha() as f32 / 255.0;
             out.push_str(&format!(
-                "<g opacity=\"{avg_opacity:.3}\" stroke=\"rgb({r},{g},{b})\" fill=\"rgb({r},{g},{b})\">\n"
+                "<g opacity=\"{group_opacity:.3}\" stroke=\"rgb({r},{g},{b})\" fill=\"rgb({r},{g},{b})\">\n"
             ));
-            for s in strokes {
-                let stroke_w = s.stroke_w;
-                let points = s.points;
-                if points.len() == 1 {
-                    let pt = &points[0];
-                    let radius = (stroke_w * 0.5 * pt.pressure).max(0.5);
+            for s in &group.strokes {
+                let stroke_w = s.width;
+                let smoothed = crate::geometry::smooth_stroke_points(s.points, 3);
+                let total_len: f32 = smoothed
+                    .windows(2)
+                    .map(|w| (w[1].to_pos2() - w[0].to_pos2()).length())
+                    .filter(|len| len.is_finite())
+                    .sum();
+                if smoothed.len() == 1 || total_len < 1e-4 {
+                    let pt = &smoothed[0];
+                    let radius = crate::geometry::stroke_radius_at_pressure(stroke_w, 1.0, true);
                     out.push_str(&format!(
                         "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"{radius:.2}\" stroke=\"none\"/>\n",
                         pt.x, pt.y
@@ -333,7 +317,7 @@ pub fn export_page_to_svg(page: &Page) -> String {
                 };
 
                 let mut d = String::new();
-                for (i, pt) in points.iter().enumerate() {
+                for (i, pt) in smoothed.iter().enumerate() {
                     if i == 0 {
                         d.push_str(&format!("M {:.1} {:.1}", pt.x, pt.y));
                     } else {
