@@ -50,6 +50,8 @@ pub struct CanvasState {
     pub drag_start_pos: Option<Pos2>,
     pub resize_corner: Option<ResizeCorner>,
     pub resize_initial_bounds: Option<Rect>,
+    pub resize_initial_frame: Option<crate::geometry::SelectionFrame>,
+    pub resize_handle_offset: Vec2,
     pub resize_initial_objects: Vec<(String, DrawObject)>,
 
     // Laser pointer (glowing neon multi-stroke trail with idle decay)
@@ -182,6 +184,8 @@ impl Default for CanvasState {
             drag_start_pos: None,
             resize_corner: None,
             resize_initial_bounds: None,
+            resize_initial_frame: None,
+            resize_handle_offset: Vec2::ZERO,
             resize_initial_objects: Vec::new(),
             laser_strokes: Vec::new(),
             current_laser_stroke: Vec::new(),
@@ -997,6 +1001,8 @@ impl CanvasState {
         self.last_erase_sample_pos = None;
         self.lasso_points.clear();
         self.resize_initial_bounds = None;
+        self.resize_initial_frame = None;
+        self.resize_handle_offset = Vec2::ZERO;
         self.resize_initial_objects.clear();
     }
 }

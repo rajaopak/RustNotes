@@ -43,35 +43,8 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
     let page_to_screen =
         move |page_pos: Pos2| -> Pos2 { origin + Vec2::new(page_pos.x * zoom, page_pos.y * zoom) };
 
-    // Pre-cache textures for background and image objects
-    if let crate::model::PageBackground::Image { asset_id }
-    | crate::model::PageBackground::Pdf { asset_id, .. } = page.effective_background()
-    {
-        state.get_or_load_texture(ui.ctx(), &asset_id);
-    }
-    for obj in &page.objects {
-        if let DrawObject::Image { asset_id, .. } = obj {
-            state.get_or_load_texture(ui.ctx(), asset_id);
-        }
-    }
-
-    // 1 & 2. Draw Paper Background, Patterns, Reserve Highlighter Underlay Slot, and Draw Content Layer
-    let ppp = ui.ctx().pixels_per_point().max(1.0);
-    let hl_shape_idx = render_page_background_and_objects(
-        &painter,
-        rect,
-        screen_clip_rect,
-        origin,
-        ppp,
-        page,
-        state,
-        page_to_screen,
-    );
-
-    // 3. User interaction logic
+    // 1. User interaction logic runs BEFORE rendering page objects so drag/resize mutations reflect in the SAME frame (zero 1-frame lag).
     let pointer_pos = response.interact_pointer_pos();
-
-    // Laser decay update (idle-based persistence matching user reference)
     let now = Instant::now();
     let idle_threshold = 1.0_f32; // tahan 1.0 detik setelah berhenti menggambar
     let fade_duration = 0.7_f32; // fade out halus selama 0.7 detik
@@ -91,9 +64,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         ui.ctx().request_repaint();
     }
 
-    // Active Selection Bounds
     let sel = SelectionData::compute(page, state);
-
     handle_pointer_drag_interaction(
         ui,
         &response,
@@ -103,6 +74,31 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         pointer_pos,
         now,
         screen_to_page,
+    );
+
+    // Pre-cache textures for background and image objects
+    if let crate::model::PageBackground::Image { asset_id }
+    | crate::model::PageBackground::Pdf { asset_id, .. } = page.effective_background()
+    {
+        state.get_or_load_texture(ui.ctx(), &asset_id);
+    }
+    for obj in &page.objects {
+        if let DrawObject::Image { asset_id, .. } = obj {
+            state.get_or_load_texture(ui.ctx(), asset_id);
+        }
+    }
+
+    // 2 & 3. Draw Paper Background, Patterns, Reserve Highlighter Underlay Slot, and Draw Updated Content Layer
+    let ppp = ui.ctx().pixels_per_point().max(1.0);
+    let hl_shape_idx = render_page_background_and_objects(
+        &painter,
+        rect,
+        screen_clip_rect,
+        origin,
+        ppp,
+        page,
+        state,
+        page_to_screen,
     );
 
     // Populate Pass 1 (Highlighter Underlay Layer) after pointer interaction so committed

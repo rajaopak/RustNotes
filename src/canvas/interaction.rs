@@ -6,14 +6,16 @@ use super::sampling::{
 use super::state::CanvasState;
 use super::types::{ActiveTool, ResizeCorner};
 use crate::geometry::{
-    ShapeTransformBox, TransformHandleKind, calculate_proportional_scale,
-    calculate_single_axis_resize, combined_bounds, find_alignment_guides, find_connector_snap_site,
-    hit_test_connector_details, hit_test_connector_midpoint, hit_test_object,
-    hit_test_transform_handles, insert_control_point_at, next_shape_rect, object_bounds,
-    point_in_polygon, prune_all_invalid_connector_control_points, prune_collinear_control_points,
+    MAX_EQUATION_SCALE, MAX_STICKY_FONT_SIZE, MAX_TEXT_FONT_SIZE, MIN_EQUATION_SCALE,
+    MIN_STICKY_FONT_SIZE, MIN_TEXT_FONT_SIZE, SelectionFrame, ShapeTransformBox,
+    TransformHandleKind, calculate_proportional_scale, calculate_single_axis_resize,
+    combined_bounds, find_alignment_guides, find_connector_snap_site, hit_test_connector_details,
+    hit_test_connector_midpoint, hit_test_object, hit_test_transform_handles,
+    insert_control_point_at, next_shape_rect, object_bounds, point_in_polygon,
+    prune_all_invalid_connector_control_points, prune_collinear_control_points,
     recognize_handwriting_from_strokes, recognize_shape_for_hold_to_snap,
-    resolve_connector_endpoints, scale_object, shape_connection_point, snap_point_to_grid,
-    snap_value_to_grid, translate_object,
+    remap_curve_points_for_resize, resolve_connector_endpoints, scale_object,
+    shape_connection_point, snap_point_to_grid, snap_value_to_grid, translate_object,
 };
 use crate::model::{
     ColorData, ConnectionSite, ConnectorEnd, ConnectorRoute, ConnectorStyle, DrawObject,
@@ -22,6 +24,62 @@ use crate::model::{
 use eframe::egui::{self, Color32, Key, PointerButton, Pos2, Rect, Response, Ui, Vec2};
 use std::time::Instant;
 use uuid::Uuid;
+
+/// Memetakan varian `ResizeCorner` ke `TransformHandleKind` untuk perhitungan geometri transformasi.
+fn resize_corner_to_handle_kind(corner: ResizeCorner) -> TransformHandleKind {
+    match corner {
+        ResizeCorner::NorthWest => TransformHandleKind::NorthWest,
+        ResizeCorner::North => TransformHandleKind::North,
+        ResizeCorner::NorthEast => TransformHandleKind::NorthEast,
+        ResizeCorner::East => TransformHandleKind::East,
+        ResizeCorner::SouthEast => TransformHandleKind::SouthEast,
+        ResizeCorner::South => TransformHandleKind::South,
+        ResizeCorner::SouthWest => TransformHandleKind::SouthWest,
+        ResizeCorner::West => TransformHandleKind::West,
+        _ => TransformHandleKind::SouthEast,
+    }
+}
+
+/// Menghitung titik jangkar berlawanan dan vektor arah handle awal dari `SelectionFrame` (mendukung rotasi).
+fn frame_resize_anchor_and_vec(
+    frame: &SelectionFrame,
+    corner: ResizeCorner,
+) -> (Pos2, Vec2, bool, bool) {
+    let corners = frame.corners; // [NW, NE, SE, SW]
+    let cos_r = frame.rotation.cos();
+    let sin_r = frame.rotation.sin();
+    let right_dir = Vec2::new(cos_r, sin_r);
+    let down_dir = Vec2::new(-sin_r, cos_r);
+    let w0 = frame.local_size.x.max(1.0);
+    let h0 = frame.local_size.y.max(1.0);
+
+    match corner {
+        ResizeCorner::SouthEast => (corners[0], corners[2] - corners[0], true, true),
+        ResizeCorner::NorthWest => (corners[2], corners[0] - corners[2], true, true),
+        ResizeCorner::NorthEast => (corners[3], corners[1] - corners[3], true, true),
+        ResizeCorner::SouthWest => (corners[1], corners[3] - corners[1], true, true),
+        ResizeCorner::East => (
+            corners[0].lerp(corners[3], 0.5),
+            right_dir * w0,
+            true,
+            false,
+        ),
+        ResizeCorner::West => (
+            corners[1].lerp(corners[2], 0.5),
+            -right_dir * w0,
+            true,
+            false,
+        ),
+        ResizeCorner::South => (corners[0].lerp(corners[1], 0.5), down_dir * h0, false, true),
+        ResizeCorner::North => (
+            corners[3].lerp(corners[2], 0.5),
+            -down_dir * h0,
+            false,
+            true,
+        ),
+        _ => (frame.pivot, right_dir * w0, true, true),
+    }
+}
 
 /// Memeriksa apakah titik halaman `page_p` mengenai handle transformasi, garis, konektor,
 /// titik Quick Diagram, atau area seleksi aktif.
@@ -466,9 +524,17 @@ fn handle_drag_started(
                 TransformHandleKind::West => ResizeCorner::West,
                 TransformHandleKind::Rotation => ResizeCorner::Rotation,
             };
+            let init_handle_pos = frame
+                .handles
+                .iter()
+                .find(|h| h.kind == h_kind)
+                .map(|h| h.pos.to_pos2())
+                .unwrap_or(page_p);
             state.resize_corner = Some(corner);
             state.drag_start_pos = Some(page_p);
             state.resize_initial_bounds = sel.rect;
+            state.resize_initial_frame = Some(frame.clone());
+            state.resize_handle_offset = init_handle_pos - page_p;
             state.resize_initial_objects = page
                 .objects
                 .iter()
@@ -776,6 +842,7 @@ fn handle_drag_moved(
                 }
             }
             state.drag_start_pos = Some(page_p);
+            ui.ctx().request_repaint();
         }
     } else if let Some(corner) = state.resize_corner {
         if let Some(start) = state.drag_start_pos
@@ -982,72 +1049,243 @@ fn handle_drag_moved(
                     .objects
                     .iter_mut()
                     .find(|o| state.selected_ids.contains(&o.id().to_string()))
-                && matches!(obj, DrawObject::Shape { .. })
+                && matches!(
+                    obj,
+                    DrawObject::Shape { .. }
+                        | DrawObject::Image { .. }
+                        | DrawObject::StickyNote { .. }
+                        | DrawObject::Text { .. }
+                        | DrawObject::Equation { .. }
+                )
             {
-                if let DrawObject::Shape {
-                    x,
-                    y,
-                    width,
-                    height,
-                    rotation,
-                    locked,
-                    ..
-                } = obj
-                    && !*locked
+                let effective_p = page_p + state.resize_handle_offset;
+                if let Some((_, initial_obj)) = state
+                    .resize_initial_objects
+                    .iter()
+                    .find(|(id, _)| id == obj.id())
                 {
-                    let orig_box = ShapeTransformBox::new(*x, *y, *width, *height, *rotation);
-                    match corner {
-                        ResizeCorner::NorthWest
-                        | ResizeCorner::NorthEast
-                        | ResizeCorner::SouthEast
-                        | ResizeCorner::SouthWest => {
-                            let h_kind = match corner {
-                                ResizeCorner::NorthWest => TransformHandleKind::NorthWest,
-                                ResizeCorner::NorthEast => TransformHandleKind::NorthEast,
-                                ResizeCorner::SouthEast => TransformHandleKind::SouthEast,
-                                ResizeCorner::SouthWest => TransformHandleKind::SouthWest,
-                                _ => TransformHandleKind::SouthEast,
-                            };
-                            let (nx, ny, nw, nh) = calculate_proportional_scale(
-                                h_kind,
-                                Point2D::new(page_p.x, page_p.y),
-                                orig_box,
-                                4.0,
-                            );
-                            *x = nx;
-                            *y = ny;
-                            *width = nw;
-                            *height = nh;
-                        }
-                        ResizeCorner::North
-                        | ResizeCorner::South
-                        | ResizeCorner::East
-                        | ResizeCorner::West => {
-                            let h_kind = match corner {
-                                ResizeCorner::North => TransformHandleKind::North,
-                                ResizeCorner::South => TransformHandleKind::South,
-                                ResizeCorner::East => TransformHandleKind::East,
-                                ResizeCorner::West => TransformHandleKind::West,
-                                _ => TransformHandleKind::East,
-                            };
-                            let (nx, ny, nw, nh) = calculate_single_axis_resize(
-                                h_kind,
-                                Point2D::new(page_p.x, page_p.y),
-                                orig_box,
-                                4.0,
-                            );
-                            *x = nx;
-                            *y = ny;
-                            *width = nw;
-                            *height = nh;
-                        }
-                        _ => {}
-                    }
-                    let id = obj.id().to_string();
-                    state.mesh_cache.retain(|(k, _), _| k != &id);
+                    *obj = initial_obj.clone();
                 }
+
+                let init_frame = state
+                    .resize_initial_frame
+                    .clone()
+                    .or_else(|| sel.frame.clone())
+                    .unwrap_or_else(|| {
+                        let init_b = state.resize_initial_bounds.unwrap_or(b);
+                        SelectionFrame::new(init_b.center(), init_b.size(), 0.0, 20.0 / state.zoom)
+                    });
+                let (anchor, init_vec, sx, sy) = frame_resize_anchor_and_vec(&init_frame, corner);
+
+                match obj {
+                    DrawObject::Shape {
+                        x,
+                        y,
+                        width,
+                        height,
+                        rotation,
+                        locked,
+                        shape_type,
+                        curve_points,
+                        ..
+                    } if !*locked => {
+                        let init_x = *x;
+                        let init_y = *y;
+                        let init_w = *width;
+                        let init_h = *height;
+                        let init_rot = *rotation;
+                        let sign_x = if init_w < 0.0 { -1.0 } else { 1.0 };
+                        let sign_y = if init_h < 0.0 { -1.0 } else { 1.0 };
+                        let orig_box = ShapeTransformBox::new(
+                            init_x.min(init_x + init_w),
+                            init_y.min(init_y + init_h),
+                            init_w.abs(),
+                            init_h.abs(),
+                            init_rot,
+                        );
+                        let (nx, ny, nw, nh) = match corner {
+                            ResizeCorner::NorthWest
+                            | ResizeCorner::NorthEast
+                            | ResizeCorner::SouthEast
+                            | ResizeCorner::SouthWest => calculate_proportional_scale(
+                                resize_corner_to_handle_kind(corner),
+                                Point2D::new(effective_p.x, effective_p.y),
+                                orig_box,
+                                4.0,
+                            ),
+                            ResizeCorner::North
+                            | ResizeCorner::South
+                            | ResizeCorner::East
+                            | ResizeCorner::West => calculate_single_axis_resize(
+                                resize_corner_to_handle_kind(corner),
+                                Point2D::new(effective_p.x, effective_p.y),
+                                orig_box,
+                                4.0,
+                            ),
+                            _ => (orig_box.x, orig_box.y, orig_box.width, orig_box.height),
+                        };
+                        let signed_w = nw * sign_x;
+                        let signed_h = nh * sign_y;
+                        let final_x = if sign_x < 0.0 { nx + nw } else { nx };
+                        let final_y = if sign_y < 0.0 { ny + nh } else { ny };
+                        *x = final_x;
+                        *y = final_y;
+                        *width = signed_w;
+                        *height = signed_h;
+                        if *shape_type == ShapeKind::Curve && !curve_points.is_empty() {
+                            *curve_points = remap_curve_points_for_resize(
+                                curve_points,
+                                ShapeTransformBox::new(init_x, init_y, init_w, init_h, init_rot),
+                                final_x,
+                                final_y,
+                                signed_w,
+                                signed_h,
+                            );
+                        }
+                    }
+                    DrawObject::Image {
+                        x,
+                        y,
+                        width,
+                        height,
+                        rotation,
+                        ..
+                    } => {
+                        let sign_x = if *width < 0.0 { -1.0 } else { 1.0 };
+                        let sign_y = if *height < 0.0 { -1.0 } else { 1.0 };
+                        let orig_box = ShapeTransformBox::new(
+                            x.min(*x + *width),
+                            y.min(*y + *height),
+                            width.abs(),
+                            height.abs(),
+                            *rotation,
+                        );
+                        let (nx, ny, nw, nh) = if sx && sy || ui.input(|i| i.modifiers.shift) {
+                            let h_kind = if sx && sy {
+                                resize_corner_to_handle_kind(corner)
+                            } else {
+                                TransformHandleKind::SouthEast
+                            };
+                            if sx && sy {
+                                calculate_proportional_scale(
+                                    h_kind,
+                                    Point2D::new(effective_p.x, effective_p.y),
+                                    orig_box,
+                                    8.0,
+                                )
+                            } else {
+                                calculate_single_axis_resize(
+                                    resize_corner_to_handle_kind(corner),
+                                    Point2D::new(effective_p.x, effective_p.y),
+                                    orig_box,
+                                    8.0,
+                                )
+                            }
+                        } else {
+                            calculate_single_axis_resize(
+                                resize_corner_to_handle_kind(corner),
+                                Point2D::new(effective_p.x, effective_p.y),
+                                orig_box,
+                                8.0,
+                            )
+                        };
+                        *x = if sign_x < 0.0 { nx + nw } else { nx };
+                        *y = if sign_y < 0.0 { ny + nh } else { ny };
+                        *width = nw * sign_x;
+                        *height = nh * sign_y;
+                    }
+                    DrawObject::StickyNote {
+                        x,
+                        y,
+                        width,
+                        height,
+                        rotation,
+                        font_size,
+                        ..
+                    } => {
+                        let init_w = width.abs().max(1.0);
+                        let orig_box = ShapeTransformBox::new(
+                            x.min(*x + *width),
+                            y.min(*y + *height),
+                            width.abs(),
+                            height.abs(),
+                            *rotation,
+                        );
+                        let is_corner_or_shift = (sx && sy) || ui.input(|i| i.modifiers.shift);
+                        let (nx, ny, nw, nh) = if sx && sy {
+                            calculate_proportional_scale(
+                                resize_corner_to_handle_kind(corner),
+                                Point2D::new(effective_p.x, effective_p.y),
+                                orig_box,
+                                40.0,
+                            )
+                        } else {
+                            calculate_single_axis_resize(
+                                resize_corner_to_handle_kind(corner),
+                                Point2D::new(effective_p.x, effective_p.y),
+                                orig_box,
+                                40.0,
+                            )
+                        };
+                        *x = nx;
+                        *y = ny;
+                        *width = nw;
+                        *height = nh;
+                        if is_corner_or_shift && font_size.is_finite() {
+                            let s = (nw / init_w).clamp(0.1, 10.0);
+                            *font_size =
+                                (*font_size * s).clamp(MIN_STICKY_FONT_SIZE, MAX_STICKY_FONT_SIZE);
+                        }
+                    }
+                    DrawObject::Text {
+                        x, y, font_size, ..
+                    } => {
+                        let cur_vec = effective_p - anchor;
+                        let denom = init_vec.length_sq().max(1.0);
+                        let s = (cur_vec.dot(init_vec) / denom).clamp(0.05, 15.0);
+                        let init_fs = if font_size.is_finite() && *font_size > 1e-4 {
+                            *font_size
+                        } else {
+                            16.0
+                        };
+                        let new_fs = (init_fs * s).clamp(MIN_TEXT_FONT_SIZE, MAX_TEXT_FONT_SIZE);
+                        let eff_s = new_fs / init_fs;
+                        *x = anchor.x + (*x - anchor.x) * eff_s;
+                        *y = anchor.y + (*y - anchor.y) * eff_s;
+                        *font_size = new_fs;
+                    }
+                    DrawObject::Equation {
+                        x,
+                        y,
+                        scale,
+                        locked,
+                        ..
+                    } if !*locked => {
+                        let cur_vec = effective_p - anchor;
+                        let denom = init_vec.length_sq().max(1.0);
+                        let s = (cur_vec.dot(init_vec) / denom).clamp(0.05, 15.0);
+                        let init_sc = if scale.is_finite() && *scale > 1e-4 {
+                            *scale
+                        } else {
+                            1.0
+                        };
+                        let new_sc = (init_sc * s).clamp(MIN_EQUATION_SCALE, MAX_EQUATION_SCALE);
+                        let eff_s = new_sc / init_sc;
+                        let new_center = anchor + (init_frame.pivot - anchor) * eff_s;
+                        let new_w = init_frame.local_size.x * eff_s;
+                        let new_h = init_frame.local_size.y * eff_s;
+                        *x = new_center.x - new_w * 0.5;
+                        *y = new_center.y - new_h * 0.5;
+                        *scale = new_sc;
+                    }
+                    _ => {}
+                }
+                let id = obj.id().to_string();
+                state.mesh_cache.retain(|(k, _), _| k != &id);
                 state.drag_start_pos = Some(page_p);
+                ui.ctx().request_repaint();
             } else {
+                let effective_p = page_p + state.resize_handle_offset;
                 let init_b = state.resize_initial_bounds.unwrap_or(b);
                 let is_corner_handle = matches!(
                     corner,
@@ -1082,21 +1320,21 @@ fn handle_drag_moved(
                 let min_extent = 4.0_f32;
                 let raw_dx = match corner {
                     ResizeCorner::SouthEast | ResizeCorner::NorthEast | ResizeCorner::East => {
-                        (page_p.x - origin.x).max(min_extent)
+                        (effective_p.x - origin.x).max(min_extent)
                     }
                     ResizeCorner::NorthWest | ResizeCorner::SouthWest | ResizeCorner::West => {
-                        (origin.x - page_p.x).max(min_extent)
+                        (origin.x - effective_p.x).max(min_extent)
                     }
-                    _ => (page_p.x - origin.x).abs().max(min_extent),
+                    _ => (effective_p.x - origin.x).abs().max(min_extent),
                 };
                 let raw_dy = match corner {
                     ResizeCorner::SouthEast | ResizeCorner::SouthWest | ResizeCorner::South => {
-                        (page_p.y - origin.y).max(min_extent)
+                        (effective_p.y - origin.y).max(min_extent)
                     }
                     ResizeCorner::NorthWest | ResizeCorner::NorthEast | ResizeCorner::North => {
-                        (origin.y - page_p.y).max(min_extent)
+                        (origin.y - effective_p.y).max(min_extent)
                     }
-                    _ => (page_p.y - origin.y).abs().max(min_extent),
+                    _ => (effective_p.y - origin.y).abs().max(min_extent),
                 };
 
                 let mut scale_x = if sx {
@@ -1110,16 +1348,18 @@ fn handle_drag_moved(
                     1.0
                 };
 
-                let keep_uniform = is_corner_handle
-                    || ui.input(|i| i.modifiers.shift)
-                    || sel.single_text_id.is_some();
-                if keep_uniform {
+                if is_corner_handle || ui.input(|i| i.modifiers.shift) {
                     let s = if sx && sy {
-                        if (scale_x - 1.0).abs() > (scale_y - 1.0).abs() {
-                            scale_x
-                        } else {
-                            scale_y
-                        }
+                        let init_handle = match corner {
+                            ResizeCorner::SouthEast => init_b.right_bottom(),
+                            ResizeCorner::NorthWest => init_b.left_top(),
+                            ResizeCorner::NorthEast => init_b.right_top(),
+                            ResizeCorner::SouthWest => init_b.left_bottom(),
+                            _ => init_b.right_bottom(),
+                        };
+                        let init_diag = init_handle - origin;
+                        let cur_vec = effective_p - origin;
+                        (cur_vec.dot(init_diag) / init_diag.length_sq().max(1.0)).clamp(0.05, 15.0)
                     } else if sx {
                         scale_x
                     } else {
@@ -1131,7 +1371,9 @@ fn handle_drag_moved(
 
                 for obj in &mut page.objects {
                     if state.selected_ids.iter().any(|id| id == obj.id()) {
-                        // Terapkan skala satu kali dari snapshot awal agar event sub-frame tidak berakumulasi eksponensial.
+                        if obj.is_locked() {
+                            continue;
+                        }
                         if let Some((_, initial_obj)) = state
                             .resize_initial_objects
                             .iter()
@@ -1145,6 +1387,7 @@ fn handle_drag_moved(
                     }
                 }
                 state.drag_start_pos = Some(page_p);
+                ui.ctx().request_repaint();
             }
         }
     } else {
@@ -1390,6 +1633,8 @@ fn handle_drag_stopped(
     } else if let Some(corner) = state.resize_corner.take() {
         let drag_start_pos = state.drag_start_pos.take();
         state.resize_initial_bounds = None;
+        state.resize_initial_frame = None;
+        state.resize_handle_offset = Vec2::ZERO;
         state.resize_initial_objects.clear();
         // Task 8.3: Jika selesai drag control point, bersihkan jika hampir segaris tanpa clone objek
         if matches!(corner, ResizeCorner::ConnectorControl(_)) {

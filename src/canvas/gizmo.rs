@@ -327,16 +327,18 @@ pub fn render_selection_gizmo(
             }
         }
 
-        // Floating Toolbar untuk Connector Terpilih
-        render_floating_connector_toolbar(
-            ui,
-            page,
-            state,
-            conn_id,
-            poly,
-            canvas_rect,
-            &page_to_screen,
-        );
+        // Floating Toolbar untuk Connector Terpilih (disembunyikan saat drag/resize agar tidak mengganggu mouse)
+        if state.resize_corner.is_none() && !state.is_dragging_selection {
+            render_floating_connector_toolbar(
+                ui,
+                page,
+                state,
+                conn_id,
+                poly,
+                canvas_rect,
+                &page_to_screen,
+            );
+        }
     } else if let Some((line_start, line_end)) = sel.single_line {
         let s_start = page_to_screen(line_start);
         let s_end = page_to_screen(line_end);
@@ -399,6 +401,35 @@ pub fn render_selection_gizmo(
         painter.line_segment([s_se, s_sw], box_stroke);
         painter.line_segment([s_sw, s_nw], box_stroke);
 
+        let active_handle_kind = state.resize_corner.and_then(|c| match c {
+            ResizeCorner::NorthWest => Some(TransformHandleKind::NorthWest),
+            ResizeCorner::North => Some(TransformHandleKind::North),
+            ResizeCorner::NorthEast => Some(TransformHandleKind::NorthEast),
+            ResizeCorner::East => Some(TransformHandleKind::East),
+            ResizeCorner::SouthEast => Some(TransformHandleKind::SouthEast),
+            ResizeCorner::South => Some(TransformHandleKind::South),
+            ResizeCorner::SouthWest => Some(TransformHandleKind::SouthWest),
+            ResizeCorner::West => Some(TransformHandleKind::West),
+            ResizeCorner::Rotation => Some(TransformHandleKind::Rotation),
+            _ => None,
+        });
+        let hovered_handle_kind = if state.resize_corner.is_none()
+            && !state.is_dragging_selection
+            && matches!(state.current_tool, ActiveTool::Lasso | ActiveTool::Shape(_))
+            && !sel.all_locked
+        {
+            pointer_pos.and_then(|pos| {
+                let page_p = screen_to_page(pos);
+                hit_test_transform_handles(
+                    &frame.handles,
+                    Point2D::new(page_p.x, page_p.y),
+                    14.0 / state.zoom,
+                )
+            })
+        } else {
+            None
+        };
+
         if sel.all_locked {
             // Task 10.1: Visual lock badge 🔒 di sudut kanan-atas bounding box
             let lock_badge_pos = s_ne + Vec2::new(10.0, -10.0);
@@ -428,34 +459,187 @@ pub fn render_selection_gizmo(
                 );
             }
         } else {
-            // 4 Corner handles: Lingkaran putih di tiap sudut untuk scale proporsional
-            let corner_stroke = Stroke::new(2.0_f32, Color32::from_rgb(0, 114, 206));
-            for pos in [s_nw, s_ne, s_se, s_sw] {
-                painter.circle(pos, 6.0, Color32::WHITE, corner_stroke);
+            let accent = Color32::from_rgb(0, 114, 206);
+            let corner_stroke = Stroke::new(2.0_f32, accent);
+
+            // 4 Corner handles: Lingkaran dengan efek halo hover & aktif agar sangat interaktif
+            for (kind, pos) in [
+                (TransformHandleKind::NorthWest, s_nw),
+                (TransformHandleKind::NorthEast, s_ne),
+                (TransformHandleKind::SouthEast, s_se),
+                (TransformHandleKind::SouthWest, s_sw),
+            ] {
+                let is_active = active_handle_kind == Some(kind);
+                let is_hovered = hovered_handle_kind == Some(kind);
+                if is_active {
+                    painter.circle_filled(
+                        pos,
+                        10.5,
+                        Color32::from_rgba_unmultiplied(0, 114, 206, 65),
+                    );
+                    painter.circle(pos, 7.2, accent, Stroke::new(2.0_f32, Color32::WHITE));
+                } else if is_hovered {
+                    painter.circle_filled(
+                        pos,
+                        10.0,
+                        Color32::from_rgba_unmultiplied(0, 114, 206, 45),
+                    );
+                    painter.circle(pos, 7.2, Color32::WHITE, Stroke::new(2.4_f32, accent));
+                } else {
+                    painter.circle(pos, 6.0, Color32::WHITE, corner_stroke);
+                }
             }
 
-            // 4 Edge handles: Persegi biru di tengah sisi untuk resize satu sumbu
-            for pos in [s_n, s_e, s_s, s_w] {
-                let edge_rect = Rect::from_center_size(pos, Vec2::splat(9.0));
-                painter.rect_filled(edge_rect, 1.5, Color32::from_rgb(0, 114, 206));
-                painter.rect_stroke(
-                    edge_rect,
-                    1.5,
-                    Stroke::new(1.0_f32, Color32::WHITE),
-                    egui::StrokeKind::Outside,
-                );
+            // 4 Edge handles: Persegi biru di tengah sisi dengan highlight hover & aktif
+            for (kind, pos) in [
+                (TransformHandleKind::North, s_n),
+                (TransformHandleKind::East, s_e),
+                (TransformHandleKind::South, s_s),
+                (TransformHandleKind::West, s_w),
+            ] {
+                let is_active = active_handle_kind == Some(kind);
+                let is_hovered = hovered_handle_kind == Some(kind);
+                if is_active {
+                    painter.rect_filled(
+                        Rect::from_center_size(pos, Vec2::splat(15.0)),
+                        3.0,
+                        Color32::from_rgba_unmultiplied(0, 114, 206, 65),
+                    );
+                    let edge_rect = Rect::from_center_size(pos, Vec2::splat(11.0));
+                    painter.rect_filled(edge_rect, 2.0, accent);
+                    painter.rect_stroke(
+                        edge_rect,
+                        2.0,
+                        Stroke::new(1.5_f32, Color32::WHITE),
+                        egui::StrokeKind::Outside,
+                    );
+                } else if is_hovered {
+                    painter.rect_filled(
+                        Rect::from_center_size(pos, Vec2::splat(14.0)),
+                        2.5,
+                        Color32::from_rgba_unmultiplied(0, 114, 206, 45),
+                    );
+                    let edge_rect = Rect::from_center_size(pos, Vec2::splat(10.5));
+                    painter.rect_filled(edge_rect, 1.5, accent);
+                    painter.rect_stroke(
+                        edge_rect,
+                        1.5,
+                        Stroke::new(1.3_f32, Color32::WHITE),
+                        egui::StrokeKind::Outside,
+                    );
+                } else {
+                    let edge_rect = Rect::from_center_size(pos, Vec2::splat(9.0));
+                    painter.rect_filled(edge_rect, 1.5, accent);
+                    painter.rect_stroke(
+                        edge_rect,
+                        1.5,
+                        Stroke::new(1.0_f32, Color32::WHITE),
+                        egui::StrokeKind::Outside,
+                    );
+                }
             }
 
             // 1 Rotation handle: Lingkaran putih menonjol di atas dengan ⟳
             painter.line_segment([s_n, s_rot], corner_stroke);
-            painter.circle(s_rot, 7.5, Color32::WHITE, corner_stroke);
+            let rot_active = active_handle_kind == Some(TransformHandleKind::Rotation);
+            let rot_hover = hovered_handle_kind == Some(TransformHandleKind::Rotation);
+            if rot_active || rot_hover {
+                painter.circle_filled(
+                    s_rot,
+                    11.5,
+                    Color32::from_rgba_unmultiplied(0, 114, 206, if rot_active { 65 } else { 45 }),
+                );
+            }
+            painter.circle(
+                s_rot,
+                if rot_active || rot_hover { 8.5 } else { 7.5 },
+                if rot_active { accent } else { Color32::WHITE },
+                if rot_active {
+                    Stroke::new(2.0_f32, Color32::WHITE)
+                } else {
+                    corner_stroke
+                },
+            );
             painter.text(
                 s_rot,
                 egui::Align2::CENTER_CENTER,
                 "⟳",
                 egui::FontId::proportional(11.0),
-                Color32::from_rgb(0, 114, 206),
+                if rot_active { Color32::WHITE } else { accent },
             );
+        }
+
+        // Badge umpan balik ukuran/font secara langsung selama proses resize aktif
+        if let Some(corner) = state.resize_corner
+            && matches!(
+                corner,
+                ResizeCorner::NorthWest
+                    | ResizeCorner::North
+                    | ResizeCorner::NorthEast
+                    | ResizeCorner::East
+                    | ResizeCorner::SouthEast
+                    | ResizeCorner::South
+                    | ResizeCorner::SouthWest
+                    | ResizeCorner::West
+            )
+        {
+            let readout = if let Some(text_id) = &sel.single_text_id {
+                page.objects.iter().find_map(|o| {
+                    if o.id() == text_id
+                        && let DrawObject::Text { font_size, .. } = o
+                    {
+                        Some(format!("{font_size:.0} pt"))
+                    } else {
+                        None
+                    }
+                })
+            } else if sel.is_single_selected {
+                page.objects.iter().find_map(|o| {
+                    if state.selected_ids.iter().any(|id| id == o.id()) {
+                        match o {
+                            DrawObject::Equation { scale, .. } => {
+                                Some(format!("{:.0}%", scale * 100.0))
+                            }
+                            DrawObject::Shape { width, height, .. }
+                            | DrawObject::Image { width, height, .. }
+                            | DrawObject::StickyNote { width, height, .. } => {
+                                Some(format!("{:.0} × {:.0}", width.abs(), height.abs()))
+                            }
+                            _ => Some(format!(
+                                "{:.0} × {:.0}",
+                                frame.local_size.x, frame.local_size.y
+                            )),
+                        }
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                Some(format!(
+                    "{:.0} × {:.0}",
+                    frame.local_size.x, frame.local_size.y
+                ))
+            };
+            if let Some(label) = readout {
+                let bottom_anchor = Pos2::new(
+                    ((s_sw.x + s_se.x) * 0.5)
+                        .clamp(canvas_rect.left() + 48.0, canvas_rect.right() - 48.0),
+                    (s_sw.y.max(s_se.y) + 22.0).min(canvas_rect.bottom() - 18.0),
+                );
+                let pill_rect = Rect::from_center_size(bottom_anchor, Vec2::new(82.0, 22.0));
+                painter.rect_filled(
+                    pill_rect,
+                    6.0,
+                    Color32::from_rgba_unmultiplied(24, 26, 32, 225),
+                );
+                painter.text(
+                    pill_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    label,
+                    egui::FontId::proportional(11.5),
+                    Color32::WHITE,
+                );
+            }
         }
 
         // Kursor dinamis saat hover di atas handle seleksi
@@ -534,8 +718,11 @@ pub fn render_selection_gizmo(
             );
         }
 
+        // Sembunyikan toolbar mengambang saat sedang menyeret/me-resize agar fokus tetap pada kursor
+        let is_transforming = state.resize_corner.is_some() || state.is_dragging_selection;
+
         // Panel Gaya Melayang untuk Bentuk
-        if sel.has_shapes_selected {
+        if sel.has_shapes_selected && !is_transforming {
             render_floating_shape_toolbar(
                 ui,
                 page,
@@ -550,7 +737,7 @@ pub fn render_selection_gizmo(
         }
 
         // Panel Gaya Melayang untuk Teks & Catatan Tempel
-        if state.editing_text_id.is_none() {
+        if state.editing_text_id.is_none() && !is_transforming {
             if let Some(text_id) = &sel.single_text_id {
                 let s_top_mid = Pos2::new((s_nw.x + s_ne.x) * 0.5, s_nw.y.min(s_ne.y));
                 render_floating_text_toolbar(

@@ -791,6 +791,7 @@ pub fn render_floating_text_toolbar(
                     };
 
                     let mut mutated = false;
+                    let mut push_undo_on_mutate = true;
                     let mut new_font_size = curr_font_size;
                     let mut new_family = curr_family;
                     let mut new_bold = curr_bold;
@@ -798,6 +799,18 @@ pub fn render_floating_text_toolbar(
                     let mut new_align = curr_align;
                     let mut new_text_color = curr_text_color;
                     let mut new_sticky_color = curr_sticky_color;
+
+                    let (min_fs, max_fs) = if is_sticky {
+                        (
+                            crate::geometry::MIN_STICKY_FONT_SIZE,
+                            crate::geometry::MAX_STICKY_FONT_SIZE,
+                        )
+                    } else {
+                        (
+                            crate::geometry::MIN_TEXT_FONT_SIZE,
+                            crate::geometry::MAX_TEXT_FONT_SIZE,
+                        )
+                    };
 
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
@@ -815,15 +828,39 @@ pub fn render_floating_text_toolbar(
 
                         ui.separator();
 
-                        // 2. Ukuran Font Stepper & Presets
-                        if ui.button("➖").clicked() && curr_font_size > 10.0 {
-                            new_font_size = (curr_font_size - 2.0).max(8.0);
+                        // 2. Ukuran Font Stepper, DragValue Smooth & Presets
+                        if ui.button("➖").clicked() && curr_font_size > min_fs {
+                            new_font_size = (curr_font_size - 2.0).max(min_fs);
                             mutated = true;
                         }
-                        ui.menu_button(format!("{curr_font_size:.0} pt"), |ui| {
+                        let mut drag_fs = curr_font_size;
+                        let dv_resp = ui
+                            .add(
+                                egui::DragValue::new(&mut drag_fs)
+                                    .range(min_fs..=max_fs)
+                                    .speed(0.35)
+                                    .fixed_decimals(0)
+                                    .suffix(" pt"),
+                            )
+                            .on_hover_text("Seret kiri/kanan atau klik untuk ubah ukuran font");
+                        if dv_resp.drag_started() {
+                            state.push_undo(&page.id, &page.objects);
+                        }
+                        if dv_resp.changed() {
+                            new_font_size = drag_fs.clamp(min_fs, max_fs);
+                            mutated = true;
+                            if dv_resp.dragged() {
+                                push_undo_on_mutate = false;
+                            }
+                        }
+                        ui.menu_button("▾", |ui| {
                             for sz in [
-                                12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0, 40.0, 48.0, 64.0,
-                            ] {
+                                10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0, 40.0, 48.0,
+                                64.0, 96.0, 128.0,
+                            ]
+                            .into_iter()
+                            .filter(|&s| s >= min_fs && s <= max_fs)
+                            {
                                 if ui.button(format!("{sz:.0} pt")).clicked() {
                                     new_font_size = sz;
                                     mutated = true;
@@ -831,8 +868,8 @@ pub fn render_floating_text_toolbar(
                                 }
                             }
                         });
-                        if ui.button("➕").clicked() && curr_font_size < 96.0 {
-                            new_font_size = (curr_font_size + 2.0).min(96.0);
+                        if ui.button("➕").clicked() && curr_font_size < max_fs {
+                            new_font_size = (curr_font_size + 2.0).min(max_fs);
                             mutated = true;
                         }
 
@@ -969,7 +1006,9 @@ pub fn render_floating_text_toolbar(
                     });
 
                     if mutated {
-                        state.push_undo(&page.id, &page.objects);
+                        if push_undo_on_mutate {
+                            state.push_undo(&page.id, &page.objects);
+                        }
                         state.text_font_size = new_font_size;
                         state.text_font_family = new_family;
                         state.text_bold = new_bold;
@@ -1021,7 +1060,7 @@ pub fn render_floating_text_toolbar(
                                 }
                             }
                         }
-                        state.spatial_grid.rebuild(&page.objects);
+                        state.rebuild_spatial_grid(&page.id, &page.objects);
                         ui.ctx().request_repaint();
                     }
                 });
