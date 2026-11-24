@@ -627,3 +627,65 @@ pub fn recognize_shape(points: &[StrokePoint]) -> Option<RecognizedShape> {
 
     None
 }
+
+const HOLD_LINE_MIN_ENDPOINT_DIST: f32 = 16.0;
+const HOLD_LINE_MIN_OPEN_RATIO: f32 = 0.20;
+
+/// Pengenalan bentuk khusus untuk gestur *hold-to-snap*:
+/// 1. Memprioritaskan seluruh pengenalan bentuk geometri standar (`recognize_shape`).
+/// 2. Jika bukan bentuk geometri tertutup standar, namun goresan bersifat terbuka dengan
+///    titik awal dan titik akhir terpisah jelas, konversi langsung menjadi garis lurus (`ShapeKind::Line`)
+///    yang menghubungkan titik awal dan titik akhir.
+pub fn recognize_shape_for_hold_to_snap(points: &[StrokePoint]) -> Option<RecognizedShape> {
+    if let Some(recognized) = recognize_shape(points) {
+        return Some(recognized);
+    }
+    if points.len() < 2 {
+        return None;
+    }
+    let p_first = points.first()?.to_pos2();
+    let p_last = points.last()?.to_pos2();
+    if !p_first.x.is_finite()
+        || !p_first.y.is_finite()
+        || !p_last.x.is_finite()
+        || !p_last.y.is_finite()
+    {
+        return None;
+    }
+
+    let close_dist = (p_last - p_first).length();
+    if !close_dist.is_finite() || close_dist < HOLD_LINE_MIN_ENDPOINT_DIST {
+        return None;
+    }
+
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for pt in points {
+        if pt.x.is_finite() && pt.y.is_finite() {
+            min_x = min_x.min(pt.x);
+            min_y = min_y.min(pt.y);
+            max_x = max_x.max(pt.x);
+            max_y = max_y.max(pt.y);
+        }
+    }
+    if !min_x.is_finite() || !min_y.is_finite() || !max_x.is_finite() || !max_y.is_finite() {
+        return None;
+    }
+
+    let width = (max_x - min_x).max(1.0);
+    let height = (max_y - min_y).max(1.0);
+    let diagonal = width.hypot(height);
+    if close_dist / diagonal.max(1.0) <= HOLD_LINE_MIN_OPEN_RATIO {
+        return None;
+    }
+
+    Some(RecognizedShape {
+        kind: ShapeKind::Line,
+        x: p_first.x,
+        y: p_first.y,
+        width: p_last.x - p_first.x,
+        height: p_last.y - p_first.y,
+    })
+}

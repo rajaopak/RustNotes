@@ -6085,3 +6085,125 @@ fn test_highlighter_coverage_mask_non_stacking_and_rounded_caps() {
     assert_eq!(groups_diff[1].rgb, (0, 200, 255));
     assert_eq!(groups_diff[1].strokes.len(), 1);
 }
+
+#[test]
+fn test_recognize_shape_for_hold_to_snap_open_strokes_and_autoshape_preservation() {
+    use crate::geometry::recognize_shape_for_hold_to_snap;
+
+    // 1. Goresan bergelombang / acak terbuka (seperti gelombang pada gambar referensi)
+    let wavy: Vec<StrokePoint> = (0..=24)
+        .map(|i| {
+            let t = i as f32 / 24.0;
+            let x = 20.0 + t * 300.0;
+            let y = 120.0 - (t * std::f32::consts::TAU * 3.0).sin() * 45.0;
+            StrokePoint::new(x, y, 1.0)
+        })
+        .collect();
+    assert!(
+        recognize_shape(&wavy).is_none(),
+        "recognize_shape murni tidak boleh mengklasifikasikan gelombang sebagai garis lurus"
+    );
+    let wavy_line =
+        recognize_shape_for_hold_to_snap(&wavy).expect("Hold-to-snap wajib mengonversi ke Line");
+    assert_eq!(wavy_line.kind, ShapeKind::Line);
+    assert!((wavy_line.x - 20.0).abs() < 1e-4);
+    assert!((wavy_line.y - 120.0).abs() < 1e-4);
+    assert!((wavy_line.width - 300.0).abs() < 1e-4);
+    assert!(wavy_line.height.abs() < 1e-2);
+
+    // 2. Goresan acak terbuka (open squiggle)
+    let squiggle = vec![
+        StrokePoint::from(Pos2::new(10.0, 10.0)),
+        StrokePoint::from(Pos2::new(20.0, 80.0)),
+        StrokePoint::from(Pos2::new(60.0, 15.0)),
+        StrokePoint::from(Pos2::new(30.0, 110.0)),
+        StrokePoint::from(Pos2::new(90.0, 45.0)),
+        StrokePoint::from(Pos2::new(150.0, 95.0)),
+    ];
+    assert!(recognize_shape(&squiggle).is_none());
+    let squiggle_line =
+        recognize_shape_for_hold_to_snap(&squiggle).expect("Open squiggle must snap to Line");
+    assert_eq!(squiggle_line.kind, ShapeKind::Line);
+    assert!((squiggle_line.x - 10.0).abs() < 1e-4);
+    assert!((squiggle_line.y - 10.0).abs() < 1e-4);
+    assert!((squiggle_line.width - 140.0).abs() < 1e-4);
+    assert!((squiggle_line.height - 85.0).abs() < 1e-4);
+
+    // 3. Goresan pendek 2 titik terbuka
+    let two_pt = vec![
+        StrokePoint::new(30.0, 40.0, 1.0),
+        StrokePoint::new(70.0, 40.0, 1.0),
+    ];
+    let two_pt_line =
+        recognize_shape_for_hold_to_snap(&two_pt).expect("2-point open stroke must snap to Line");
+    assert_eq!(two_pt_line.kind, ShapeKind::Line);
+    assert!((two_pt_line.width - 40.0).abs() < 1e-4);
+
+    // 4. Tap / goresan sangat kecil (< 16.0) tidak boleh dikonversi
+    let tiny = vec![
+        StrokePoint::new(10.0, 10.0, 1.0),
+        StrokePoint::new(14.0, 12.0, 1.0),
+    ];
+    assert!(recognize_shape_for_hold_to_snap(&tiny).is_none());
+
+    // 5. Bentuk tertutup tidak standar (trapesium tertutup, titik awal == akhir) tidak boleh kolaps jadi Line
+    let trap = [
+        Pos2::new(80.0, 30.0),
+        Pos2::new(140.0, 30.0),
+        Pos2::new(220.0, 120.0),
+        Pos2::new(20.0, 120.0),
+    ];
+    let mut trap_pts = Vec::new();
+    for (a, b) in [
+        (trap[0], trap[1]),
+        (trap[1], trap[2]),
+        (trap[2], trap[3]),
+        (trap[3], trap[0]),
+    ] {
+        for t in 0..6 {
+            let f = t as f32 / 6.0;
+            trap_pts.push(StrokePoint::from(Pos2::new(
+                a.x + (b.x - a.x) * f,
+                a.y + (b.y - a.y) * f,
+            )));
+        }
+    }
+    trap_pts.push(StrokePoint::from(trap[0]));
+    if let Some(rec) = recognize_shape_for_hold_to_snap(&trap_pts) {
+        assert_ne!(rec.kind, ShapeKind::Line);
+    }
+
+    // 6. Auto-Shape standar (Lingkaran, Persegi Panjang, Segitiga) tetap dikenali sebagai bentuknya
+    let circle_pts: Vec<StrokePoint> = (0..=24)
+        .map(|i| {
+            let a = (i as f32 / 24.0) * std::f32::consts::TAU;
+            StrokePoint::from(Pos2::new(100.0 + 40.0 * a.cos(), 100.0 + 40.0 * a.sin()))
+        })
+        .collect();
+    assert_eq!(
+        recognize_shape_for_hold_to_snap(&circle_pts)
+            .expect("Circle")
+            .kind,
+        ShapeKind::Ellipse
+    );
+
+    let mut rect_pts = Vec::new();
+    for i in 0..=6 {
+        rect_pts.push(StrokePoint::from(Pos2::new(20.0 + i as f32 * 15.0, 20.0)));
+    }
+    for i in 1..=5 {
+        rect_pts.push(StrokePoint::from(Pos2::new(110.0, 20.0 + i as f32 * 12.0)));
+    }
+    for i in 1..=6 {
+        rect_pts.push(StrokePoint::from(Pos2::new(110.0 - i as f32 * 15.0, 80.0)));
+    }
+    for i in 1..=5 {
+        rect_pts.push(StrokePoint::from(Pos2::new(20.0, 80.0 - i as f32 * 12.0)));
+    }
+    assert_eq!(
+        recognize_shape_for_hold_to_snap(&rect_pts)
+            .expect("Rectangle")
+            .kind,
+        ShapeKind::Rectangle
+    );
+}
