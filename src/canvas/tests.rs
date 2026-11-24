@@ -5824,3 +5824,607 @@ fn test_inline_text_editor_has_no_opaque_background_fill() {
         "Inline text editor must not draw an opaque/translucent white background fill behind text"
     );
 }
+
+#[test]
+fn test_text_resize_smooth_diagonal_no_jump_on_offset_grab_and_rotated() {
+    let ctx = eframe::egui::Context::default();
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "smooth-text-resize".to_string();
+    page.objects.push(DrawObject::Text {
+        id: "t-smooth".to_string(),
+        x: 120.0,
+        y: 180.0,
+        text: "RustNotes Flat Single Line Text".to_string(),
+        font_size: 16.0,
+        color: ColorData::from(Color32::BLACK),
+        rotation: 0.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
+    });
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Lasso,
+        zoom: 1.0,
+        selected_ids: vec!["t-smooth".to_string()],
+        ..Default::default()
+    };
+
+    let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    let to_screen = |x: f32, y: f32| origin + Vec2::new(x, y);
+    let sel0 = super::gizmo::SelectionData::compute(&page, &state);
+    let r0 = sel0.rect.unwrap();
+
+    // 1. Klik meleset 8px dari pusat handle SouthEast, lalu geser 1px -> tidak boleh ada lonjakan awal
+    let off_grab = to_screen(r0.right() - 6.0, r0.bottom() - 5.0);
+    let tiny_move = to_screen(r0.right() - 5.0, r0.bottom() - 5.0);
+    let vert_jitter = to_screen(r0.right() - 6.0, r0.bottom() + 5.0);
+
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(off_grab),
+            eframe::egui::Event::PointerButton {
+                pos: off_grab,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+    // Pastikan threshold drag egui terlampaui lalu kirim delta kecil relatif terhadap grab
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(tiny_move)],
+    );
+    let fs_after_offset_grab = match &page.objects[0] {
+        DrawObject::Text { font_size, .. } => *font_size,
+        _ => panic!("Expected Text"),
+    };
+    assert!(
+        (fs_after_offset_grab - 16.0).abs() < 1.0,
+        "Off-center handle grab + 1px move must NOT snap/jump font size, got {fs_after_offset_grab}"
+    );
+
+    // 2. Jitter vertikal +10px pada teks satu baris pipih: skala harus halus, tidak licin (+50%)
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(vert_jitter)],
+    );
+    let fs_after_vert = match &page.objects[0] {
+        DrawObject::Text { font_size, .. } => *font_size,
+        _ => panic!("Expected Text"),
+    };
+    assert!(
+        fs_after_vert < 17.5 && fs_after_vert > 15.5,
+        "Vertical jitter on flat single-line text must be gentle, got {fs_after_vert}"
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: vert_jitter,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    // 3. Teks berotasi 45 derajat: sudut berlawanan (NW) tetap terkunci di posisinya saat SE ditarik
+    page.objects[0] = DrawObject::Text {
+        id: "t-smooth".to_string(),
+        x: 200.0,
+        y: 220.0,
+        text: "Rotated Text".to_string(),
+        font_size: 20.0,
+        color: ColorData::from(Color32::BLACK),
+        rotation: std::f32::consts::FRAC_PI_4,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
+    };
+    step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    let frame_rot = super::gizmo::SelectionData::compute(&page, &state)
+        .frame
+        .unwrap();
+    let nw_anchor = frame_rot.corners[0];
+    let se_corner = frame_rot.corners[2];
+    let se_2x = nw_anchor + (se_corner - nw_anchor) * 2.0;
+
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(to_screen(se_corner.x, se_corner.y)),
+            eframe::egui::Event::PointerButton {
+                pos: to_screen(se_corner.x, se_corner.y),
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(to_screen(
+            se_2x.x, se_2x.y,
+        ))],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: to_screen(se_2x.x, se_2x.y),
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    let (rx, ry, rfs) = match &page.objects[0] {
+        DrawObject::Text {
+            x, y, font_size, ..
+        } => (*x, *y, *font_size),
+        _ => panic!("Expected Text"),
+    };
+    assert!((rx - nw_anchor.x).abs() < 1e-2 && (ry - nw_anchor.y).abs() < 1e-2);
+    assert!(
+        (36.0..=44.0).contains(&rfs),
+        "Rotated text 2x SE drag must scale smoothly to ~40pt, got {rfs}"
+    );
+}
+
+#[test]
+fn test_render_page_canvas_updates_resized_text_in_same_frame_without_lag() {
+    let ctx = eframe::egui::Context::default();
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "same-frame-parity".to_string();
+    page.objects.push(DrawObject::Text {
+        id: "t-lag".to_string(),
+        x: 100.0,
+        y: 120.0,
+        text: "Zero Lag Text".to_string(),
+        font_size: 16.0,
+        color: ColorData::from(Color32::BLACK),
+        rotation: 0.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
+    });
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Lasso,
+        zoom: 1.0,
+        selected_ids: vec!["t-lag".to_string()],
+        ..Default::default()
+    };
+
+    let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    let to_screen = |x: f32, y: f32| origin + Vec2::new(x, y);
+    let r0 = super::gizmo::SelectionData::compute(&page, &state)
+        .rect
+        .unwrap();
+    let se = to_screen(r0.right(), r0.bottom());
+    let se_2x = to_screen(r0.left() + r0.width() * 2.0, r0.top() + r0.height() * 2.0);
+
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(se),
+            eframe::egui::Event::PointerButton {
+                pos: se,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+
+    let out = ctx.run(
+        eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                Pos2::ZERO,
+                Vec2::new(1200.0, 1200.0),
+            )),
+            events: vec![eframe::egui::Event::PointerMoved(se_2x)],
+            ..Default::default()
+        },
+        |ctx| {
+            eframe::egui::CentralPanel::default()
+                .frame(eframe::egui::Frame::NONE)
+                .show(ctx, |ui| {
+                    let _ = render_page_canvas(ui, &mut page, &mut state);
+                });
+        },
+    );
+
+    let updated_fs = match &page.objects[0] {
+        DrawObject::Text { font_size, .. } => *font_size,
+        _ => panic!("Expected Text"),
+    };
+    assert!(updated_fs > 28.0);
+
+    fn max_text_font_size(shape: &eframe::egui::Shape) -> Option<f32> {
+        match shape {
+            eframe::egui::Shape::Text(ts) => ts
+                .galley
+                .job
+                .sections
+                .first()
+                .map(|s| s.format.font_id.size),
+            eframe::egui::Shape::Vec(v) => v.iter().filter_map(max_text_font_size).reduce(f32::max),
+            _ => None,
+        }
+    }
+
+    let rendered_max_fs = out
+        .shapes
+        .iter()
+        .filter_map(|c| max_text_font_size(&c.shape))
+        .reduce(f32::max)
+        .expect("Must emit TextShape in same frame");
+    assert!(
+        (rendered_max_fs - updated_fs).abs() < 0.5,
+        "Rendered TextShape font size ({rendered_max_fs}) must match resized font size ({updated_fs}) in the SAME frame"
+    );
+}
+
+#[test]
+fn test_all_draw_objects_resize_audit_no_errors() {
+    let ctx = eframe::egui::Context::default();
+    let run_drag = |ctx: &eframe::egui::Context,
+                    page: &mut Page,
+                    state: &mut CanvasState,
+                    start_page: Pos2,
+                    end_page: Pos2| {
+        let origin = step_test_canvas(ctx, page, state, vec![]);
+        let s = origin + start_page.to_vec2();
+        let e = origin + end_page.to_vec2();
+        step_test_canvas(
+            ctx,
+            page,
+            state,
+            vec![
+                eframe::egui::Event::PointerMoved(s),
+                eframe::egui::Event::PointerButton {
+                    pos: s,
+                    button: eframe::egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        step_test_canvas(ctx, page, state, vec![eframe::egui::Event::PointerMoved(e)]);
+        step_test_canvas(
+            ctx,
+            page,
+            state,
+            vec![eframe::egui::Event::PointerButton {
+                pos: e,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+    };
+
+    // 1. Shape::Rectangle: melewati titik minimum lalu balik keluar dalam 1 drag -> rasio aspek 2:1 tetap utuh berkat snapshot
+    {
+        let mut page = Page::new(PageTemplate::Blank);
+        page.id = "audit-rect".into();
+        page.objects.push(DrawObject::Shape {
+            id: "r1".into(),
+            shape_type: ShapeKind::Rectangle,
+            x: 100.0,
+            y: 100.0,
+            width: 120.0,
+            height: 60.0,
+            color: ColorData::from(Color32::BLACK),
+            stroke_width: 2.0,
+            fill: None,
+            rotation: 0.0,
+            corner_radius: 0.0,
+            label: None,
+            locked: false,
+            curve_points: Vec::new(),
+        });
+        let mut state = CanvasState {
+            current_tool: ActiveTool::Lasso,
+            zoom: 1.0,
+            selected_ids: vec!["r1".into()],
+            ..Default::default()
+        };
+        let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+        let p_se = origin + Vec2::new(220.0, 160.0);
+        let p_past_min = origin + Vec2::new(50.0, 50.0);
+        let p_restore = origin + Vec2::new(340.0, 220.0);
+        step_test_canvas(
+            &ctx,
+            &mut page,
+            &mut state,
+            vec![
+                eframe::egui::Event::PointerMoved(p_se),
+                eframe::egui::Event::PointerButton {
+                    pos: p_se,
+                    button: eframe::egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        step_test_canvas(
+            &ctx,
+            &mut page,
+            &mut state,
+            vec![eframe::egui::Event::PointerMoved(p_past_min)],
+        );
+        step_test_canvas(
+            &ctx,
+            &mut page,
+            &mut state,
+            vec![eframe::egui::Event::PointerMoved(p_restore)],
+        );
+        step_test_canvas(
+            &ctx,
+            &mut page,
+            &mut state,
+            vec![eframe::egui::Event::PointerButton {
+                pos: p_restore,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+        if let DrawObject::Shape { width, height, .. } = &page.objects[0] {
+            assert!((width / height - 2.0).abs() < 1e-3);
+            assert!((width - 240.0).abs() < 1e-2);
+        }
+    }
+
+    // 2. Shape::Curve: curve_points ikut terskala saat bounding box di-resize
+    {
+        let mut page = Page::new(PageTemplate::Blank);
+        page.id = "audit-curve".into();
+        page.objects.push(DrawObject::Shape {
+            id: "c1".into(),
+            shape_type: ShapeKind::Curve,
+            x: 100.0,
+            y: 100.0,
+            width: 100.0,
+            height: 60.0,
+            color: ColorData::from(Color32::BLUE),
+            stroke_width: 2.0,
+            fill: None,
+            rotation: 0.0,
+            corner_radius: 0.0,
+            label: None,
+            locked: false,
+            curve_points: vec![
+                Point2D::new(100.0, 100.0),
+                Point2D::new(150.0, 130.0),
+                Point2D::new(200.0, 160.0),
+            ],
+        });
+        let mut state = CanvasState {
+            current_tool: ActiveTool::Lasso,
+            zoom: 1.0,
+            selected_ids: vec!["c1".into()],
+            ..Default::default()
+        };
+        let frame = super::gizmo::SelectionData::compute(&page, &state)
+            .frame
+            .unwrap();
+        let se = frame.corners[2];
+        let nw = frame.corners[0];
+        run_drag(&ctx, &mut page, &mut state, se, nw + (se - nw) * 2.0);
+        if let DrawObject::Shape { curve_points, .. } = &page.objects[0] {
+            assert!(curve_points[2].x > 280.0 && curve_points[2].y > 200.0);
+        }
+    }
+
+    // 3. Flipped RightTriangle (width negatif): tanda negatif tetap terjaga (tidak ter-unflip)
+    {
+        let mut page = Page::new(PageTemplate::Blank);
+        page.id = "audit-flipped".into();
+        page.objects.push(DrawObject::Shape {
+            id: "rt1".into(),
+            shape_type: ShapeKind::RightTriangle,
+            x: 200.0,
+            y: 100.0,
+            width: -80.0,
+            height: 60.0,
+            color: ColorData::from(Color32::BLACK),
+            stroke_width: 2.0,
+            fill: None,
+            rotation: 0.0,
+            corner_radius: 0.0,
+            label: None,
+            locked: false,
+            curve_points: Vec::new(),
+        });
+        let mut state = CanvasState {
+            current_tool: ActiveTool::Lasso,
+            zoom: 1.0,
+            selected_ids: vec!["rt1".into()],
+            ..Default::default()
+        };
+        let frame = super::gizmo::SelectionData::compute(&page, &state)
+            .frame
+            .unwrap();
+        let se = frame.corners[2];
+        let nw = frame.corners[0];
+        run_drag(&ctx, &mut page, &mut state, se, nw + (se - nw) * 1.5);
+        if let DrawObject::Shape { width, .. } = &page.objects[0] {
+            assert!(
+                *width < -100.0,
+                "Negative flip width must remain negative, got {width}"
+            );
+        }
+    }
+
+    // 4. Image berotasi + StickyNote berotasi + Equation berotasi
+    {
+        let mut page = Page::new(PageTemplate::Blank);
+        page.id = "audit-rotated".into();
+        page.objects.push(DrawObject::Image {
+            id: "img1".into(),
+            asset_id: "missing".into(),
+            x: 120.0,
+            y: 120.0,
+            width: 100.0,
+            height: 80.0,
+            rotation: 0.5,
+            lock_aspect: true,
+        });
+        let mut state = CanvasState {
+            current_tool: ActiveTool::Lasso,
+            zoom: 1.0,
+            selected_ids: vec!["img1".into()],
+            ..Default::default()
+        };
+        let frame = super::gizmo::SelectionData::compute(&page, &state)
+            .frame
+            .unwrap();
+        let se = frame.corners[2];
+        let nw = frame.corners[0];
+        run_drag(&ctx, &mut page, &mut state, se, nw + (se - nw) * 1.5);
+        if let DrawObject::Image { width, height, .. } = &page.objects[0] {
+            assert!(*width >= 140.0 && (*width / *height - 1.25).abs() < 1e-2);
+        }
+
+        page.objects[0] = DrawObject::StickyNote {
+            id: "sn1".into(),
+            x: 120.0,
+            y: 120.0,
+            width: 160.0,
+            height: 120.0,
+            text: "Note".into(),
+            color: ColorData::from(Color32::YELLOW),
+            text_color: ColorData::from(Color32::BLACK),
+            font_size: 16.0,
+            font_family: FontFamilyPreset::SansSerif,
+            bold: false,
+            italic: false,
+            alignment: TextAlign::Left,
+            rotation: 0.4,
+        };
+        state.selected_ids = vec!["sn1".into()];
+        let f_sn = super::gizmo::SelectionData::compute(&page, &state)
+            .frame
+            .unwrap();
+        let e_handle = f_sn
+            .handles
+            .iter()
+            .find(|h| h.kind == crate::geometry::TransformHandleKind::East)
+            .unwrap()
+            .pos
+            .to_pos2();
+        let e_out = e_handle + Vec2::new(40.0 * 0.4_f32.cos(), 40.0 * 0.4_f32.sin());
+        run_drag(&ctx, &mut page, &mut state, e_handle, e_out);
+        if let DrawObject::StickyNote {
+            width, font_size, ..
+        } = &page.objects[0]
+        {
+            assert!(*width > 180.0);
+            assert!(
+                (*font_size - 16.0).abs() < 1e-3,
+                "Edge resize on StickyNote must keep font_size stable"
+            );
+        }
+
+        page.objects[0] = DrawObject::Equation {
+            id: "eq1".into(),
+            x: 140.0,
+            y: 140.0,
+            latex: r"\frac{a}{b}".into(),
+            font_size: 22.0,
+            scale: 1.0,
+            color: ColorData::from(Color32::BLACK),
+            rotation: 0.35,
+            locked: false,
+        };
+        state.selected_ids = vec!["eq1".into()];
+        let f_eq = super::gizmo::SelectionData::compute(&page, &state)
+            .frame
+            .unwrap();
+        let eq_se = f_eq.corners[2];
+        let eq_nw = f_eq.corners[0];
+        run_drag(
+            &ctx,
+            &mut page,
+            &mut state,
+            eq_se,
+            eq_nw + (eq_se - eq_nw) * 1.8,
+        );
+        if let DrawObject::Equation { scale, .. } = &page.objects[0] {
+            assert!(
+                (*scale - 1.8).abs() < 0.2,
+                "Expected ~1.8 scale, got {scale}"
+            );
+        }
+    }
+
+    // 5. Multi-selection Stroke + Locked Connector: Stroke terskala mulus, Connector terkunci tidak tersentuh
+    {
+        let mut page = Page::new(PageTemplate::Blank);
+        page.id = "audit-multi-lock".into();
+        page.objects.push(DrawObject::Stroke {
+            id: "st1".into(),
+            points: vec![
+                StrokePoint::new(100.0, 100.0, 1.0),
+                StrokePoint::new(200.0, 150.0, 1.0),
+            ],
+            color: ColorData::from(Color32::BLACK),
+            width: 3.0,
+            is_highlighter: false,
+            style: StrokeStyle::Solid,
+        });
+        let locked_conn = DrawObject::Connector {
+            id: "c-lock".into(),
+            start: ConnectorEnd::Free { x: 120.0, y: 120.0 },
+            end: ConnectorEnd::Free { x: 180.0, y: 140.0 },
+            route: ConnectorRoute::Straight,
+            control_points: Vec::new(),
+            style: ConnectorStyle::default(),
+            locked: true,
+        };
+        page.objects.push(locked_conn.clone());
+        let mut state = CanvasState {
+            current_tool: ActiveTool::Lasso,
+            zoom: 1.0,
+            selected_ids: vec!["st1".into(), "c-lock".into()],
+            ..Default::default()
+        };
+        let b = super::gizmo::SelectionData::compute(&page, &state)
+            .rect
+            .unwrap();
+        run_drag(
+            &ctx,
+            &mut page,
+            &mut state,
+            b.right_bottom(),
+            b.left_top() + b.size() * 2.0,
+        );
+        if let DrawObject::Stroke { points, .. } = &page.objects[0] {
+            assert!(points[1].x > 260.0);
+        }
+        assert_eq!(
+            page.objects[1], locked_conn,
+            "Locked connector inside multi-selection must stay untouched"
+        );
+    }
+}

@@ -6519,3 +6519,116 @@ fn test_scale_object_clamps_text_font_size_and_rejects_nonfinite() {
         panic!("Expected Text");
     }
 }
+
+#[test]
+fn test_proportional_scale_diagonal_projection_is_smooth_and_non_slippery_on_flat_boxes() {
+    use super::shape_ops::{
+        MAX_SHAPE_DIM, ShapeTransformBox, TransformHandleKind, calculate_proportional_scale,
+    };
+
+    // Kotak teks/label satu baris pipih: 200x20
+    let flat = ShapeTransformBox::new(100.0, 100.0, 200.0, 20.0, 0.0);
+
+    // Gerakan vertikal murni kecil (+10px di Y, 0px di X) pada corner SouthEast (300, 120 -> 300, 130)
+    // Tidak boleh meloncat +50% seperti max(scale_x, scale_y)! Proyeksi diagonal harus lembut (< 1.03x).
+    let (_, _, w_vert, h_vert) = calculate_proportional_scale(
+        TransformHandleKind::SouthEast,
+        Point2D::new(300.0, 130.0),
+        flat,
+        4.0,
+    );
+    let vert_scale = w_vert / 200.0;
+    assert!(
+        vert_scale < 1.03 && vert_scale > 0.99,
+        "10px vertical jitter on 200x20 box must scale gently via diagonal projection, got {vert_scale}"
+    );
+    assert!((w_vert / h_vert - 10.0).abs() < 1e-3);
+
+    // Tarikan diagonal 2.0x presisi: SE (300, 120) -> (500, 140)
+    let (_, _, w_2x, h_2x) = calculate_proportional_scale(
+        TransformHandleKind::SouthEast,
+        Point2D::new(500.0, 140.0),
+        flat,
+        4.0,
+    );
+    assert!((w_2x - 400.0).abs() < 1e-3);
+    assert!((h_2x - 40.0).abs() < 1e-3);
+
+    // Reject NaN/Infinity & clamp <= MAX_SHAPE_DIM
+    let (_, _, w_nan, h_nan) = calculate_proportional_scale(
+        TransformHandleKind::SouthEast,
+        Point2D::new(f32::NAN, 140.0),
+        flat,
+        4.0,
+    );
+    assert!(w_nan.is_finite() && h_nan.is_finite());
+    let (_, _, w_max, h_max) = calculate_proportional_scale(
+        TransformHandleKind::SouthEast,
+        Point2D::new(1e7, 1e7),
+        flat,
+        4.0,
+    );
+    assert!(w_max <= MAX_SHAPE_DIM && h_max <= MAX_SHAPE_DIM);
+}
+
+#[test]
+fn test_remap_curve_points_for_resize_scales_control_points_cleanly() {
+    use super::shape_ops::{ShapeTransformBox, remap_curve_points_for_resize};
+
+    let init_box = ShapeTransformBox::new(100.0, 100.0, 100.0, 50.0, 0.0);
+    let init_pts = vec![
+        Point2D::new(100.0, 100.0),
+        Point2D::new(150.0, 125.0),
+        Point2D::new(200.0, 150.0),
+    ];
+    // Resize 2x around (100, 100) -> (100, 100, 200, 100)
+    let remapped = remap_curve_points_for_resize(&init_pts, init_box, 100.0, 100.0, 200.0, 100.0);
+    assert!((remapped[0].x - 100.0).abs() < 1e-4);
+    assert!((remapped[0].y - 100.0).abs() < 1e-4);
+    assert!((remapped[1].x - 200.0).abs() < 1e-4);
+    assert!((remapped[1].y - 150.0).abs() < 1e-4);
+    assert!((remapped[2].x - 300.0).abs() < 1e-4);
+    assert!((remapped[2].y - 200.0).abs() < 1e-4);
+}
+
+#[test]
+fn test_scale_object_respects_locked_connector_and_clamps_image_dimensions() {
+    let origin = Pos2::new(50.0, 50.0);
+    let mut locked_conn = DrawObject::Connector {
+        id: "conn-locked".into(),
+        start: crate::model::ConnectorEnd::Free { x: 100.0, y: 100.0 },
+        end: crate::model::ConnectorEnd::Free { x: 200.0, y: 150.0 },
+        route: crate::model::ConnectorRoute::Straight,
+        control_points: vec![Point2D::new(150.0, 120.0)],
+        style: Default::default(),
+        locked: true,
+    };
+    let before = locked_conn.clone();
+    scale_object(&mut locked_conn, origin, 2.5, 2.5);
+    assert_eq!(
+        locked_conn, before,
+        "Locked connector must never mutate on scale_object"
+    );
+
+    let mut img = DrawObject::Image {
+        id: "img-clamp".into(),
+        asset_id: "a1".into(),
+        x: 100.0,
+        y: 100.0,
+        width: 80.0,
+        height: 40.0,
+        rotation: 0.0,
+        lock_aspect: true,
+    };
+    scale_object(&mut img, origin, 0.02, 0.02);
+    if let DrawObject::Image { width, height, .. } = img {
+        assert!(width >= MIN_IMAGE_DIM && height >= MIN_IMAGE_DIM);
+    } else {
+        panic!("Expected Image");
+    }
+    scale_object(&mut img, origin, 50.0, 50.0);
+    scale_object(&mut img, origin, 50.0, 50.0);
+    if let DrawObject::Image { width, height, .. } = img {
+        assert!(width <= MAX_OBJECT_DIM && height <= MAX_OBJECT_DIM);
+    }
+}
