@@ -197,19 +197,20 @@ pub fn draw_shape_primitive(
                     .rotate_around(rot_center, rotation)
                     .to_pos2();
             }
-            if stroke.width >= 3.0 {
+            if stroke.width > 0.0 {
                 let pts = [
                     StrokePoint::new(p1.x, p1.y, 1.0),
                     StrokePoint::new(p2.x, p2.y, 1.0),
                 ];
-                painter.add(crate::geometry::tessellate_stroke(
+                painter.add(crate::geometry::tessellate_stroke_styled_aa(
                     &pts,
                     stroke.width,
                     stroke.color,
+                    false,
+                    crate::model::StrokeStyle::Solid,
+                    1.15,
                     &page_to_screen,
                 ));
-            } else {
-                painter.line_segment([page_to_screen(p1), page_to_screen(p2)], stroke);
             }
         }
         ShapeKind::Rectangle => {
@@ -313,10 +314,13 @@ pub fn draw_shape_primitive(
                     .iter()
                     .map(|p| StrokePoint::new(p.x, p.y, 1.0))
                     .collect();
-                painter.add(crate::geometry::tessellate_stroke(
+                painter.add(crate::geometry::tessellate_stroke_styled_aa(
                     &stroke_pts,
                     stroke.width,
                     stroke.color,
+                    false,
+                    crate::model::StrokeStyle::Solid,
+                    1.15,
                     &page_to_screen,
                 ));
             }

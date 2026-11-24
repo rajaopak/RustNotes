@@ -1,8 +1,7 @@
 use super::state::RustNotesApp;
 use super::types::ViewMode;
 use crate::canvas::{
-    ActiveTool, EraserMode, hsv_to_rgb, rainbow_laser_color, tessellate_laser_layer,
-    tessellate_laser_layer_colored,
+    ActiveTool, EraserMode, hsv_to_rgb, rainbow_laser_color, tessellate_laser_neon_beam,
 };
 use crate::model::{LaserColorMode, ShapeKind, ThemeMode};
 use crate::storage::{
@@ -1727,34 +1726,21 @@ impl RustNotesApp {
             })
             .collect();
         let time_secs = ctx.input(|i| i.time) as f32;
-        match self.canvas_state.laser_color_mode {
+        let preview_mesh = match self.canvas_state.laser_color_mode {
             LaserColorMode::Solid => {
                 let c = self.canvas_state.laser_color;
-                let outer = Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 44);
-                let halo = Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 120);
-                let core = Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 238);
-                p.add(tessellate_laser_layer(&preview_pts, 14.0, outer));
-                p.add(tessellate_laser_layer(&preview_pts, 8.0, halo));
-                p.add(tessellate_laser_layer(&preview_pts, 4.0, core));
+                let rgb = (c.r(), c.g(), c.b());
+                tessellate_laser_neon_beam(&preview_pts, 0.72, 1.0, |_| rgb)
             }
             LaserColorMode::Rainbow => {
-                p.add(tessellate_laser_layer_colored(&preview_pts, 14.0, |arc| {
-                    rainbow_laser_color(arc, time_secs, 44)
-                }));
-                p.add(tessellate_laser_layer_colored(&preview_pts, 8.0, |arc| {
-                    rainbow_laser_color(arc, time_secs, 120)
-                }));
-                p.add(tessellate_laser_layer_colored(&preview_pts, 4.0, |arc| {
-                    rainbow_laser_color(arc, time_secs, 238)
-                }));
                 ctx.request_repaint();
+                tessellate_laser_neon_beam(&preview_pts, 0.72, 1.0, |arc| {
+                    let c = rainbow_laser_color(arc, time_secs, 255);
+                    (c.r(), c.g(), c.b())
+                })
             }
-        }
-        p.add(tessellate_laser_layer(
-            &preview_pts,
-            1.8,
-            Color32::from_rgba_unmultiplied(255, 255, 255, 250),
-        ));
+        };
+        p.add(preview_mesh);
 
         ui.add_space(4.0);
         let neon_presets: [(Color32, &str); 8] = [

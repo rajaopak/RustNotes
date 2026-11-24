@@ -371,7 +371,460 @@ fn add_round_cap(mesh: &mut Mesh, center: Pos2, radius: f32, color: Color32, seg
     }
 }
 
-/// Render Efek Laser Pointer (4-layer Neon Glow Ribbon: mode Solid atau Rainbow)
+/// Profil gradien radial Gaussian 7-stop untuk pendaran laser neon bebas piksel:
+/// `(radius_px, white_mix, alpha_255)`.
+const NEON_PROFILE: [(f32, f32, f32); 7] = [
+    (0.0, 1.0, 250.0),
+    (1.05, 1.0, 250.0),
+    (2.0, 0.28, 245.0),
+    (3.2, 0.0, 238.0),
+    (5.6, 0.0, 115.0),
+    (9.2, 0.0, 36.0),
+    (14.0, 0.0, 0.0),
+];
+
+#[inline]
+fn neon_stop_color(rgb: (u8, u8, u8), white_mix: f32, alpha_255: f32, laser_alpha: f32) -> Color32 {
+    let a = (alpha_255 * laser_alpha).round().clamp(0.0, 255.0) as u8;
+    if a == 0 {
+        return Color32::TRANSPARENT;
+    }
+    let m = white_mix.clamp(0.0, 1.0);
+    let r = (rgb.0 as f32 + (255.0 - rgb.0 as f32) * m)
+        .round()
+        .clamp(0.0, 255.0) as u8;
+    let g = (rgb.1 as f32 + (255.0 - rgb.1 as f32) * m)
+        .round()
+        .clamp(0.0, 255.0) as u8;
+    let b = (rgb.2 as f32 + (255.0 - rgb.2 as f32) * m)
+        .round()
+        .clamp(0.0, 255.0) as u8;
+    Color32::from_rgba_unmultiplied(r, g, b, a)
+}
+
+#[inline]
+fn push_strip_quad(mesh: &mut Mesh, i0: u32, o0: u32, i1: u32, o1: u32) {
+    mesh.add_triangle(i0, o0, i1);
+    mesh.add_triangle(o0, o1, i1);
+}
+
+#[derive(Clone, Copy)]
+struct RadialBand {
+    r_in: f32,
+    r_out: f32,
+    c_in: Color32,
+    c_out: Color32,
+}
+
+fn add_ring_semicircle(
+    mesh: &mut Mesh,
+    center: Pos2,
+    band: RadialBand,
+    outward_dir: Vec2,
+    segments: usize,
+) {
+    if outward_dir.length_sq() < 1e-6 || band.r_out <= 1e-4 {
+        return;
+    }
+    let base_angle = outward_dir.y.atan2(outward_dir.x);
+    if band.r_in <= 1e-4 {
+        let center_idx = mesh.vertices.len() as u32;
+        mesh.colored_vertex(center, band.c_in);
+        let start_idx = mesh.vertices.len() as u32;
+        for i in 0..=segments {
+            let off =
+                -std::f32::consts::FRAC_PI_2 + (i as f32 / segments as f32) * std::f32::consts::PI;
+            let a = base_angle + off;
+            mesh.colored_vertex(
+                center + Vec2::new(a.cos(), a.sin()) * band.r_out,
+                band.c_out,
+            );
+        }
+        for i in 0..segments as u32 {
+            mesh.add_triangle(center_idx, start_idx + i, start_idx + i + 1);
+        }
+        return;
+    }
+
+    let in_start = mesh.vertices.len() as u32;
+    for i in 0..=segments {
+        let off =
+            -std::f32::consts::FRAC_PI_2 + (i as f32 / segments as f32) * std::f32::consts::PI;
+        let a = base_angle + off;
+        let dir = Vec2::new(a.cos(), a.sin());
+        mesh.colored_vertex(center + dir * band.r_in, band.c_in);
+    }
+    let out_start = mesh.vertices.len() as u32;
+    for i in 0..=segments {
+        let off =
+            -std::f32::consts::FRAC_PI_2 + (i as f32 / segments as f32) * std::f32::consts::PI;
+        let a = base_angle + off;
+        let dir = Vec2::new(a.cos(), a.sin());
+        mesh.colored_vertex(center + dir * band.r_out, band.c_out);
+    }
+    for i in 0..segments as u32 {
+        push_strip_quad(
+            mesh,
+            in_start + i,
+            out_start + i,
+            in_start + i + 1,
+            out_start + i + 1,
+        );
+    }
+}
+
+fn add_ring_join_arc(
+    mesh: &mut Mesh,
+    center: Pos2,
+    band: RadialBand,
+    start_norm: Vec2,
+    end_norm: Vec2,
+    cross: f32,
+) {
+    if band.r_out <= 1e-4 {
+        return;
+    }
+    let a0 = start_norm.y.atan2(start_norm.x);
+    let a1 = end_norm.y.atan2(end_norm.x);
+    let mut delta = a1 - a0;
+    while delta <= -std::f32::consts::PI {
+        delta += std::f32::consts::TAU;
+    }
+    while delta > std::f32::consts::PI {
+        delta -= std::f32::consts::TAU;
+    }
+    if delta.abs() > std::f32::consts::PI - 0.05 {
+        delta = if cross >= 0.0 {
+            std::f32::consts::PI
+        } else {
+            -std::f32::consts::PI
+        };
+    }
+
+    let steps = ((delta.abs() / 0.20).ceil() as usize).clamp(2, 16);
+    if band.r_in <= 1e-4 {
+        let center_idx = mesh.vertices.len() as u32;
+        mesh.colored_vertex(center, band.c_in);
+        let out_start = mesh.vertices.len() as u32;
+        for s in 0..=steps {
+            let a = a0 + delta * (s as f32 / steps as f32);
+            mesh.colored_vertex(
+                center + Vec2::new(a.cos(), a.sin()) * band.r_out,
+                band.c_out,
+            );
+        }
+        for s in 0..steps as u32 {
+            mesh.add_triangle(center_idx, out_start + s, out_start + s + 1);
+        }
+        return;
+    }
+
+    let in_start = mesh.vertices.len() as u32;
+    for s in 0..=steps {
+        let a = a0 + delta * (s as f32 / steps as f32);
+        mesh.colored_vertex(center + Vec2::new(a.cos(), a.sin()) * band.r_in, band.c_in);
+    }
+    let out_start = mesh.vertices.len() as u32;
+    for s in 0..=steps {
+        let a = a0 + delta * (s as f32 / steps as f32);
+        mesh.colored_vertex(
+            center + Vec2::new(a.cos(), a.sin()) * band.r_out,
+            band.c_out,
+        );
+    }
+    for s in 0..steps as u32 {
+        push_strip_quad(
+            mesh,
+            in_start + s,
+            out_start + s,
+            in_start + s + 1,
+            out_start + s + 1,
+        );
+    }
+}
+
+/// Menambahkan cakram pendaran radial Gaussian mulus pada satu titik (dipakai kepala laser aktif & tap).
+pub fn add_radial_neon_disk(
+    mesh: &mut Mesh,
+    center: Pos2,
+    width_scale: f32,
+    laser_alpha: f32,
+    rgb: (u8, u8, u8),
+    segments: usize,
+) {
+    let s = width_scale.max(0.2);
+    for band in (0..NEON_PROFILE.len() - 1).rev() {
+        let (d0, mix0, a0) = NEON_PROFILE[band];
+        let (d1, mix1, a1) = NEON_PROFILE[band + 1];
+        let r_in = d0 * s;
+        let r_out = d1 * s;
+        let c_in = neon_stop_color(rgb, mix0, a0, laser_alpha);
+        let c_out = neon_stop_color(rgb, mix1, a1, laser_alpha);
+
+        if r_in <= 1e-4 {
+            let center_idx = mesh.vertices.len() as u32;
+            mesh.colored_vertex(center, c_in);
+            let out_start = mesh.vertices.len() as u32;
+            for i in 0..=segments {
+                let ang = (i as f32 / segments as f32) * std::f32::consts::TAU;
+                mesh.colored_vertex(center + Vec2::new(ang.cos(), ang.sin()) * r_out, c_out);
+            }
+            for i in 0..segments as u32 {
+                mesh.add_triangle(center_idx, out_start + i, out_start + i + 1);
+            }
+        } else {
+            let in_start = mesh.vertices.len() as u32;
+            for i in 0..=segments {
+                let ang = (i as f32 / segments as f32) * std::f32::consts::TAU;
+                mesh.colored_vertex(center + Vec2::new(ang.cos(), ang.sin()) * r_in, c_in);
+            }
+            let out_start = mesh.vertices.len() as u32;
+            for i in 0..=segments {
+                let ang = (i as f32 / segments as f32) * std::f32::consts::TAU;
+                mesh.colored_vertex(center + Vec2::new(ang.cos(), ang.sin()) * r_out, c_out);
+            }
+            for i in 0..segments as u32 {
+                push_strip_quad(
+                    mesh,
+                    in_start + i,
+                    out_start + i,
+                    in_start + i + 1,
+                    out_start + i + 1,
+                );
+            }
+        }
+    }
+}
+
+/// Menghasilkan satu mesh neon Gaussian kontinu multi-stop tanpa batas piksel (mendukung mode Solid & Rainbow).
+pub fn tessellate_laser_neon_beam<F>(
+    points: &[Pos2],
+    width_scale: f32,
+    laser_alpha: f32,
+    color_at: F,
+) -> Mesh
+where
+    F: Fn(f32) -> (u8, u8, u8),
+{
+    let mut mesh = Mesh::default();
+    if points.is_empty() || laser_alpha <= 0.0 || width_scale <= 0.0 {
+        return mesh;
+    }
+
+    let mut filtered: Vec<Pos2> = Vec::with_capacity(points.len());
+    for &p in points {
+        if let Some(&last) = filtered.last()
+            && (p - last).length_sq() < 0.5625
+        {
+            continue;
+        }
+        filtered.push(p);
+    }
+    if let Some(&last) = points.last() {
+        if filtered
+            .last()
+            .is_none_or(|&p| (p - last).length_sq() >= 0.5625)
+        {
+            filtered.push(last);
+        } else if filtered.len() > 1 {
+            *filtered.last_mut().unwrap() = last;
+        }
+    }
+
+    if filtered.len() < 2 {
+        if let Some(&p) = filtered.first() {
+            add_radial_neon_disk(&mut mesh, p, width_scale, laser_alpha, color_at(0.0), 22);
+        }
+        return mesh;
+    }
+
+    let pts = &filtered;
+    let m = pts.len();
+    let mut arc_lengths = Vec::with_capacity(m);
+    arc_lengths.push(0.0_f32);
+    for i in 1..m {
+        arc_lengths.push(arc_lengths[i - 1] + (pts[i] - pts[i - 1]).length());
+    }
+
+    let mut seg_dirs = Vec::with_capacity(m - 1);
+    let mut seg_norms = Vec::with_capacity(m - 1);
+    for i in 0..(m - 1) {
+        let d = pts[i + 1] - pts[i];
+        let len = d.length();
+        let dir = if len > 1e-4 {
+            d / len
+        } else {
+            Vec2::new(1.0, 0.0)
+        };
+        seg_dirs.push(dir);
+        seg_norms.push(Vec2::new(-dir.y, dir.x));
+    }
+
+    let s = width_scale.max(0.2);
+    let rgbs: Vec<(u8, u8, u8)> = arc_lengths.iter().map(|&arc| color_at(arc)).collect();
+
+    // Render dari pita terluar (transparan) menuju inti putih terdalam agar inti terang selalu bersih di atas tikungan tajam
+    for band in (0..NEON_PROFILE.len() - 1).rev() {
+        let (d0, mix0, a0) = NEON_PROFILE[band];
+        let (d1, mix1, a1) = NEON_PROFILE[band + 1];
+        let r_in = d0 * s;
+        let r_out = d1 * s;
+
+        let c_in_0 = neon_stop_color(rgbs[0], mix0, a0, laser_alpha);
+        let c_out_0 = neon_stop_color(rgbs[0], mix1, a1, laser_alpha);
+        add_ring_semicircle(
+            &mut mesh,
+            pts[0],
+            RadialBand {
+                r_in,
+                r_out,
+                c_in: c_in_0,
+                c_out: c_out_0,
+            },
+            -seg_dirs[0],
+            18,
+        );
+
+        let n0 = seg_norms[0];
+        let mut prev_l_out = pts[0] + n0 * r_out;
+        let mut prev_r_out = pts[0] - n0 * r_out;
+        let mut cur_li = mesh.vertices.len() as u32;
+        mesh.colored_vertex(pts[0] + n0 * r_in, c_in_0);
+        let mut cur_lo = mesh.vertices.len() as u32;
+        mesh.colored_vertex(prev_l_out, c_out_0);
+        let mut cur_ri = mesh.vertices.len() as u32;
+        mesh.colored_vertex(pts[0] - n0 * r_in, c_in_0);
+        let mut cur_ro = mesh.vertices.len() as u32;
+        mesh.colored_vertex(prev_r_out, c_out_0);
+
+        for i in 1..(m - 1) {
+            let p = pts[i];
+            let c_in = neon_stop_color(rgbs[i], mix0, a0, laser_alpha);
+            let c_out = neon_stop_color(rgbs[i], mix1, a1, laser_alpha);
+            let t_in = seg_dirs[i - 1];
+            let n_in = seg_norms[i - 1];
+            let t_out = seg_dirs[i];
+            let n_out = seg_norms[i];
+
+            let cos_turn = t_in.dot(t_out).clamp(-1.0, 1.0);
+            let cross = t_in.x * t_out.y - t_in.y * t_out.x;
+
+            if cos_turn >= 0.94 {
+                let sum_n = n_in + n_out;
+                let bisect = if sum_n.length_sq() > 1e-5 {
+                    sum_n.normalized()
+                } else {
+                    n_out
+                };
+                let miter = (1.0 / bisect.dot(n_in).abs().max(0.94)).clamp(1.0, 1.04);
+                let l_out = p + bisect * (r_out * miter);
+                let r_out_pos = p - bisect * (r_out * miter);
+                if (l_out - prev_l_out).dot(t_in) >= 0.0
+                    && (r_out_pos - prev_r_out).dot(t_in) >= 0.0
+                {
+                    let n_li = mesh.vertices.len() as u32;
+                    mesh.colored_vertex(p + bisect * (r_in * miter), c_in);
+                    let n_lo = mesh.vertices.len() as u32;
+                    mesh.colored_vertex(l_out, c_out);
+                    let n_ri = mesh.vertices.len() as u32;
+                    mesh.colored_vertex(p - bisect * (r_in * miter), c_in);
+                    let n_ro = mesh.vertices.len() as u32;
+                    mesh.colored_vertex(r_out_pos, c_out);
+
+                    push_strip_quad(&mut mesh, cur_li, cur_lo, n_li, n_lo);
+                    push_strip_quad(&mut mesh, cur_ri, cur_ro, n_ri, n_ro);
+
+                    cur_li = n_li;
+                    cur_lo = n_lo;
+                    cur_ri = n_ri;
+                    cur_ro = n_ro;
+                    prev_l_out = l_out;
+                    prev_r_out = r_out_pos;
+                    continue;
+                }
+            }
+
+            let in_li = mesh.vertices.len() as u32;
+            mesh.colored_vertex(p + n_in * r_in, c_in);
+            let in_lo = mesh.vertices.len() as u32;
+            mesh.colored_vertex(p + n_in * r_out, c_out);
+            let in_ri = mesh.vertices.len() as u32;
+            mesh.colored_vertex(p - n_in * r_in, c_in);
+            let in_ro = mesh.vertices.len() as u32;
+            mesh.colored_vertex(p - n_in * r_out, c_out);
+
+            push_strip_quad(&mut mesh, cur_li, cur_lo, in_li, in_lo);
+            push_strip_quad(&mut mesh, cur_ri, cur_ro, in_ri, in_ro);
+
+            let (start_norm, end_norm) = if cross >= 0.0 {
+                (-n_in, -n_out)
+            } else {
+                (n_in, n_out)
+            };
+            add_ring_join_arc(
+                &mut mesh,
+                p,
+                RadialBand {
+                    r_in,
+                    r_out,
+                    c_in,
+                    c_out,
+                },
+                start_norm,
+                end_norm,
+                cross,
+            );
+
+            let out_l_out = p + n_out * r_out;
+            let out_r_out = p - n_out * r_out;
+            cur_li = mesh.vertices.len() as u32;
+            mesh.colored_vertex(p + n_out * r_in, c_in);
+            cur_lo = mesh.vertices.len() as u32;
+            mesh.colored_vertex(out_l_out, c_out);
+            cur_ri = mesh.vertices.len() as u32;
+            mesh.colored_vertex(p - n_out * r_in, c_in);
+            cur_ro = mesh.vertices.len() as u32;
+            mesh.colored_vertex(out_r_out, c_out);
+            prev_l_out = out_l_out;
+            prev_r_out = out_r_out;
+        }
+
+        let last_idx = m - 1;
+        let c_in_last = neon_stop_color(rgbs[last_idx], mix0, a0, laser_alpha);
+        let c_out_last = neon_stop_color(rgbs[last_idx], mix1, a1, laser_alpha);
+        let t_last = seg_dirs[last_idx - 1];
+        let n_last = seg_norms[last_idx - 1];
+
+        let end_li = mesh.vertices.len() as u32;
+        mesh.colored_vertex(pts[last_idx] + n_last * r_in, c_in_last);
+        let end_lo = mesh.vertices.len() as u32;
+        mesh.colored_vertex(pts[last_idx] + n_last * r_out, c_out_last);
+        let end_ri = mesh.vertices.len() as u32;
+        mesh.colored_vertex(pts[last_idx] - n_last * r_in, c_in_last);
+        let end_ro = mesh.vertices.len() as u32;
+        mesh.colored_vertex(pts[last_idx] - n_last * r_out, c_out_last);
+
+        push_strip_quad(&mut mesh, cur_li, cur_lo, end_li, end_lo);
+        push_strip_quad(&mut mesh, cur_ri, cur_ro, end_ri, end_ro);
+
+        add_ring_semicircle(
+            &mut mesh,
+            pts[last_idx],
+            RadialBand {
+                r_in,
+                r_out,
+                c_in: c_in_last,
+                c_out: c_out_last,
+            },
+            t_last,
+            18,
+        );
+    }
+
+    mesh
+}
+
+/// Render Efek Laser Pointer (Gaussian Neon Glow Kontinu: mode Solid atau Rainbow)
 pub fn render_laser_trail(
     painter: &Painter,
     state: &CanvasState,
@@ -394,57 +847,36 @@ pub fn render_laser_trail(
         all_strokes_to_draw.push(state.current_laser_stroke.as_slice());
     }
 
-    let outer_a = (44.0 * laser_alpha) as u8;
-    let halo_a = (120.0 * laser_alpha) as u8;
-    let core_a = (238.0 * laser_alpha) as u8;
-    let beam_col = Color32::from_rgba_unmultiplied(255, 255, 255, (250.0 * laser_alpha) as u8);
-
-    let (solid_r, solid_g, solid_b) = (
+    let solid_rgb = (
         state.laser_color.r(),
         state.laser_color.g(),
         state.laser_color.b(),
     );
-    let outer_solid = Color32::from_rgba_unmultiplied(solid_r, solid_g, solid_b, outer_a);
-    let halo_solid = Color32::from_rgba_unmultiplied(solid_r, solid_g, solid_b, halo_a);
-    let core_solid = Color32::from_rgba_unmultiplied(solid_r, solid_g, solid_b, core_a);
 
     for stroke in &all_strokes_to_draw {
         let smoothed = smooth_laser_points(stroke);
         if smoothed.len() > 1 {
-            match state.laser_color_mode {
+            let mesh = match state.laser_color_mode {
                 LaserColorMode::Solid => {
-                    // Layer 1: Outer Neon Aura / Ambient Glow
-                    painter.add(tessellate_laser_layer(&smoothed, 20.0, outer_solid));
-                    // Layer 2: Mid Neon Halo
-                    painter.add(tessellate_laser_layer(&smoothed, 11.0, halo_solid));
-                    // Layer 3: Solid Vibrant Core
-                    painter.add(tessellate_laser_layer(&smoothed, 5.0, core_solid));
+                    tessellate_laser_neon_beam(&smoothed, 1.0, laser_alpha, |_| solid_rgb)
                 }
                 LaserColorMode::Rainbow => {
-                    // Layer 1..3: Rainbow Spectrum Aura, Halo & Core
-                    painter.add(tessellate_laser_layer_colored(&smoothed, 20.0, |arc| {
-                        rainbow_laser_color(arc, time_secs, outer_a)
-                    }));
-                    painter.add(tessellate_laser_layer_colored(&smoothed, 11.0, |arc| {
-                        rainbow_laser_color(arc, time_secs, halo_a)
-                    }));
-                    painter.add(tessellate_laser_layer_colored(&smoothed, 5.0, |arc| {
-                        rainbow_laser_color(arc, time_secs, core_a)
-                    }));
+                    tessellate_laser_neon_beam(&smoothed, 1.0, laser_alpha, |arc| {
+                        let c = rainbow_laser_color(arc, time_secs, 255);
+                        (c.r(), c.g(), c.b())
+                    })
                 }
-            }
-
-            // Layer 4: Hotspot White Laser Beam Center
-            painter.add(tessellate_laser_layer(&smoothed, 2.2, beam_col));
+            };
+            painter.add(mesh);
         }
     }
 
-    // Ujung kepala laser aktif (jika sedang menggambar)
+    // Ujung kepala laser aktif dengan gradasi radial halus
     if state.laser_is_drawing
         && let Some(last_p) = state.current_laser_stroke.last()
     {
-        let (hr, hg, hb) = match state.laser_color_mode {
-            LaserColorMode::Solid => (solid_r, solid_g, solid_b),
+        let head_rgb = match state.laser_color_mode {
+            LaserColorMode::Solid => solid_rgb,
             LaserColorMode::Rainbow => {
                 let total_arc: f32 = state
                     .current_laser_stroke
@@ -455,20 +887,8 @@ pub fn render_laser_trail(
                 (c.r(), c.g(), c.b())
             }
         };
-        painter.circle_filled(
-            *last_p,
-            11.0,
-            Color32::from_rgba_unmultiplied(hr, hg, hb, (90.0 * laser_alpha) as u8),
-        );
-        painter.circle_filled(
-            *last_p,
-            5.5,
-            Color32::from_rgba_unmultiplied(hr, hg, hb, (230.0 * laser_alpha) as u8),
-        );
-        painter.circle_filled(
-            *last_p,
-            2.8,
-            Color32::from_rgba_unmultiplied(255, 255, 255, (255.0 * laser_alpha) as u8),
-        );
+        let mut head_mesh = Mesh::default();
+        add_radial_neon_disk(&mut head_mesh, *last_p, 1.05, laser_alpha, head_rgb, 24);
+        painter.add(head_mesh);
     }
 }
