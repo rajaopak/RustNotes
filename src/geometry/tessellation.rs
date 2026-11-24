@@ -101,6 +101,24 @@ pub fn smooth_stroke_points(points: &[StrokePoint], steps_per_segment: usize) ->
         return clean;
     }
 
+    // Hilangkan noise tangga piksel 1px mouse pada segmen mikro sambil menjaga sudut sengaja pada garis panjang.
+    if clean.len() >= 5 {
+        for _pass in 0..2 {
+            let prev_snapshot = clean.clone();
+            for i in 1..(clean.len() - 1) {
+                let prev = prev_snapshot[i - 1].to_pos2();
+                let curr = prev_snapshot[i].to_pos2();
+                let next = prev_snapshot[i + 1].to_pos2();
+                let len_in = (curr - prev).length();
+                let len_out = (next - curr).length();
+                if len_in.min(len_out) < 3.0 && len_in.max(len_out) < 7.0 {
+                    clean[i].x = 0.25 * prev.x + 0.50 * curr.x + 0.25 * next.x;
+                    clean[i].y = 0.25 * prev.y + 0.50 * curr.y + 0.25 * next.y;
+                }
+            }
+        }
+    }
+
     let n = clean.len();
     let base_steps = steps_per_segment.clamp(2, 8);
     let mut result = Vec::with_capacity(n * base_steps);
@@ -135,14 +153,14 @@ pub fn smooth_stroke_points(points: &[StrokePoint], steps_per_segment: usize) ->
         }
 
         let cos_turn = (v_in / len_in).dot(v_out / len_out).clamp(-1.0, 1.0);
-        if cos_turn <= -0.15 {
-            // Sudut lancip / balik arah tajam: pertahankan puncak sudut secara eksak
+        if cos_turn <= -0.15 && (len_in.min(len_out) >= 2.5 || n <= 4) {
+            // Sudut lancip / balik arah tajam yang disengaja: pertahankan puncak sudut secara eksak
             entry_pts[i] = clean[i].clone();
             exit_pts[i] = clean[i].clone();
             is_sharp_corner[i] = true;
-        } else if cos_turn < 0.65 {
-            // Sudut belok menengah (49..98 derajat): batasi jangkauan pembulatan di sekitar sudut
-            let t_norm = ((cos_turn - (-0.15)) / 0.80).clamp(0.0, 1.0);
+        } else if cos_turn < 0.45 {
+            // Sudut belok menengah (63..98 derajat): batasi jangkauan pembulatan di sekitar sudut
+            let t_norm = ((cos_turn - (-0.15)) / 0.60).clamp(0.0, 1.0);
             let alpha = 0.08 + 0.42 * (t_norm * t_norm);
             let d_in = (len_in * alpha)
                 .min(MAX_CORNER_ROUND_DIST)
@@ -216,8 +234,8 @@ pub fn smooth_stroke_points(points: &[StrokePoint], steps_per_segment: usize) ->
         let local_steps = if sagitta < 0.02 && dp < 0.02 && span_len < 2.0 {
             base_steps.min(2)
         } else {
-            let extra = (sagitta * 0.8).round() as usize;
-            (base_steps + extra).clamp(base_steps, 10)
+            let extra = (sagitta * 1.1).round() as usize;
+            (base_steps + extra).clamp(base_steps, 12)
         };
 
         for step in 1..=local_steps {
@@ -840,8 +858,10 @@ fn tessellate_single_ribbon(
         seg_norms.push(norm);
     }
 
-    // Start semicircle cap (untuk Pen, Pencil, dan Highlighter agar ujung membulat seperti kapsul)
-    let cap_segments = if is_highlighter { 16 } else { 10 };
+    // Start semicircle cap (untuk Pen, Pencil, dan Highlighter agar ujung membulat seperti kapsul).
+    // Hitung segmen berdasarkan ketebalan dalam koordinat halaman agar tetap 100% zoom-invariant.
+    let cap_segments = ((page_base_width * 0.45).ceil() as usize).clamp(12, 24);
+    let is_opaque = !is_highlighter && color.a() == 255;
     let start_outward = -seg_dirs[0];
     add_semicircle_cap(
         mesh,
@@ -863,7 +883,7 @@ fn tessellate_single_ribbon(
     let mut curr_r_idx = mesh.vertices.len() as u32;
     mesh.colored_vertex(prev_right, color);
 
-    // Bangun simpul pita sepanjang titik interior dengan Miter-Compensated Bisector & Round Join
+    // Bangun simpul pita sepanjang titik interior bebas spike (tanpa ekstrusi tangensial keluar radius).
     for i in 1..(m - 1) {
         let p = screen_pts[i];
         let r = radii[i];
@@ -875,103 +895,105 @@ fn tessellate_single_ribbon(
         let cos_turn = t_in.dot(t_out).clamp(-1.0, 1.0);
         let cross = t_in.x * t_out.y - t_in.y * t_out.x;
 
-        if cos_turn >= 0.82 {
-            // Belokan halus: gunakan bisector normal dengan kompensasi ketebalan
+        if is_opaque {
+            if cos_turn >= 0.998 {
+                let sum_n = n_in + n_out;
+                let bisect = if sum_n.length_sq() > 1e-5 {
+                    sum_n.normalized()
+                } else {
+                    n_out
+                };
+                let left = p + bisect * r;
+                let right = p - bisect * r;
+
+                let next_l_idx = mesh.vertices.len() as u32;
+                mesh.colored_vertex(left, color);
+                let next_r_idx = mesh.vertices.len() as u32;
+                mesh.colored_vertex(right, color);
+
+                mesh.add_triangle(curr_l_idx, curr_r_idx, next_l_idx);
+                mesh.add_triangle(curr_r_idx, next_r_idx, next_l_idx);
+
+                curr_l_idx = next_l_idx;
+                curr_r_idx = next_r_idx;
+                prev_left = left;
+                prev_right = right;
+                continue;
+            }
+        } else if cos_turn >= 0.95 {
             let sum_n = n_in + n_out;
             let bisect = if sum_n.length_sq() > 1e-5 {
                 sum_n.normalized()
             } else {
                 n_out
             };
-            let miter_scale = (1.0 / bisect.dot(n_in).abs().max(0.82)).clamp(1.0, 1.22);
+            let miter_scale = (1.0 / bisect.dot(n_in).abs().max(0.95)).clamp(1.0, 1.03);
             let eff_r = r * miter_scale;
-
-            let mut left = p + bisect * eff_r;
-            let mut right = p - bisect * eff_r;
-
-            // Cegah lipatan ke belakang (backward self-intersection) pada sisi dalam tikungan
+            let left = p + bisect * eff_r;
+            let right = p - bisect * eff_r;
             let l_proj = (left - prev_left).dot(t_in);
-            if l_proj < 0.0 {
-                left -= t_in * l_proj;
-            }
             let r_proj = (right - prev_right).dot(t_in);
-            if r_proj < 0.0 {
-                right -= t_in * r_proj;
+            if l_proj >= 0.0 && r_proj >= 0.0 {
+                let next_l_idx = mesh.vertices.len() as u32;
+                mesh.colored_vertex(left, color);
+                let next_r_idx = mesh.vertices.len() as u32;
+                mesh.colored_vertex(right, color);
+
+                mesh.add_triangle(curr_l_idx, curr_r_idx, next_l_idx);
+                mesh.add_triangle(curr_r_idx, next_r_idx, next_l_idx);
+
+                curr_l_idx = next_l_idx;
+                curr_r_idx = next_r_idx;
+                prev_left = left;
+                prev_right = right;
+                continue;
             }
+        }
 
-            let next_l_idx = mesh.vertices.len() as u32;
-            mesh.colored_vertex(left, color);
-            let next_r_idx = mesh.vertices.len() as u32;
-            mesh.colored_vertex(right, color);
+        // Sambungan tegak lurus + kipas Round Join melingkar pada belokan atau pelipatan dalam:
+        // seluruh vertex berada persis pada jarak <= r dari p sehingga spike secara matematis mustahil terjadi.
+        let in_left = p + n_in * r;
+        let in_right = p - n_in * r;
+        let in_l_idx = mesh.vertices.len() as u32;
+        mesh.colored_vertex(in_left, color);
+        let in_r_idx = mesh.vertices.len() as u32;
+        mesh.colored_vertex(in_right, color);
 
-            mesh.add_triangle(curr_l_idx, curr_r_idx, next_l_idx);
-            mesh.add_triangle(curr_r_idx, next_r_idx, next_l_idx);
+        mesh.add_triangle(curr_l_idx, curr_r_idx, in_l_idx);
+        mesh.add_triangle(curr_r_idx, in_r_idx, in_l_idx);
 
-            curr_l_idx = next_l_idx;
-            curr_r_idx = next_r_idx;
-            prev_left = left;
-            prev_right = right;
-        } else {
-            // Belokan tajam (> ~35 derajat) pada Pen/Pencil:
-            // Akhiri segmen masuk secara tegak lurus, gambar kipas Round Join pada sisi luar,
-            // lalu mulai segmen keluar secara tegak lurus tanpa celah maupun lonjakan miter.
-            let mut in_left = p + n_in * r;
-            let mut in_right = p - n_in * r;
-            let l_proj = (in_left - prev_left).dot(t_in);
-            if l_proj < 0.0 {
-                in_left -= t_in * l_proj;
-            }
-            let r_proj = (in_right - prev_right).dot(t_in);
-            if r_proj < 0.0 {
-                in_right -= t_in * r_proj;
-            }
+        let out_left = p + n_out * r;
+        let out_right = p - n_out * r;
+        let out_l_idx = mesh.vertices.len() as u32;
+        mesh.colored_vertex(out_left, color);
+        let out_r_idx = mesh.vertices.len() as u32;
+        mesh.colored_vertex(out_right, color);
 
-            let in_l_idx = mesh.vertices.len() as u32;
-            mesh.colored_vertex(in_left, color);
-            let in_r_idx = mesh.vertices.len() as u32;
-            mesh.colored_vertex(in_right, color);
+        let center_idx = mesh.vertices.len() as u32;
+        mesh.colored_vertex(p, color);
 
-            mesh.add_triangle(curr_l_idx, curr_r_idx, in_l_idx);
-            mesh.add_triangle(curr_r_idx, in_r_idx, in_l_idx);
-
-            let out_left = p + n_out * r;
-            let out_right = p - n_out * r;
-            let out_l_idx = mesh.vertices.len() as u32;
-            mesh.colored_vertex(out_left, color);
-            let out_r_idx = mesh.vertices.len() as u32;
-            mesh.colored_vertex(out_right, color);
-
-            let center_idx = mesh.vertices.len() as u32;
-            mesh.colored_vertex(p, color);
-
-            // Tutup sisi dalam sambungan melalui titik pusat agar kedap celah (watertight).
-            // Untuk highlighter, hindari segitiga chord pada sisi luar agar tidak tumpang tindih dengan kipas round join.
-            if is_highlighter {
-                if cross >= 0.0 {
-                    mesh.add_triangle(center_idx, in_l_idx, out_l_idx);
-                } else {
-                    mesh.add_triangle(center_idx, in_r_idx, out_r_idx);
-                }
-            } else {
+        if !is_opaque {
+            if cross >= 0.0 {
                 mesh.add_triangle(center_idx, in_l_idx, out_l_idx);
+            } else {
                 mesh.add_triangle(center_idx, in_r_idx, out_r_idx);
             }
-
-            // Bangun busur melingkar (Round Join fan) pada sisi luar belokan.
-            // Karena n = (-dir.y, dir.x), ketika cross > 0 maka n_in mengarah ke sisi dalam (cekung)
-            // dan -n_in mengarah ke sisi luar (cembung).
-            let (start_norm, end_norm) = if cross >= 0.0 {
-                (-n_in, -n_out)
-            } else {
-                (n_in, n_out)
-            };
-            add_round_join_fan(mesh, center_idx, p, r, start_norm, end_norm, cross, color);
-
-            curr_l_idx = out_l_idx;
-            curr_r_idx = out_r_idx;
-            prev_left = out_left;
-            prev_right = out_right;
+        } else {
+            mesh.add_triangle(center_idx, in_l_idx, out_l_idx);
+            mesh.add_triangle(center_idx, in_r_idx, out_r_idx);
         }
+
+        let (start_norm, end_norm) = if cross >= 0.0 {
+            (-n_in, -n_out)
+        } else {
+            (n_in, n_out)
+        };
+        add_round_join_fan(mesh, center_idx, p, r, start_norm, end_norm, cross, color);
+
+        curr_l_idx = out_l_idx;
+        curr_r_idx = out_r_idx;
+        prev_left = out_left;
+        prev_right = out_right;
     }
 
     // Titik akhir pita (i = m - 1)
@@ -981,16 +1003,8 @@ fn tessellate_single_ribbon(
     let t_last = seg_dirs[last_idx - 1];
     let n_last = seg_norms[last_idx - 1];
 
-    let mut left_last = p_last + n_last * r_last;
-    let mut right_last = p_last - n_last * r_last;
-    let l_proj = (left_last - prev_left).dot(t_last);
-    if l_proj < 0.0 {
-        left_last -= t_last * l_proj;
-    }
-    let r_proj = (right_last - prev_right).dot(t_last);
-    if r_proj < 0.0 {
-        right_last -= t_last * r_proj;
-    }
+    let left_last = p_last + n_last * r_last;
+    let right_last = p_last - n_last * r_last;
 
     let end_l_idx = mesh.vertices.len() as u32;
     mesh.colored_vertex(left_last, color);
@@ -1037,7 +1051,7 @@ fn add_round_join_fan(
         };
     }
 
-    let steps = ((delta.abs() / 0.30).ceil() as usize).clamp(2, 10);
+    let steps = ((delta.abs() / 0.18).ceil() as usize).clamp(2, 16);
     let start_idx = mesh.vertices.len() as u32;
     for s in 0..=steps {
         let t = s as f32 / steps as f32;
