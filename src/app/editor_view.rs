@@ -73,7 +73,13 @@ impl RustNotesApp {
             };
             (zd, ptr, sd)
         });
-        if zoom_delta != 0.0 {
+        if zoom_delta != 0.0
+            && !self.has_blocking_canvas_overlay(ctx)
+            && pointer_pos.is_none_or(|ptr| {
+                ctx.layer_id_at(ptr)
+                    .is_none_or(|layer| layer.order == egui::Order::Background)
+            })
+        {
             let target_zoom = (self.canvas_state.zoom + zoom_delta).clamp(
                 crate::canvas::CanvasState::MIN_ZOOM,
                 crate::canvas::CanvasState::MAX_ZOOM,
@@ -99,15 +105,9 @@ impl RustNotesApp {
         }
 
         // Pada SinglePage mode, izinkan scroll roda mouse / touchpad menggeser kertas di dalam halaman tunggal
-        // (tanpa berpindah halaman), dan pada ContinuousVertical izinkan scroll horizontal touchpad
-        if raw_scroll_delta != Vec2::ZERO
-            && !self.show_more_menu_popup
-            && !self.show_tool_popup
-            && !self.show_doc_title_popup
-            && !self.show_page_resize_modal
-            && let Some(ptr) = pointer_pos
-            && self.last_canvas_viewport_rect.contains(ptr)
-        {
+        // (tanpa berpindah halaman), dan pada ContinuousVertical izinkan scroll horizontal touchpad.
+        // Abaikan input scroll jika ada modal/popup terbuka atau pointer berada di atas layer overlay (bukan kanvas).
+        if raw_scroll_delta != Vec2::ZERO && self.can_canvas_receive_scroll(ctx, pointer_pos) {
             match self.view_mode {
                 ViewMode::SinglePage => {
                     self.canvas_pan_offset += raw_scroll_delta;
@@ -1129,5 +1129,182 @@ impl RustNotesApp {
 
         // Editor Modal Dialogs
         self.render_editor_modals(ctx, nb_idx);
+    }
+
+    /// Mengembalikan `true` jika ada modal/popup pemblokir yang sedang terbuka di atas kanvas editor.
+    fn has_blocking_canvas_overlay(&self, ctx: &egui::Context) -> bool {
+        self.show_more_menu_popup
+            || self.show_tool_popup
+            || self.show_doc_title_popup
+            || self.show_page_resize_modal
+            || self.show_add_page_modal
+            || self.show_save_template_modal
+            || self.show_new_folder_modal
+            || self.show_add_outline_modal
+            || self.show_new_notebook_modal
+            || self.show_shortcut_modal
+            || self.show_ocr_modal
+            || self.show_about_modal
+            || self.canvas_state.show_equation_dialog
+            || ctx.memory(|m| m.any_popup_open())
+    }
+
+    /// Mengembalikan `true` jika pointer berada di dalam area kanvas dan tidak tertutup layer overlay (`Order::Middle` dst.).
+    fn is_pointer_on_canvas_layer(&self, ctx: &egui::Context, ptr: Pos2) -> bool {
+        self.last_canvas_viewport_rect.contains(ptr)
+            && ctx
+                .layer_id_at(ptr)
+                .is_none_or(|layer| layer.order == egui::Order::Background)
+    }
+
+    /// Menentukan apakah event scroll roda mouse/touchpad boleh menggeser kanvas editor.
+    fn can_canvas_receive_scroll(&self, ctx: &egui::Context, pointer_pos: Option<Pos2>) -> bool {
+        !self.has_blocking_canvas_overlay(ctx)
+            && pointer_pos.is_some_and(|ptr| self.is_pointer_on_canvas_layer(ctx, ptr))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Notebook, PageTemplate};
+
+    fn test_app_with_single_page() -> RustNotesApp {
+        let mut app = RustNotesApp::default();
+        let nb = Notebook::new("Test Notebook", PageTemplate::Blank, Color32::WHITE);
+        let nb_id = nb.id.clone();
+        app.library.notebooks = vec![nb];
+        app.active_notebook_id = Some(nb_id);
+        app.view_mode = ViewMode::SinglePage;
+        app.canvas_state.zoom = 1.8;
+        app
+    }
+
+    fn step_editor(app: &mut RustNotesApp, ctx: &egui::Context, events: Vec<egui::Event>) {
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, 800.0))),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            app.render_editor_view(ctx);
+        });
+    }
+
+    #[test]
+    fn test_single_page_scroll_and_zoom_blocked_when_shortcut_modal_open() {
+        let ctx = egui::Context::default();
+        let mut app = test_app_with_single_page();
+
+        // 1. Render frame awal agar viewport kanvas tercatat
+        step_editor(&mut app, &ctx, vec![]);
+        let center = app.last_canvas_viewport_rect.center();
+        assert!(app.last_canvas_viewport_rect.is_positive());
+
+        // 2. Saat modal tertutup, scroll roda mouse di atas kanvas menggeser halaman SinglePage
+        step_editor(
+            &mut app,
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(center),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: Vec2::new(0.0, -80.0),
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert!(
+            app.canvas_pan_offset.y < 0.0,
+            "SinglePage scroll harus bekerja normal saat tidak ada modal"
+        );
+
+        // 3. Saat modal Keyboard Shortcuts & Settings terbuka, scroll di dalamnya TIDAK boleh menggeser halaman belakang
+        app.show_shortcut_modal = true;
+        let pan_before = app.canvas_pan_offset;
+        let zoom_before = app.canvas_state.zoom;
+
+        for _ in 0..2 {
+            step_editor(
+                &mut app,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(center),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: Vec2::new(0.0, -120.0),
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            assert_eq!(
+                app.canvas_pan_offset, pan_before,
+                "Halaman SinglePage di belakang modal Keybinds tidak boleh ikut tergulir"
+            );
+        }
+
+        // 4. Ctrl+Scroll saat modal terbuka juga tidak boleh mengubah zoom kanvas di belakang
+        step_editor(
+            &mut app,
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(center),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: Vec2::new(0.0, 120.0),
+                    modifiers: egui::Modifiers::COMMAND,
+                },
+            ],
+        );
+        assert_eq!(
+            app.canvas_state.zoom, zoom_before,
+            "Zoom kanvas tidak boleh berubah saat modal Keybinds terbuka"
+        );
+
+        // 5. Setelah modal ditutup, scroll SinglePage kembali berfungsi normal
+        app.show_shortcut_modal = false;
+        step_editor(&mut app, &ctx, vec![]);
+        step_editor(
+            &mut app,
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(center),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: Vec2::new(0.0, -60.0),
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert!(
+            app.canvas_pan_offset.y < pan_before.y,
+            "SinglePage scroll harus aktif kembali setelah modal ditutup"
+        );
+    }
+
+    #[test]
+    fn test_single_page_scroll_blocked_when_pointer_over_floating_window_layer() {
+        let ctx = egui::Context::default();
+        let mut app = test_app_with_single_page();
+        app.show_in_doc_search = true;
+
+        // Jalankan 2 frame agar Window selesai auto-sizing & mendaftarkan rect layernya di egui::Memory
+        step_editor(&mut app, &ctx, vec![]);
+        step_editor(&mut app, &ctx, vec![]);
+
+        let floating_search_pos = ctx
+            .memory(|m| m.area_rect(egui::Id::new("🔍 Cari di Dokumen")))
+            .expect("Floating search window area must be registered")
+            .center();
+        let uncovered_canvas_pos = Pos2::new(400.0, 400.0);
+
+        assert!(
+            !app.can_canvas_receive_scroll(&ctx, Some(floating_search_pos)),
+            "Scroll di atas jendela mengambang (Order::Middle) tidak boleh diteruskan ke kanvas"
+        );
+        assert!(
+            app.can_canvas_receive_scroll(&ctx, Some(uncovered_canvas_pos)),
+            "Scroll di area kanvas yang tidak tertutup jendela mengambang tetap harus diterima"
+        );
     }
 }
