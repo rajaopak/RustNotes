@@ -468,6 +468,13 @@ fn handle_drag_started(
             };
             state.resize_corner = Some(corner);
             state.drag_start_pos = Some(page_p);
+            state.resize_initial_bounds = sel.rect;
+            state.resize_initial_objects = page
+                .objects
+                .iter()
+                .filter(|o| state.selected_ids.iter().any(|id| id == o.id()))
+                .map(|o| (o.id().to_string(), o.clone()))
+                .collect();
             state.push_undo(&page.id, &page.objects);
             return;
         }
@@ -1041,6 +1048,7 @@ fn handle_drag_moved(
                 }
                 state.drag_start_pos = Some(page_p);
             } else {
+                let init_b = state.resize_initial_bounds.unwrap_or(b);
                 let is_corner_handle = matches!(
                     corner,
                     ResizeCorner::NorthWest
@@ -1050,32 +1058,69 @@ fn handle_drag_moved(
                 );
 
                 let (origin, sx, sy) = match corner {
-                    ResizeCorner::SouthEast => (b.left_top(), true, true),
-                    ResizeCorner::NorthWest => (b.right_bottom(), true, true),
-                    ResizeCorner::NorthEast => (b.left_bottom(), true, true),
-                    ResizeCorner::SouthWest => (b.right_top(), true, true),
-                    ResizeCorner::East => (Pos2::new(b.left(), b.center().y), true, false),
-                    ResizeCorner::West => (Pos2::new(b.right(), b.center().y), true, false),
-                    ResizeCorner::South => (Pos2::new(b.center().x, b.top()), false, true),
-                    ResizeCorner::North => (Pos2::new(b.center().x, b.bottom()), false, true),
-                    _ => (b.center(), true, true),
+                    ResizeCorner::SouthEast => (init_b.left_top(), true, true),
+                    ResizeCorner::NorthWest => (init_b.right_bottom(), true, true),
+                    ResizeCorner::NorthEast => (init_b.left_bottom(), true, true),
+                    ResizeCorner::SouthWest => (init_b.right_top(), true, true),
+                    ResizeCorner::East => {
+                        (Pos2::new(init_b.left(), init_b.center().y), true, false)
+                    }
+                    ResizeCorner::West => {
+                        (Pos2::new(init_b.right(), init_b.center().y), true, false)
+                    }
+                    ResizeCorner::South => {
+                        (Pos2::new(init_b.center().x, init_b.top()), false, true)
+                    }
+                    ResizeCorner::North => {
+                        (Pos2::new(init_b.center().x, init_b.bottom()), false, true)
+                    }
+                    _ => (init_b.center(), true, true),
                 };
 
-                let orig_w = b.width().max(1.0);
-                let orig_h = b.height().max(1.0);
+                let orig_w = init_b.width().max(1.0);
+                let orig_h = init_b.height().max(1.0);
+                let min_extent = 4.0_f32;
+                let raw_dx = match corner {
+                    ResizeCorner::SouthEast | ResizeCorner::NorthEast | ResizeCorner::East => {
+                        (page_p.x - origin.x).max(min_extent)
+                    }
+                    ResizeCorner::NorthWest | ResizeCorner::SouthWest | ResizeCorner::West => {
+                        (origin.x - page_p.x).max(min_extent)
+                    }
+                    _ => (page_p.x - origin.x).abs().max(min_extent),
+                };
+                let raw_dy = match corner {
+                    ResizeCorner::SouthEast | ResizeCorner::SouthWest | ResizeCorner::South => {
+                        (page_p.y - origin.y).max(min_extent)
+                    }
+                    ResizeCorner::NorthWest | ResizeCorner::NorthEast | ResizeCorner::North => {
+                        (origin.y - page_p.y).max(min_extent)
+                    }
+                    _ => (page_p.y - origin.y).abs().max(min_extent),
+                };
+
                 let mut scale_x = if sx {
-                    ((page_p.x - origin.x).abs() / orig_w).max(0.05)
+                    (raw_dx / orig_w).clamp(0.05, 15.0)
                 } else {
                     1.0
                 };
                 let mut scale_y = if sy {
-                    ((page_p.y - origin.y).abs() / orig_h).max(0.05)
+                    (raw_dy / orig_h).clamp(0.05, 15.0)
                 } else {
                     1.0
                 };
 
-                if is_corner_handle || ui.input(|i| i.modifiers.shift) {
-                    let s = if (scale_x - 1.0).abs() > (scale_y - 1.0).abs() {
+                let keep_uniform = is_corner_handle
+                    || ui.input(|i| i.modifiers.shift)
+                    || sel.single_text_id.is_some();
+                if keep_uniform {
+                    let s = if sx && sy {
+                        if (scale_x - 1.0).abs() > (scale_y - 1.0).abs() {
+                            scale_x
+                        } else {
+                            scale_y
+                        }
+                    } else if sx {
                         scale_x
                     } else {
                         scale_y
@@ -1085,7 +1130,15 @@ fn handle_drag_moved(
                 }
 
                 for obj in &mut page.objects {
-                    if state.selected_ids.contains(&obj.id().to_string()) {
+                    if state.selected_ids.iter().any(|id| id == obj.id()) {
+                        // Terapkan skala satu kali dari snapshot awal agar event sub-frame tidak berakumulasi eksponensial.
+                        if let Some((_, initial_obj)) = state
+                            .resize_initial_objects
+                            .iter()
+                            .find(|(id, _)| id == obj.id())
+                        {
+                            *obj = initial_obj.clone();
+                        }
                         scale_object(obj, origin, scale_x, scale_y);
                         let id = obj.id().to_string();
                         state.mesh_cache.retain(|(k, _), _| k != &id);
@@ -1336,6 +1389,8 @@ fn handle_drag_stopped(
         state.rebuild_spatial_grid(&page.id, &page.objects);
     } else if let Some(corner) = state.resize_corner.take() {
         let drag_start_pos = state.drag_start_pos.take();
+        state.resize_initial_bounds = None;
+        state.resize_initial_objects.clear();
         // Task 8.3: Jika selesai drag control point, bersihkan jika hampir segaris tanpa clone objek
         if matches!(corner, ResizeCorner::ConnectorControl(_)) {
             let endpoints: Vec<(usize, Point2D, Point2D)> = page

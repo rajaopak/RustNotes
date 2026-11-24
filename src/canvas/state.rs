@@ -49,6 +49,8 @@ pub struct CanvasState {
     pub is_dragging_selection: bool,
     pub drag_start_pos: Option<Pos2>,
     pub resize_corner: Option<ResizeCorner>,
+    pub resize_initial_bounds: Option<Rect>,
+    pub resize_initial_objects: Vec<(String, DrawObject)>,
 
     // Laser pointer (glowing neon multi-stroke trail with idle decay)
     pub laser_strokes: Vec<Vec<Pos2>>,
@@ -179,6 +181,8 @@ impl Default for CanvasState {
             is_dragging_selection: false,
             drag_start_pos: None,
             resize_corner: None,
+            resize_initial_bounds: None,
+            resize_initial_objects: Vec::new(),
             laser_strokes: Vec::new(),
             current_laser_stroke: Vec::new(),
             laser_last_active: Instant::now(),
@@ -992,5 +996,7 @@ impl CanvasState {
         self.connector_snap_candidate = None;
         self.last_erase_sample_pos = None;
         self.lasso_points.clear();
+        self.resize_initial_bounds = None;
+        self.resize_initial_objects.clear();
     }
 }

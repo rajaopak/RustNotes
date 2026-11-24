@@ -1057,21 +1057,16 @@ pub fn render_inline_text_editor(
                         .max()
                         .unwrap_or(12)
                         .max(12) as f32;
-                    let scaled_font = (*font_size * state.zoom).clamp(10.0, 96.0);
+                    let scaled_font = (*font_size * state.zoom).clamp(6.0, 200.0);
                     let egui_family = font_family.to_egui_font_family();
                     let box_w = (max_chars * scaled_font * 0.62 + 28.0).max(180.0);
                     let box_h = ((lines_cnt + 0.6) * scaled_font * 1.35 + 12.0).max(36.0);
                     let edit_rect = Rect::from_min_size(screen_tl, Vec2::new(box_w, box_h));
 
-                    painter.rect_filled(
-                        edit_rect.expand(4.0),
-                        4.0,
-                        Color32::from_rgba_unmultiplied(255, 255, 255, 215),
-                    );
                     painter.rect_stroke(
-                        edit_rect.expand(4.0),
+                        edit_rect.expand(3.0),
                         4.0,
-                        Stroke::new(1.8_f32, Color32::from_rgb(0, 114, 206)),
+                        Stroke::new(1.2_f32, Color32::from_rgba_unmultiplied(0, 114, 206, 150)),
                         egui::StrokeKind::Outside,
                     );
 
@@ -1083,7 +1078,10 @@ pub fn render_inline_text_editor(
                         .hint_text("Ketik teks di sini...")
                         .frame(false)
                         .desired_width(box_w);
+                    let prev_bg = ui.visuals().extreme_bg_color;
+                    ui.visuals_mut().extreme_bg_color = Color32::TRANSPARENT;
                     let te_resp = ui.put(edit_rect, te);
+                    ui.visuals_mut().extreme_bg_color = prev_bg;
                     if state.focus_text_edit {
                         te_resp.request_focus();
                         state.focus_text_edit = false;
@@ -1187,15 +1185,13 @@ pub fn render_inline_text_editor(
                                 Vec2::new(screen_w, screen_h),
                             );
 
-                            painter.rect_filled(
-                                edit_rect.expand(4.0),
-                                4.0,
-                                Color32::from_rgba_unmultiplied(255, 255, 255, 215),
-                            );
                             painter.rect_stroke(
-                                edit_rect.expand(4.0),
+                                edit_rect.expand(3.0),
                                 4.0,
-                                Stroke::new(1.8_f32, Color32::from_rgb(0, 114, 206)),
+                                Stroke::new(
+                                    1.2_f32,
+                                    Color32::from_rgba_unmultiplied(0, 114, 206, 150),
+                                ),
                                 egui::StrokeKind::Outside,
                             );
 
@@ -1207,7 +1203,10 @@ pub fn render_inline_text_editor(
                                 .hint_text("Teks label...")
                                 .frame(false)
                                 .desired_width(screen_w);
+                            let prev_bg = ui.visuals().extreme_bg_color;
+                            ui.visuals_mut().extreme_bg_color = Color32::TRANSPARENT;
                             let te_resp = ui.put(edit_rect, te);
+                            ui.visuals_mut().extreme_bg_color = prev_bg;
                             if state.focus_text_edit {
                                 te_resp.request_focus();
                                 state.focus_text_edit = false;
@@ -1235,7 +1234,7 @@ pub fn render_inline_text_editor(
                 }
             }
             state.clean_redundant_top_undo(&page.id, &page.objects);
-            state.spatial_grid.rebuild(&page.objects);
+            state.rebuild_spatial_grid(&page.id, &page.objects);
         }
     }
 }
