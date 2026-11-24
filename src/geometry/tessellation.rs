@@ -445,6 +445,116 @@ pub fn tessellate_stroke_styled(
     mesh
 }
 
+/// Bagian terpisah dari goresan bergaya (`Solid`, `Dashed`, `DashDot`, `Dotted`)
+/// dalam ruang koordinat input sehingga tessellator maupun rasterizer menghasilkan pola identik.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StrokeStylePart {
+    Polyline(Vec<StrokePoint>),
+    Dot(StrokePoint),
+}
+
+/// Memecah rangkaian titik goresan menjadi segmen-segmen garis (`Polyline`) dan titik (`Dot`)
+/// sesuai `style` dan `base_width` (dalam satuan ruang koordinat titik input).
+pub fn decompose_styled_stroke(
+    points: &[StrokePoint],
+    base_width: f32,
+    style: StrokeStyle,
+) -> Vec<StrokeStylePart> {
+    if points.is_empty() {
+        return Vec::new();
+    }
+    if points.len() == 1 {
+        let mut pt = points[0].clone();
+        pt.pressure = sanitize_pressure(pt.pressure);
+        return vec![StrokeStylePart::Dot(pt)];
+    }
+
+    let mut dists = Vec::with_capacity(points.len());
+    dists.push(0.0);
+    for i in 1..points.len() {
+        let seg_len = (points[i].to_pos2() - points[i - 1].to_pos2()).length();
+        let safe_len = if seg_len.is_finite() { seg_len } else { 0.0 };
+        dists.push(dists[i - 1] + safe_len);
+    }
+    let total_len = *dists.last().unwrap_or(&0.0);
+    if total_len < 1e-4 {
+        let max_p = points
+            .iter()
+            .map(|p| sanitize_pressure(p.pressure))
+            .fold(0.05_f32, f32::max);
+        let mut pt = points[0].clone();
+        pt.pressure = max_p;
+        return vec![StrokeStylePart::Dot(pt)];
+    }
+
+    let safe_w = if base_width.is_finite() {
+        base_width.max(0.5)
+    } else {
+        1.0
+    };
+
+    let mut parts = Vec::new();
+    match style {
+        StrokeStyle::Solid => {
+            parts.push(StrokeStylePart::Polyline(points.to_vec()));
+        }
+        StrokeStyle::Dotted => {
+            let dot_spacing = (safe_w * 2.5).max(7.0);
+            let mut s = 0.0;
+            while s <= total_len {
+                parts.push(StrokeStylePart::Dot(sample_point_at_dist(
+                    points, &dists, s,
+                )));
+                s += dot_spacing;
+            }
+        }
+        StrokeStyle::Dashed => {
+            let dash_len = (safe_w * 3.5).max(10.0);
+            let gap_len = (safe_w * 2.0).max(6.0);
+            let cycle = dash_len + gap_len;
+            let mut curr = 0.0;
+            while curr < total_len {
+                let s_start = curr;
+                let s_end = (curr + dash_len).min(total_len);
+                let sub_pts = slice_stroke_by_dist(points, &dists, s_start, s_end);
+                if sub_pts.len() == 1 {
+                    parts.push(StrokeStylePart::Dot(sub_pts.into_iter().next().unwrap()));
+                } else if sub_pts.len() >= 2 {
+                    parts.push(StrokeStylePart::Polyline(sub_pts));
+                }
+                curr += cycle;
+            }
+        }
+        StrokeStyle::DashDot => {
+            let dash_len = (safe_w * 3.5).max(10.0);
+            let gap1 = (safe_w * 1.8).max(5.0);
+            let dot_len = (safe_w * 0.8).max(3.0);
+            let gap2 = (safe_w * 1.8).max(5.0);
+            let cycle = dash_len + gap1 + dot_len + gap2;
+            let mut curr = 0.0;
+            while curr < total_len {
+                let s_dash_start = curr;
+                let s_dash_end = (curr + dash_len).min(total_len);
+                let dash_pts = slice_stroke_by_dist(points, &dists, s_dash_start, s_dash_end);
+                if dash_pts.len() == 1 {
+                    parts.push(StrokeStylePart::Dot(dash_pts.into_iter().next().unwrap()));
+                } else if dash_pts.len() >= 2 {
+                    parts.push(StrokeStylePart::Polyline(dash_pts));
+                }
+
+                let s_dot_mid = curr + dash_len + gap1 + dot_len * 0.5;
+                if s_dot_mid <= total_len {
+                    parts.push(StrokeStylePart::Dot(sample_point_at_dist(
+                        points, &dists, s_dot_mid,
+                    )));
+                }
+                curr += cycle;
+            }
+        }
+    }
+    parts
+}
+
 fn sample_point_at_dist(points: &[StrokePoint], dists: &[f32], target_d: f32) -> StrokePoint {
     if points.is_empty() {
         return StrokePoint {
@@ -730,11 +840,17 @@ fn tessellate_single_ribbon(
         seg_norms.push(norm);
     }
 
-    // Start semicircle cap (hanya untuk pen/pencil)
-    if !is_highlighter {
-        let start_outward = -seg_dirs[0];
-        add_semicircle_cap(mesh, screen_pts[0], radii[0], start_outward, color, 10);
-    }
+    // Start semicircle cap (untuk Pen, Pencil, dan Highlighter agar ujung membulat seperti kapsul)
+    let cap_segments = if is_highlighter { 16 } else { 10 };
+    let start_outward = -seg_dirs[0];
+    add_semicircle_cap(
+        mesh,
+        screen_pts[0],
+        radii[0],
+        start_outward,
+        color,
+        cap_segments,
+    );
 
     // Titik awal pita (i = 0)
     let p0 = screen_pts[0];
@@ -759,19 +875,15 @@ fn tessellate_single_ribbon(
         let cos_turn = t_in.dot(t_out).clamp(-1.0, 1.0);
         let cross = t_in.x * t_out.y - t_in.y * t_out.x;
 
-        if is_highlighter || cos_turn >= 0.82 {
-            // Belokan halus atau Highlighter: gunakan bisector normal dengan kompensasi ketebalan
+        if cos_turn >= 0.82 {
+            // Belokan halus: gunakan bisector normal dengan kompensasi ketebalan
             let sum_n = n_in + n_out;
             let bisect = if sum_n.length_sq() > 1e-5 {
                 sum_n.normalized()
             } else {
                 n_out
             };
-            let miter_scale = if is_highlighter {
-                1.0
-            } else {
-                (1.0 / bisect.dot(n_in).abs().max(0.82)).clamp(1.0, 1.22)
-            };
+            let miter_scale = (1.0 / bisect.dot(n_in).abs().max(0.82)).clamp(1.0, 1.22);
             let eff_r = r * miter_scale;
 
             let mut left = p + bisect * eff_r;
@@ -832,9 +944,18 @@ fn tessellate_single_ribbon(
             let center_idx = mesh.vertices.len() as u32;
             mesh.colored_vertex(p, color);
 
-            // Tutup sisi dalam sambungan melalui titik pusat agar kedap celah (watertight)
-            mesh.add_triangle(center_idx, in_l_idx, out_l_idx);
-            mesh.add_triangle(center_idx, in_r_idx, out_r_idx);
+            // Tutup sisi dalam sambungan melalui titik pusat agar kedap celah (watertight).
+            // Untuk highlighter, hindari segitiga chord pada sisi luar agar tidak tumpang tindih dengan kipas round join.
+            if is_highlighter {
+                if cross >= 0.0 {
+                    mesh.add_triangle(center_idx, in_l_idx, out_l_idx);
+                } else {
+                    mesh.add_triangle(center_idx, in_r_idx, out_r_idx);
+                }
+            } else {
+                mesh.add_triangle(center_idx, in_l_idx, out_l_idx);
+                mesh.add_triangle(center_idx, in_r_idx, out_r_idx);
+            }
 
             // Bangun busur melingkar (Round Join fan) pada sisi luar belokan.
             // Karena n = (-dir.y, dir.x), ketika cross > 0 maka n_in mengarah ke sisi dalam (cekung)
@@ -879,10 +1000,8 @@ fn tessellate_single_ribbon(
     mesh.add_triangle(curr_l_idx, curr_r_idx, end_l_idx);
     mesh.add_triangle(curr_r_idx, end_r_idx, end_l_idx);
 
-    // End semicircle cap (hanya untuk pen/pencil)
-    if !is_highlighter {
-        add_semicircle_cap(mesh, p_last, r_last, t_last, color, 10);
-    }
+    // End semicircle cap
+    add_semicircle_cap(mesh, p_last, r_last, t_last, color, cap_segments);
 }
 
 /// Menambahkan kipas busur melingkar (Round Join) pada sudut tajam untuk mencegah ujung bergerigi atau lonjakan miter.

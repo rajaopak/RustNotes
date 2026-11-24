@@ -5787,3 +5787,301 @@ fn test_track4_spatial_grid_vs_brute_force_lasso_equivalence_and_benchmark() {
         "Evaluasi 8 query lasso pada 120 objek kompleks harus sangat cepat (< 50ms), aktual: {elapsed:?}"
     );
 }
+
+#[test]
+fn test_highlighter_rounded_caps_and_sharp_corners_all_orientations() {
+    let color = Color32::from_rgba_unmultiplied(255, 235, 59, 95);
+    let width = 20.0;
+    let r = width * 0.5;
+
+    let assert_caps_extend = |pts: &[StrokePoint], label: &str| {
+        let mesh = tessellate_stroke_styled(pts, width, color, true, StrokeStyle::Solid, |p| p);
+        assert!(
+            !mesh.vertices.is_empty() && !mesh.indices.is_empty(),
+            "{label}: mesh must be non-empty"
+        );
+        for &idx in &mesh.indices {
+            assert!((idx as usize) < mesh.vertices.len(), "{label}: valid index");
+        }
+        for v in &mesh.vertices {
+            assert!(
+                v.pos.x.is_finite() && v.pos.y.is_finite(),
+                "{label}: finite vertex"
+            );
+        }
+
+        let start = pts.first().unwrap().to_pos2();
+        let end = pts.last().unwrap().to_pos2();
+        let near_start_cap = mesh
+            .vertices
+            .iter()
+            .filter(|v| (v.pos.distance(start) - r).abs() < 0.75)
+            .count();
+        let near_end_cap = mesh
+            .vertices
+            .iter()
+            .filter(|v| (v.pos.distance(end) - r).abs() < 0.75)
+            .count();
+        assert!(
+            near_start_cap >= 8,
+            "{label}: start endpoint must have semicircular cap vertices at radius {r}, found {near_start_cap}"
+        );
+        assert!(
+            near_end_cap >= 8,
+            "{label}: end endpoint must have semicircular cap vertices at radius {r}, found {near_end_cap}"
+        );
+    };
+
+    // 1. Horizontal
+    let horiz = vec![
+        StrokePoint::new(50.0, 100.0, 1.0),
+        StrokePoint::new(200.0, 100.0, 1.0),
+    ];
+    assert_caps_extend(&horiz, "horizontal");
+    let h_mesh = tessellate_stroke_styled(&horiz, width, color, true, StrokeStyle::Solid, |p| p);
+    let min_x = h_mesh
+        .vertices
+        .iter()
+        .map(|v| v.pos.x)
+        .fold(f32::INFINITY, f32::min);
+    let max_x = h_mesh
+        .vertices
+        .iter()
+        .map(|v| v.pos.x)
+        .fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        (min_x - (50.0 - r)).abs() < 0.2,
+        "horizontal start cap must extend by -r"
+    );
+    assert!(
+        (max_x - (200.0 + r)).abs() < 0.2,
+        "horizontal end cap must extend by +r"
+    );
+
+    // 2. Vertical
+    let vert = vec![
+        StrokePoint::new(100.0, 40.0, 1.0),
+        StrokePoint::new(100.0, 220.0, 1.0),
+    ];
+    assert_caps_extend(&vert, "vertical");
+
+    // 3. Diagonal
+    let diag = vec![
+        StrokePoint::new(40.0, 40.0, 1.0),
+        StrokePoint::new(180.0, 160.0, 1.0),
+    ];
+    assert_caps_extend(&diag, "diagonal");
+
+    // 4. Curved
+    let curved = vec![
+        StrokePoint::new(20.0, 100.0, 1.0),
+        StrokePoint::new(70.0, 50.0, 1.0),
+        StrokePoint::new(130.0, 50.0, 1.0),
+        StrokePoint::new(180.0, 110.0, 1.0),
+    ];
+    assert_caps_extend(&curved, "curved");
+
+    // 5. Very short stroke (< radius)
+    let very_short = vec![
+        StrokePoint::new(100.0, 100.0, 1.0),
+        StrokePoint::new(103.0, 101.0, 1.0),
+    ];
+    assert_caps_extend(&very_short, "very_short");
+
+    // 6. Single-point highlighter (circle independent of pressure)
+    let single_low = vec![StrokePoint::new(80.0, 80.0, 0.1)];
+    let single_high = vec![StrokePoint::new(80.0, 80.0, 1.0)];
+    let m_low =
+        tessellate_stroke_styled(&single_low, width, color, true, StrokeStyle::Solid, |p| p);
+    let m_high =
+        tessellate_stroke_styled(&single_high, width, color, true, StrokeStyle::Solid, |p| p);
+    assert_eq!(m_low.vertices.len(), m_high.vertices.len());
+    let ring_count = m_low
+        .vertices
+        .iter()
+        .filter(|v| (v.pos.distance(Pos2::new(80.0, 80.0)) - r).abs() < 0.25)
+        .count();
+    assert!(ring_count >= 12, "single-point must form circular cap");
+
+    // 7. Sharp direction change (90 deg corner)
+    let corner_90 = vec![
+        StrokePoint::new(40.0, 100.0, 1.0),
+        StrokePoint::new(120.0, 100.0, 1.0),
+        StrokePoint::new(120.0, 180.0, 1.0),
+    ];
+    assert_caps_extend(&corner_90, "sharp_90");
+    let c90_mesh =
+        tessellate_stroke_styled(&corner_90, width, color, true, StrokeStyle::Solid, |p| p);
+    let corner_pt = Pos2::new(120.0, 100.0);
+    let round_join_verts = c90_mesh
+        .vertices
+        .iter()
+        .filter(|v| (v.pos.distance(corner_pt) - r).abs() < 0.5)
+        .count();
+    assert!(
+        round_join_verts >= 4,
+        "90-deg highlighter corner must include round join arc vertices"
+    );
+
+    // 8. Different stroke widths
+    for w in [6.0_f32, 18.0, 48.0] {
+        let m = tessellate_stroke_styled(&horiz, w, color, true, StrokeStyle::Solid, |p| p);
+        let hr = w * 0.5;
+        let left_ext = 50.0
+            - m.vertices
+                .iter()
+                .map(|v| v.pos.x)
+                .fold(f32::INFINITY, f32::min);
+        assert!(
+            (left_ext - hr).abs() < 0.25,
+            "width {w}: expected left extension {hr}, got {left_ext}"
+        );
+    }
+}
+
+#[test]
+fn test_highlighter_coverage_mask_non_stacking_and_rounded_caps() {
+    use crate::geometry::highlighter::{
+        HighlighterStrokeInput, MaskTransform, group_highlighters_by_rgb,
+        highlighter_stroke_color_data, rasterize_highlighter_group_mask, resolve_highlighter_alpha,
+    };
+
+    // Unmultiplied ColorData & opacity policy consistency
+    let c_data = highlighter_stroke_color_data(Color32::from_rgb(255, 225, 50), 0.4);
+    assert_eq!((c_data.r, c_data.g, c_data.b), (255, 225, 50));
+    assert_eq!(c_data.a, 102);
+    assert_eq!(
+        resolve_highlighter_alpha(255, None),
+        crate::model::HIGHLIGHTER_ALPHA
+    );
+    assert_eq!(resolve_highlighter_alpha(120, None), 120);
+    assert_eq!(resolve_highlighter_alpha(120, Some(0.5)), 128);
+
+    let alpha = 95u8;
+    let w = 160usize;
+    let h = 160usize;
+    let transform = MaskTransform {
+        origin_x: 0.0,
+        origin_y: 0.0,
+        scale: 1.0,
+    };
+
+    // 1. Single horizontal stroke: verify rounded capsule ends vs square corner
+    let s1 = vec![
+        StrokePoint::new(40.0, 80.0, 1.0),
+        StrokePoint::new(120.0, 80.0, 1.0),
+    ];
+    let groups_single = group_highlighters_by_rgb([HighlighterStrokeInput {
+        points: &s1,
+        rgb: (255, 235, 59),
+        width: 24.0, // r = 12.0
+        alpha,
+        style: StrokeStyle::Solid,
+    }]);
+    let mut mask1 = vec![0u8; w * h];
+    rasterize_highlighter_group_mask(&mut mask1, w, h, &groups_single[0], transform, 3);
+
+    // Interior pixel has exact alpha
+    assert_eq!(mask1[80 * w + 80], alpha);
+    // Centerline extension beyond endpoint (x = 120 + 6 = 126 < 132) is covered
+    assert_eq!(mask1[80 * w + 126], alpha);
+    // Square corner outside semicircle (dx=10, dy=10 -> dist=14.14 > r=12) must be 0
+    assert_eq!(mask1[90 * w + 130], 0);
+
+    // 2. Two & Five overlapping / repeated strokes of same color -> max alpha never exceeds `alpha`
+    let s2 = vec![
+        StrokePoint::new(80.0, 30.0, 1.0),
+        StrokePoint::new(80.0, 130.0, 1.0),
+    ];
+    let groups_multi = group_highlighters_by_rgb([
+        HighlighterStrokeInput {
+            points: &s1,
+            rgb: (255, 235, 59),
+            width: 24.0,
+            alpha,
+            style: StrokeStyle::Solid,
+        },
+        HighlighterStrokeInput {
+            points: &s2,
+            rgb: (255, 235, 59),
+            width: 24.0,
+            alpha,
+            style: StrokeStyle::Solid,
+        },
+        HighlighterStrokeInput {
+            points: &s1,
+            rgb: (255, 235, 59),
+            width: 24.0,
+            alpha,
+            style: StrokeStyle::Solid,
+        },
+        HighlighterStrokeInput {
+            points: &s1,
+            rgb: (255, 235, 59),
+            width: 24.0,
+            alpha,
+            style: StrokeStyle::Solid,
+        },
+        HighlighterStrokeInput {
+            points: &s2,
+            rgb: (255, 235, 59),
+            width: 24.0,
+            alpha,
+            style: StrokeStyle::Solid,
+        },
+    ]);
+    assert_eq!(groups_multi.len(), 1);
+    let mut mask_multi = vec![0u8; w * h];
+    rasterize_highlighter_group_mask(&mut mask_multi, w, h, &groups_multi[0], transform, 3);
+    assert_eq!(mask_multi[80 * w + 80], alpha);
+    assert_eq!(mask_multi.iter().copied().max().unwrap(), alpha);
+
+    // 3. Self-intersecting loop stroke -> intersection never exceeds `alpha`
+    let self_cross = vec![
+        StrokePoint::new(40.0, 40.0, 1.0),
+        StrokePoint::new(120.0, 120.0, 1.0),
+        StrokePoint::new(120.0, 40.0, 1.0),
+        StrokePoint::new(40.0, 120.0, 1.0),
+    ];
+    let groups_self = group_highlighters_by_rgb([HighlighterStrokeInput {
+        points: &self_cross,
+        rgb: (255, 235, 59),
+        width: 20.0,
+        alpha,
+        style: StrokeStyle::Solid,
+    }]);
+    let mut mask_self = vec![0u8; w * h];
+    rasterize_highlighter_group_mask(&mut mask_self, w, h, &groups_self[0], transform, 3);
+    assert_eq!(mask_self[80 * w + 80], alpha);
+    assert_eq!(mask_self.iter().copied().max().unwrap(), alpha);
+
+    // 4. Deterministic color grouping order across distinct RGBs
+    let groups_diff = group_highlighters_by_rgb([
+        HighlighterStrokeInput {
+            points: &s1,
+            rgb: (255, 235, 59),
+            width: 20.0,
+            alpha,
+            style: StrokeStyle::Solid,
+        },
+        HighlighterStrokeInput {
+            points: &s2,
+            rgb: (0, 200, 255),
+            width: 20.0,
+            alpha,
+            style: StrokeStyle::Solid,
+        },
+        HighlighterStrokeInput {
+            points: &s1,
+            rgb: (255, 235, 59),
+            width: 20.0,
+            alpha,
+            style: StrokeStyle::Solid,
+        },
+    ]);
+    assert_eq!(groups_diff.len(), 2);
+    assert_eq!(groups_diff[0].rgb, (255, 235, 59));
+    assert_eq!(groups_diff[0].strokes.len(), 2);
+    assert_eq!(groups_diff[1].rgb, (0, 200, 255));
+    assert_eq!(groups_diff[1].strokes.len(), 1);
+}

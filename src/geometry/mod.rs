@@ -1,6 +1,7 @@
 pub mod connectors;
 pub mod curves;
 pub mod eraser;
+pub mod highlighter;
 pub mod hit_test;
 pub mod math;
 pub mod ocr;
@@ -19,6 +20,7 @@ mod tests;
 pub use connectors::*;
 pub use curves::*;
 pub use eraser::*;
+pub use highlighter::*;
 pub use hit_test::*;
 pub use math::*;
 pub use ocr::*;
