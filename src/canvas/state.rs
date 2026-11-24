@@ -505,6 +505,33 @@ impl CanvasState {
         self.rebuild_spatial_grid(&page.id, &page.objects);
     }
 
+    /// Menghitung radius penghapus dalam satuan koordinat halaman untuk skala tampilan tertentu
+    /// (`state.zoom` pada kanvas utama atau `scale` pada Zoom Window).
+    pub fn eraser_page_radius_for_scale(&self, scale: f32) -> f32 {
+        let safe_scale = scale.max(0.05);
+        match self.eraser_mode {
+            EraserMode::WholeStroke => (3.8 / safe_scale).clamp(1.8, 4.5),
+            EraserMode::Partial => (10.0 / safe_scale).clamp(4.0, 16.0),
+        }
+    }
+
+    /// Radius penghapus aktif pada kanvas utama dalam satuan koordinat halaman.
+    pub fn eraser_page_radius(&self) -> f32 {
+        self.eraser_page_radius_for_scale(self.zoom)
+    }
+
+    /// Radius visual kursor penghapus dalam piksel layar untuk skala tampilan tertentu
+    /// (cocok 1:1 dengan area hit-test `erase_at` / `erase_along_segment`).
+    pub fn eraser_screen_radius_for_scale(&self, scale: f32) -> f32 {
+        let safe_scale = scale.max(0.05);
+        self.eraser_page_radius_for_scale(safe_scale) * safe_scale
+    }
+
+    /// Radius visual kursor penghapus aktif pada kanvas utama dalam piksel layar.
+    pub fn eraser_screen_radius(&self) -> f32 {
+        self.eraser_screen_radius_for_scale(self.zoom)
+    }
+
     /// Fase 8.2: Menghapus atau memotong objek pada titik `page_p` sesuai `self.eraser_mode`.
     /// Mengembalikan `true` jika ada objek yang terpotong atau terhapus.
     pub fn erase_at(&mut self, page: &mut Page, page_p: Pos2, radius: f32) -> bool {

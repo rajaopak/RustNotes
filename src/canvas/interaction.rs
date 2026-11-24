@@ -4,7 +4,7 @@ use super::sampling::{
     append_lasso_sample, append_stroke_sample, collect_frame_pointer_batch, extract_touch_pressure,
 };
 use super::state::CanvasState;
-use super::types::{ActiveTool, EraserMode, ResizeCorner};
+use super::types::{ActiveTool, ResizeCorner};
 use crate::geometry::{
     ShapeTransformBox, TransformHandleKind, calculate_proportional_scale,
     calculate_single_axis_resize, combined_bounds, find_alignment_guides, find_connector_snap_site,
@@ -124,7 +124,6 @@ pub(crate) fn handle_pointer_drag_interaction(
 
     let owns_active_gesture = state.pointer_gesture_active
         && (state.active_stroke_page_id.as_deref() == Some(&page.id)
-            || state.last_erase_sample_pos.is_some()
             || state.laser_is_drawing
             || state.is_dragging_selection
             || state.resize_corner.is_some());
@@ -224,7 +223,6 @@ pub(crate) fn handle_pointer_drag_interaction(
 
     let is_active_on_this_page = state.pointer_gesture_active
         && (state.active_stroke_page_id.as_deref() == Some(&page.id)
-            || state.last_erase_sample_pos.is_some()
             || state.laser_is_drawing
             || state.is_dragging_selection
             || state.resize_corner.is_some());
@@ -574,6 +572,8 @@ fn handle_drag_started(
             state.selected_ids.clear();
         }
         ActiveTool::Eraser => {
+            state.clear_active_draft_state();
+            state.active_stroke_page_id = Some(page.id.clone());
             state.eraser_undo_pushed = false;
             state.last_whole_erase_pos = None;
             state.last_erase_sample_pos = Some(page_p);
@@ -588,10 +588,7 @@ fn handle_drag_started(
                 dt_secs: 0.0,
             }];
             state.pointer_sample_seq = 1;
-            let erase_radius = match state.eraser_mode {
-                EraserMode::WholeStroke => (3.8 / state.zoom).clamp(1.8, 4.5),
-                EraserMode::Partial => (10.0 / state.zoom).clamp(4.0, 16.0),
-            };
+            let erase_radius = state.eraser_page_radius();
             state.erase_at(page, page_p, erase_radius);
         }
         ActiveTool::Lasso => {
@@ -1221,30 +1218,29 @@ fn handle_drag_moved(
                 }
             }
             ActiveTool::Eraser => {
-                let erase_radius = match state.eraser_mode {
-                    EraserMode::WholeStroke => (3.8 / state.zoom).clamp(1.8, 4.5),
-                    EraserMode::Partial => (10.0 / state.zoom).clamp(4.0, 16.0),
-                };
-                let seq = state.pointer_sample_seq;
-                state.pointer_sample_seq = seq + 1;
-                state.raw_stroke_samples.push(RawPointerSample {
-                    screen_pos: pos,
-                    page_pos: page_p,
-                    raw_pressure: ev.raw_pressure,
-                    effective_pressure: 1.0,
-                    phase: ev.phase,
-                    source: ev.source,
-                    sequence: seq,
-                    dt_secs: sample_dt_secs,
-                });
-                let erased = if let Some(prev_p) = state.last_erase_sample_pos {
-                    state.erase_along_segment(page, prev_p, page_p, erase_radius)
-                } else {
-                    state.erase_at(page, page_p, erase_radius)
-                };
-                state.last_erase_sample_pos = Some(page_p);
-                if erased {
-                    ui.ctx().request_repaint();
+                if state.active_stroke_page_id.as_deref() == Some(&page.id) {
+                    let erase_radius = state.eraser_page_radius();
+                    let seq = state.pointer_sample_seq;
+                    state.pointer_sample_seq = seq + 1;
+                    state.raw_stroke_samples.push(RawPointerSample {
+                        screen_pos: pos,
+                        page_pos: page_p,
+                        raw_pressure: ev.raw_pressure,
+                        effective_pressure: 1.0,
+                        phase: ev.phase,
+                        source: ev.source,
+                        sequence: seq,
+                        dt_secs: sample_dt_secs,
+                    });
+                    let erased = if let Some(prev_p) = state.last_erase_sample_pos {
+                        state.erase_along_segment(page, prev_p, page_p, erase_radius)
+                    } else {
+                        state.erase_at(page, page_p, erase_radius)
+                    };
+                    state.last_erase_sample_pos = Some(page_p);
+                    if erased {
+                        ui.ctx().request_repaint();
+                    }
                 }
             }
             ActiveTool::Lasso => {
@@ -1301,22 +1297,28 @@ fn handle_drag_stopped(
     state.pointer_gesture_active = false;
     state.active_alignment_guides.clear();
     if state.current_tool == ActiveTool::Eraser
-        && let Some(pos) = pointer_pos
-        && let Some(prev_p) = state.last_erase_sample_pos.take()
+        && state.active_stroke_page_id.as_deref() == Some(&page.id)
     {
-        let page_p = screen_to_page(pos);
-        if (page_p - prev_p).length_sq() > 1e-6 {
-            let erase_radius = match state.eraser_mode {
-                EraserMode::WholeStroke => (3.8 / state.zoom).clamp(1.8, 4.5),
-                EraserMode::Partial => (10.0 / state.zoom).clamp(4.0, 16.0),
-            };
-            state.erase_along_segment(page, prev_p, page_p, erase_radius);
+        if let Some(pos) = pointer_pos
+            && let Some(prev_p) = state.last_erase_sample_pos.take()
+        {
+            let page_p = screen_to_page(pos);
+            if (page_p - prev_p).length_sq() > 1e-6 {
+                let erase_radius = state.eraser_page_radius();
+                state.erase_along_segment(page, prev_p, page_p, erase_radius);
+            }
+            state.stroke_committed_this_frame = true;
         }
-        state.stroke_committed_this_frame = true;
+        state.eraser_undo_pushed = false;
+        state.last_whole_erase_pos = None;
+        state.clear_active_draft_state();
+    } else if state.active_stroke_page_id.is_none()
+        || state.active_stroke_page_id.as_deref() == Some(&page.id)
+    {
+        state.eraser_undo_pushed = false;
+        state.last_whole_erase_pos = None;
+        state.last_erase_sample_pos = None;
     }
-    state.eraser_undo_pushed = false;
-    state.last_whole_erase_pos = None;
-    state.last_erase_sample_pos = None;
     if state.laser_is_drawing {
         state.laser_is_drawing = false;
         if !state.current_laser_stroke.is_empty() {
@@ -1928,10 +1930,7 @@ fn handle_primary_click(
     } else if state.current_tool == ActiveTool::Eraser {
         state.eraser_undo_pushed = false;
         state.last_whole_erase_pos = None;
-        let erase_radius = match state.eraser_mode {
-            EraserMode::WholeStroke => (3.8 / state.zoom).clamp(1.8, 4.5),
-            EraserMode::Partial => (10.0 / state.zoom).clamp(4.0, 16.0),
-        };
+        let erase_radius = state.eraser_page_radius();
         if state.erase_at(page, page_p, erase_radius) {
             ui.ctx().request_repaint();
         }
