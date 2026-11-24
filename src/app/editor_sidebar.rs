@@ -378,30 +378,49 @@ impl RustNotesApp {
                                                 }
                                             }
 
-                                            // 3. Miniature objects preview (strokes, shapes, images, sticky notes, text)
+                                            // 3. Miniature objects preview (Two-Pass: Highlighter underlay first, then content objects)
+                                            if let Some(hl_shape) =
+                                                crate::canvas::build_highlighter_layer_shape(
+                                                    ui.ctx(),
+                                                    crate::canvas::HighlighterCacheScope::Thumbnail,
+                                                    p,
+                                                    None,
+                                                    &mut self.canvas_state.highlighter_cache,
+                                                    self.canvas_state.highlighter_opacity,
+                                                    self.canvas_state.smoothing_steps,
+                                                    scale,
+                                                    rect,
+                                                    rect,
+                                                    Rect::from_min_size(
+                                                        Pos2::ZERO,
+                                                        Vec2::new(p.width, p.height),
+                                                    ),
+                                                    |pt| {
+                                                        origin
+                                                            + Vec2::new(pt.x * scale, pt.y * scale)
+                                                    },
+                                                )
+                                            {
+                                                painter.add(hl_shape);
+                                            }
+
                                             for obj in &p.objects {
                                                 match obj {
+                                                    crate::model::DrawObject::Stroke {
+                                                        is_highlighter: true,
+                                                        ..
+                                                    } => continue,
                                                     crate::model::DrawObject::Stroke {
                                                         points,
                                                         color,
                                                         width,
-                                                        is_highlighter,
+                                                        is_highlighter: false,
                                                         ..
                                                     } => {
                                                         if points.len() > 1 {
-                                                            let c = if *is_highlighter {
-                                                                Color32::from_rgba_unmultiplied(
-                                                                    color.r,
-                                                                    color.g,
-                                                                    color.b,
-                                                                    crate::model::HIGHLIGHTER_ALPHA,
-                                                                )
-                                                            } else {
-                                                                color.to_color32()
-                                                            };
                                                             let stroke = Stroke::new(
                                                                 (width * scale).max(0.8),
-                                                                c,
+                                                                color.to_color32(),
                                                             );
                                                             for w in points.windows(2) {
                                                                 let p1 = origin

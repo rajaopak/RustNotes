@@ -527,7 +527,21 @@ impl RustNotesApp {
                         );
                         let painter = ui.painter_at(rect);
                         painter.rect_filled(rect, 4.0, Color32::from_rgb(245, 247, 250));
-                        // Text sample under highlighter
+                        // Highlighter underlay pill strip (rounded caps, rendered beneath text)
+                        let hl_color = Color32::from_rgba_unmultiplied(
+                            255,
+                            225,
+                            50,
+                            crate::geometry::highlighter_opacity_to_alpha(
+                                self.settings.highlighter_opacity,
+                            ),
+                        );
+                        let hl_rect = Rect::from_min_max(
+                            rect.left_top() + Vec2::new(8.0, 4.0),
+                            rect.right_bottom() - Vec2::new(8.0, 4.0),
+                        );
+                        painter.rect_filled(hl_rect, hl_rect.height() * 0.5, hl_color);
+                        // Text sample over highlighter underlay
                         painter.text(
                             rect.left_center() + Vec2::new(12.0, 0.0),
                             egui::Align2::LEFT_CENTER,
@@ -535,18 +549,6 @@ impl RustNotesApp {
                             egui::FontId::proportional(13.0),
                             Color32::from_rgb(20, 25, 35),
                         );
-                        // Highlighter overlay strip
-                        let hl_color = Color32::from_rgba_unmultiplied(
-                            255,
-                            225,
-                            50,
-                            (self.settings.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8,
-                        );
-                        let hl_rect = Rect::from_min_max(
-                            rect.left_top() + Vec2::new(8.0, 4.0),
-                            rect.right_bottom() - Vec2::new(8.0, 4.0),
-                        );
-                        painter.rect_filled(hl_rect, 2.0, hl_color);
                     });
 
                     if settings_changed {
@@ -637,6 +639,7 @@ impl RustNotesApp {
         self.canvas_state.highlighter_opacity = self.settings.highlighter_opacity;
         self.canvas_state.highlighter_pressure_enabled = self.settings.highlighter_pressure_enabled;
         self.canvas_state.mesh_cache.clear();
+        self.canvas_state.highlighter_cache.clear();
     }
 
     pub(crate) fn reset_inking_settings_to_defaults(&mut self) {

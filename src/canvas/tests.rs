@@ -3831,9 +3831,14 @@ fn test_track2_pen_pencil_highlighter_rendering_and_width_parity() {
             other => panic!("Expected Stroke, got {other:?}"),
         }
 
-        // Render frame berikutnya untuk memverifikasi pembuatan dan pembacaan mesh_cache
+        // Render frame berikutnya untuk memverifikasi pembuatan dan pembacaan cache masing-masing alat
         step_test_canvas(&ctx, &mut page, &mut state, vec![]);
-        assert_eq!(state.mesh_cache.len(), 1);
+        if tool == ActiveTool::Highlighter {
+            assert_eq!(state.highlighter_cache.len(), 1);
+            assert!(state.mesh_cache.is_empty());
+        } else {
+            assert_eq!(state.mesh_cache.len(), 1);
+        }
     }
 }
 
@@ -4294,4 +4299,233 @@ fn test_canvas_1000_percent_zoom_drawing_lasso_and_eraser() {
     assert!(state.erase_at(&mut page, Pos2::new(12.5, 11.5), erase_radius));
     assert!(page.objects.is_empty());
     assert!(state.selected_ids.is_empty());
+}
+
+#[test]
+fn test_highlighter_compositing_same_color_no_stacking_and_different_colors_distinct() {
+    use crate::canvas::highlighter_renderer::composite_highlighter_groups_to_color_image;
+    use crate::geometry::{HighlighterStrokeInput, MaskTransform, group_highlighters_by_rgb};
+
+    let s_h = vec![
+        StrokePoint::new(20.0, 50.0, 1.0),
+        StrokePoint::new(80.0, 50.0, 1.0),
+    ];
+    let s_v = vec![
+        StrokePoint::new(50.0, 20.0, 1.0),
+        StrokePoint::new(50.0, 80.0, 1.0),
+    ];
+    let alpha = 95u8;
+    let transform = MaskTransform {
+        origin_x: 0.0,
+        origin_y: 0.0,
+        scale: 1.0,
+    };
+
+    // Single stroke vs overlapping same-color strokes
+    let g1 = group_highlighters_by_rgb([HighlighterStrokeInput {
+        points: &s_h,
+        rgb: (255, 235, 59),
+        width: 18.0,
+        alpha,
+        style: StrokeStyle::Solid,
+    }]);
+    let img1 = composite_highlighter_groups_to_color_image(&g1, 100, 100, transform, 3);
+
+    let g2 = group_highlighters_by_rgb([
+        HighlighterStrokeInput {
+            points: &s_h,
+            rgb: (255, 235, 59),
+            width: 18.0,
+            alpha,
+            style: StrokeStyle::Solid,
+        },
+        HighlighterStrokeInput {
+            points: &s_v,
+            rgb: (255, 235, 59),
+            width: 18.0,
+            alpha,
+            style: StrokeStyle::Solid,
+        },
+    ]);
+    let img2 = composite_highlighter_groups_to_color_image(&g2, 100, 100, transform, 3);
+
+    let px_single = img1.pixels[50 * 100 + 50];
+    let px_overlap = img2.pixels[50 * 100 + 50];
+    assert_eq!(px_single.a(), alpha);
+    assert_eq!(
+        px_overlap, px_single,
+        "Overlapping same-color highlighters must have identical color and alpha as a single stroke"
+    );
+
+    // Different colors overlapping must blend and remain distinct from single color
+    let g_diff = group_highlighters_by_rgb([
+        HighlighterStrokeInput {
+            points: &s_h,
+            rgb: (255, 235, 59),
+            width: 18.0,
+            alpha,
+            style: StrokeStyle::Solid,
+        },
+        HighlighterStrokeInput {
+            points: &s_v,
+            rgb: (0, 200, 255),
+            width: 18.0,
+            alpha,
+            style: StrokeStyle::Solid,
+        },
+    ]);
+    let img_diff = composite_highlighter_groups_to_color_image(&g_diff, 100, 100, transform, 3);
+    let px_diff_overlap = img_diff.pixels[50 * 100 + 50];
+    let px_only_cyan = img_diff.pixels[25 * 100 + 50];
+    assert_ne!(px_diff_overlap, px_single);
+    assert_ne!(px_diff_overlap, px_only_cyan);
+    assert!(
+        px_diff_overlap.a() > alpha,
+        "Different-color overlap should accumulate SrcOver coverage"
+    );
+}
+
+#[test]
+fn test_highlighter_active_preview_commit_undo_redo_zoom_and_zoom_window() {
+    let ctx = eframe::egui::Context::default();
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "hl-lifecycle-page".to_string();
+
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Highlighter,
+        stroke_color: Color32::from_rgb(255, 225, 50),
+        stroke_width: 3.0,
+        highlighter_opacity: 0.4,
+        zoom: 1.0,
+        ..Default::default()
+    };
+
+    let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    let to_screen = |x: f32, y: f32| origin + Vec2::new(x, y);
+
+    // 1. Active draft stroke preview populates highlighter_cache without mesh_cache
+    let p0 = to_screen(40.0, 60.0);
+    let p1 = to_screen(160.0, 60.0);
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(p0),
+            eframe::egui::Event::PointerButton {
+                pos: p0,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+            eframe::egui::Event::PointerMoved(p1),
+        ],
+    );
+    assert!(state.draft_stroke.is_some());
+    assert_eq!(state.highlighter_cache.len(), 1);
+    assert!(state.mesh_cache.is_empty());
+
+    // 2. Commit stroke -> ColorData stores unmultiplied RGB + expected alpha
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: p1,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+    assert_eq!(page.objects.len(), 1);
+    if let DrawObject::Stroke {
+        color,
+        is_highlighter,
+        ..
+    } = &page.objects[0]
+    {
+        assert!(*is_highlighter);
+        assert_eq!((color.r, color.g, color.b), (255, 225, 50));
+        assert_eq!(color.a, 102);
+    } else {
+        panic!("Expected highlighter stroke");
+    }
+
+    // 3. Second crossing stroke & Zoom Window rendering
+    let q0 = to_screen(100.0, 30.0);
+    let q1 = to_screen(100.0, 120.0);
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(q0),
+            eframe::egui::Event::PointerButton {
+                pos: q0,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+            eframe::egui::Event::PointerMoved(q1),
+        ],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: q1,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+    assert_eq!(page.objects.len(), 2);
+    assert_eq!(state.highlighter_cache.len(), 1);
+
+    // Zoom Window renders into HighlighterCacheScope::ZoomWindow cleanly
+    state.zoom_target_rect =
+        eframe::egui::Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(180.0, 120.0));
+    let _ = ctx.run(
+        eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                Pos2::ZERO,
+                Vec2::new(1000.0, 1000.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            eframe::egui::CentralPanel::default().show(ctx, |ui| {
+                super::zoom_window::render_zoom_window_canvas(ui, &mut page, &mut state, 2.0);
+            });
+        },
+    );
+    assert_eq!(state.highlighter_cache.len(), 2);
+    assert!(state.mesh_cache.is_empty());
+
+    // 4. Undo & Redo invalidate cache properly
+    state.undo(&mut page);
+    assert_eq!(page.objects.len(), 1);
+    assert!(state.highlighter_cache.is_empty());
+    step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    assert_eq!(state.highlighter_cache.len(), 1);
+
+    state.undo(&mut page);
+    assert!(page.objects.is_empty());
+    step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    assert!(state.highlighter_cache.is_empty());
+
+    state.redo(&mut page);
+    assert_eq!(page.objects.len(), 1);
+    step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    assert_eq!(state.highlighter_cache.len(), 1);
+
+    // 5. Opacity change & Zoom In / Out (0.5x .. 10.0x) render cleanly
+    state.highlighter_opacity = 0.6;
+    step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    state.zoom = 0.5;
+    step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    state.zoom = 10.0;
+    step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    assert_eq!(state.highlighter_cache.len(), 1);
 }

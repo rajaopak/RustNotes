@@ -1,4 +1,5 @@
 pub mod gizmo;
+pub mod highlighter_renderer;
 pub mod interaction;
 pub mod laser;
 pub mod primitives;
@@ -13,6 +14,7 @@ pub mod zoom_window;
 mod tests;
 
 pub use gizmo::*;
+pub use highlighter_renderer::*;
 pub use laser::*;
 pub use primitives::*;
 pub use render::*;

@@ -1,4 +1,7 @@
 use super::gizmo::{SelectionData, render_alignment_guides, render_selection_gizmo};
+use super::highlighter_renderer::{
+    HighlighterCacheScope, active_highlighter_draft, build_highlighter_layer_shape,
+};
 use super::interaction::{handle_pointer_drag_interaction, handle_post_render_pointer_interaction};
 use super::laser::render_laser_trail;
 use super::primitives::{
@@ -52,8 +55,8 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         }
     }
 
-    // 1 & 2. Draw Paper Background, Patterns, and Two-Pass Page Objects
-    render_page_background_and_objects(
+    // 1 & 2. Draw Paper Background, Patterns, Reserve Highlighter Underlay Slot, and Draw Content Layer
+    let hl_shape_idx = render_page_background_and_objects(
         &painter,
         rect,
         screen_clip_rect,
@@ -99,6 +102,45 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
         now,
         screen_to_page,
     );
+
+    // Populate Pass 1 (Highlighter Underlay Layer) after pointer interaction so committed
+    // highlighters and any active highlighter draft share one non-stacking coverage composite.
+    let active_hl_draft = if state.active_stroke_page_id.as_deref() == Some(&page.id)
+        && state.recognized_draft_shape.is_none()
+    {
+        active_highlighter_draft(
+            state.current_tool,
+            state.draft_stroke.as_deref(),
+            state.stroke_color,
+            state.stroke_width,
+            state.stroke_style,
+        )
+    } else {
+        None
+    };
+    let visible_screen_rect = rect.intersect(screen_clip_rect);
+    if visible_screen_rect.is_positive() {
+        let visible_page_rect = Rect::from_min_max(
+            screen_to_page(visible_screen_rect.min),
+            screen_to_page(visible_screen_rect.max),
+        );
+        if let Some(hl_shape) = build_highlighter_layer_shape(
+            ui.ctx(),
+            HighlighterCacheScope::MainCanvas,
+            page,
+            active_hl_draft,
+            &mut state.highlighter_cache,
+            state.highlighter_opacity,
+            state.smoothing_steps,
+            zoom,
+            rect,
+            screen_clip_rect,
+            visible_page_rect,
+            page_to_screen,
+        ) {
+            painter.set(hl_shape_idx, hl_shape);
+        }
+    }
 
     // 4 & 5. Render Active Draft Stroke/Shape, Connector Snap Sites, and Active Lasso Loop
     render_active_draft_and_lasso(ui, &painter, page, state, now, page_to_screen);
@@ -175,7 +217,7 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
     response
 }
 
-/// Merender latar belakang kertas/aset dan seluruh objek halaman dengan two-pass layering & mesh cache.
+/// Merender latar belakang kertas/aset, mencadangkan slot underlay highlighter, dan merender objek lapisan konten.
 fn render_page_background_and_objects(
     painter: &egui::Painter,
     rect: Rect,
@@ -184,7 +226,7 @@ fn render_page_background_and_objects(
     page: &Page,
     state: &mut CanvasState,
     page_to_screen: impl Fn(Pos2) -> Pos2 + Copy,
-) {
+) -> egui::layers::ShapeIdx {
     // 1. Draw Paper Background and Patterns
     painter.rect_filled(rect, 4.0, page.paper_color.to_color32());
 
@@ -200,100 +242,88 @@ fn render_page_background_and_objects(
         }
     }
 
-    // 2. Draw existing page objects with Two-Pass Layering & Page-Space Mesh Cache:
-    // Pass 1: Highlighters (Underlay Layer) — sits beneath ink handwriting, text, and diagrams so black ink is never dimmed.
-    // Pass 2: Content Layer — Pen strokes, shapes, connectors, images, sticky notes, and text.
-    let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
+    // 2. Reserve Pass 1 slot for composited highlighters (Underlay Layer), then draw Pass 2 Content Layer:
+    // Pass 1 sits beneath ink handwriting, text, and diagrams so black ink is never dimmed.
+    let hl_shape_idx = painter.add(egui::Shape::Noop);
 
-    for pass_is_highlighter in [true, false] {
-        for obj in &page.objects {
-            match obj {
-                DrawObject::Stroke { is_highlighter, .. }
-                    if *is_highlighter != pass_is_highlighter =>
+    for obj in &page.objects {
+        match obj {
+            DrawObject::Stroke {
+                is_highlighter: true,
+                ..
+            } => continue,
+            DrawObject::Stroke {
+                id,
+                points,
+                color,
+                width,
+                is_highlighter: false,
+                style,
+            } => {
+                let obj_b = object_bounds(obj);
+                let screen_b =
+                    Rect::from_min_max(page_to_screen(obj_b.min), page_to_screen(obj_b.max));
+                if !screen_clip_rect.intersects(screen_b) {
+                    continue;
+                }
+
+                // Simpan mesh di dalam cache menggunakan koordinat lokal kertas (`|p| p`, skala 1.0),
+                // lalu transformasikan ke posisi layar (`origin` + `state.zoom`) setiap frame agar
+                // goresan tidak pernah bergeser atau hilang ketika halaman di-scroll maupun di-zoom.
+                let style_rev: u32 = (state.smoothing_steps as u32) << 8;
+                let key = (id.clone(), style_rev);
+                let page_mesh = if let Some(cached) = state.mesh_cache.get(&key) {
+                    cached.clone()
+                } else {
+                    let smoothed = smooth_stroke_points(points, state.smoothing_steps);
+                    let mesh = tessellate_stroke_styled(
+                        &smoothed,
+                        *width,
+                        color.to_color32(),
+                        false,
+                        *style,
+                        |p| p,
+                    );
+                    if state.mesh_cache.len() > 1500 {
+                        let to_remove: Vec<_> =
+                            state.mesh_cache.keys().take(300).cloned().collect();
+                        for k in to_remove {
+                            state.mesh_cache.remove(&k);
+                        }
+                    }
+                    state.mesh_cache.insert(key, mesh.clone());
+                    mesh
+                };
+                let screen_mesh = transform_page_mesh_to_screen(&page_mesh, origin, state.zoom);
+                painter.add(screen_mesh);
+            }
+            _ => {
+                let obj_b = object_bounds_with_context(obj, &page.objects);
+                let screen_b =
+                    Rect::from_min_max(page_to_screen(obj_b.min), page_to_screen(obj_b.max));
+                if !screen_clip_rect.intersects(screen_b) {
+                    continue;
+                }
+
+                // Jangan gambar teks statis jika objek sedang disunting secara inline oleh TextEdit
+                if state.editing_text_id.as_deref() == Some(obj.id())
+                    && matches!(obj, DrawObject::Text { .. })
                 {
                     continue;
                 }
-                DrawObject::Stroke {
-                    id,
-                    points,
-                    color,
-                    width,
-                    is_highlighter,
-                    style,
-                } => {
-                    let obj_b = object_bounds(obj);
-                    let screen_b =
-                        Rect::from_min_max(page_to_screen(obj_b.min), page_to_screen(obj_b.max));
-                    if !screen_clip_rect.intersects(screen_b) {
-                        continue;
-                    }
-
-                    // Simpan mesh di dalam cache menggunakan koordinat lokal kertas (`|p| p`, skala 1.0),
-                    // lalu transformasikan ke posisi layar (`origin` + `state.zoom`) setiap frame agar
-                    // goresan tidak pernah bergeser atau hilang ketika halaman di-scroll maupun di-zoom.
-                    let style_rev: u32 = ((state.smoothing_steps as u32) << 8)
-                        | if *is_highlighter { hl_alpha as u32 } else { 0 };
-                    let key = (id.clone(), style_rev);
-                    let page_mesh = if let Some(cached) = state.mesh_cache.get(&key) {
-                        cached.clone()
-                    } else {
-                        let smoothed = smooth_stroke_points(points, state.smoothing_steps);
-                        let stroke_c = if *is_highlighter {
-                            Color32::from_rgba_unmultiplied(color.r, color.g, color.b, hl_alpha)
-                        } else {
-                            color.to_color32()
-                        };
-                        let mesh = tessellate_stroke_styled(
-                            &smoothed,
-                            *width,
-                            stroke_c,
-                            *is_highlighter,
-                            *style,
-                            |p| p,
-                        );
-                        if state.mesh_cache.len() > 1500 {
-                            let to_remove: Vec<_> =
-                                state.mesh_cache.keys().take(300).cloned().collect();
-                            for k in to_remove {
-                                state.mesh_cache.remove(&k);
-                            }
-                        }
-                        state.mesh_cache.insert(key, mesh.clone());
-                        mesh
-                    };
-                    let screen_mesh = transform_page_mesh_to_screen(&page_mesh, origin, state.zoom);
-                    painter.add(screen_mesh);
-                }
-                _ if pass_is_highlighter => {
-                    // Non-strokes are rendered in Pass 2 (Content Layer)
-                    continue;
-                }
-                _ => {
-                    let obj_b = object_bounds_with_context(obj, &page.objects);
-                    let screen_b =
-                        Rect::from_min_max(page_to_screen(obj_b.min), page_to_screen(obj_b.max));
-                    if !screen_clip_rect.intersects(screen_b) {
-                        continue;
-                    }
-
-                    // Jangan gambar teks statis jika objek sedang disunting secara inline oleh TextEdit
-                    if state.editing_text_id.as_deref() == Some(obj.id())
-                        && matches!(obj, DrawObject::Text { .. })
-                    {
-                        continue;
-                    }
-                    draw_non_stroke_object(
-                        painter,
-                        obj,
-                        &page.objects,
-                        page_to_screen,
-                        state.zoom,
-                        |id| state.get_texture(id).map(|t| t.id()),
-                    );
-                }
+                draw_non_stroke_object(
+                    painter,
+                    obj,
+                    &page.objects,
+                    page_to_screen,
+                    state.zoom,
+                    |id| state.get_texture(id).map(|t| t.id()),
+                );
             }
         }
     }
+
+    hl_shape_idx
 }
 
 /// Merender pratinjau goresan aktif, bentuk hasil pengenalan, draft shape, konektor, dan loop lasso.
@@ -361,33 +391,21 @@ fn render_active_draft_and_lasso(
                 painter.circle_filled(s_start, 3.0, Color32::from_rgb(0, 114, 206));
                 painter.circle(s_end, 6.0, Color32::WHITE, handle_stroke);
             }
-        } else if let Some(pts) = &state.draft_stroke {
-            let is_highlighter = state.current_tool == ActiveTool::Highlighter;
-            let page_stroke_width = if is_highlighter {
-                state.stroke_width * 6.0
-            } else if state.current_tool == ActiveTool::Pencil {
+        } else if let Some(pts) = &state.draft_stroke
+            && state.current_tool != ActiveTool::Highlighter
+        {
+            let page_stroke_width = if state.current_tool == ActiveTool::Pencil {
                 (state.stroke_width - 0.5).max(1.0)
             } else {
                 state.stroke_width
             };
             let stroke_width = page_stroke_width * state.zoom;
-            let color = if is_highlighter {
-                let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
-                Color32::from_rgba_unmultiplied(
-                    state.stroke_color.r(),
-                    state.stroke_color.g(),
-                    state.stroke_color.b(),
-                    hl_alpha,
-                )
-            } else {
-                state.stroke_color
-            };
             let smoothed = smooth_stroke_points(pts, state.smoothing_steps);
             let mesh = tessellate_stroke_styled(
                 &smoothed,
                 stroke_width,
-                color,
-                is_highlighter,
+                state.stroke_color,
+                false,
                 state.stroke_style,
                 page_to_screen,
             );

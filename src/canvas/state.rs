@@ -1,3 +1,4 @@
+use super::highlighter_renderer::HighlighterLayerCache;
 use super::sampling::{RawPointerSample, RawScreenEvent};
 use super::types::{ActiveTool, EraserMode, LaserTrailPoint, ResizeCorner};
 use crate::geometry::{
@@ -56,8 +57,9 @@ pub struct CanvasState {
     pub laser_is_drawing: bool,
     pub laser_points: Vec<LaserTrailPoint>,
 
-    // Performance optimizations: Mesh caching & Spatial Index
+    // Performance optimizations: Mesh caching, Highlighter Layer caching & Spatial Index
     pub mesh_cache: HashMap<(String, u32), Mesh>,
+    pub highlighter_cache: HighlighterLayerCache,
     pub spatial_grid: SpatialGrid,
     pub spatial_grid_page_id: Option<String>,
 
@@ -178,6 +180,7 @@ impl Default for CanvasState {
             laser_is_drawing: false,
             laser_points: Vec::new(),
             mesh_cache: HashMap::new(),
+            highlighter_cache: HighlighterLayerCache::new(),
             spatial_grid: SpatialGrid::new(100.0),
             spatial_grid_page_id: None,
             texture_cache: HashMap::new(),
@@ -903,6 +906,7 @@ impl CanvasState {
             page.objects = Arc::unwrap_or_clone(previous);
             self.selected_ids.clear();
             self.mesh_cache.clear();
+            self.highlighter_cache.clear();
             self.rebuild_spatial_grid(&page.id, &page.objects);
         }
     }
@@ -928,6 +932,7 @@ impl CanvasState {
             page.objects = Arc::unwrap_or_clone(next);
             self.selected_ids.clear();
             self.mesh_cache.clear();
+            self.highlighter_cache.clear();
             self.rebuild_spatial_grid(&page.id, &page.objects);
         }
     }

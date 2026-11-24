@@ -346,6 +346,7 @@ impl RustNotesApp {
         self.unloaded_notebook_metas.clear();
         self.canvas_state.selected_ids.clear();
         self.canvas_state.mesh_cache.clear();
+        self.canvas_state.highlighter_cache.clear();
         self.canvas_state.texture_cache.clear();
         self.canvas_state.failed_texture_loads.clear();
         self.library = lib;

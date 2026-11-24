@@ -1458,22 +1458,28 @@ fn handle_drag_stopped(
                 } else {
                     state.stroke_width
                 };
-                let color = if is_highlighter {
-                    let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
-                    Color32::from_rgba_unmultiplied(
-                        state.stroke_color.r(),
-                        state.stroke_color.g(),
-                        state.stroke_color.b(),
-                        hl_alpha,
+                let stroke_color_data = if is_highlighter {
+                    crate::geometry::highlighter_stroke_color_data(
+                        state.stroke_color,
+                        state.highlighter_opacity,
                     )
                 } else {
-                    state.stroke_color
+                    state.stroke_color.into()
                 };
                 // Fase 8.1 & G4: Shape Recognition & Determinisme Undo
                 if let Some(recognized) = recognized_shape {
                     let new_id = Uuid::new_v4().to_string();
                     let is_line = recognized.kind == ShapeKind::Line;
                     let corner_radius = 0.0;
+                    let shape_color: crate::model::ColorData = if is_highlighter {
+                        let [sr, sg, sb, _] = state.stroke_color.to_srgba_unmultiplied();
+                        let hl_alpha = crate::geometry::highlighter_opacity_to_alpha(
+                            state.highlighter_opacity,
+                        );
+                        Color32::from_rgba_unmultiplied(sr, sg, sb, hl_alpha).into()
+                    } else {
+                        state.stroke_color.into()
+                    };
 
                     // Fase G4.3: Simpan stroke asli ke snapshot pertama, lalu ganti dengan shape terkoreksi
                     // Undo #1 -> kembali ke goresan asli pengguna
@@ -1481,7 +1487,7 @@ fn handle_drag_stopped(
                     let orig_stroke = DrawObject::Stroke {
                         id: Uuid::new_v4().to_string(),
                         points: pts.clone(),
-                        color: color.into(),
+                        color: stroke_color_data,
                         width: stroke_width,
                         is_highlighter,
                         style: state.stroke_style,
@@ -1498,7 +1504,7 @@ fn handle_drag_stopped(
                         y: recognized.y,
                         width: recognized.width,
                         height: recognized.height,
-                        color: color.into(),
+                        color: shape_color,
                         stroke_width,
                         fill: None,
                         rotation: 0.0,
@@ -1515,7 +1521,7 @@ fn handle_drag_stopped(
                     page.objects.push(DrawObject::Stroke {
                         id: Uuid::new_v4().to_string(),
                         points: pts,
-                        color: color.into(),
+                        color: stroke_color_data,
                         width: stroke_width,
                         is_highlighter,
                         style: state.stroke_style,
@@ -1975,20 +1981,17 @@ fn handle_primary_click(
             state.stroke_width
         };
         let color = if is_highlighter {
-            let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
-            Color32::from_rgba_unmultiplied(
-                state.stroke_color.r(),
-                state.stroke_color.g(),
-                state.stroke_color.b(),
-                hl_alpha,
+            crate::geometry::highlighter_stroke_color_data(
+                state.stroke_color,
+                state.highlighter_opacity,
             )
         } else {
-            state.stroke_color
+            state.stroke_color.into()
         };
         page.objects.push(DrawObject::Stroke {
             id: Uuid::new_v4().to_string(),
             points: pts,
-            color: color.into(),
+            color,
             width: stroke_width,
             is_highlighter,
             style: state.stroke_style,

@@ -1,3 +1,6 @@
+use super::highlighter_renderer::{
+    HighlighterCacheScope, active_highlighter_draft, build_highlighter_layer_shape,
+};
 use super::primitives::{draw_non_stroke_object, draw_paper_pattern};
 use super::sampling::{
     PointerSamplePhase, PointerSource, RawPointerSample, RawScreenEvent, append_stroke_sample,
@@ -77,65 +80,47 @@ pub fn render_zoom_window_canvas(
         Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(0, 114, 206, 90)),
     );
 
-    // 3. Render objek halaman yang tampak di dalam kotak target dengan Two-Pass Layering
-    // Pass 1: Highlighters (underlay layer)
-    // Pass 2: Content layer (pen strokes, shapes, connectors, images, sticky notes, text)
-    let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
+    // 3. Reserve Pass 1 slot for composited highlighters (underlay layer), then render Pass 2 Content Layer
+    let hl_shape_idx = painter.add(egui::Shape::Noop);
 
-    for pass_is_highlighter in [true, false] {
-        for obj in &page.objects {
-            match obj {
-                DrawObject::Stroke { is_highlighter, .. }
-                    if *is_highlighter != pass_is_highlighter =>
-                {
+    for obj in &page.objects {
+        match obj {
+            DrawObject::Stroke {
+                is_highlighter: true,
+                ..
+            } => continue,
+            DrawObject::Stroke {
+                points,
+                color,
+                width,
+                is_highlighter: false,
+                style,
+                ..
+            } => {
+                let b = object_bounds(obj);
+                if !b.intersects(target.expand(20.0)) {
                     continue;
                 }
-                DrawObject::Stroke {
-                    points,
-                    color,
-                    width,
-                    is_highlighter,
-                    style,
-                    ..
-                } => {
-                    let b = object_bounds(obj);
-                    if !b.intersects(target.expand(20.0)) {
-                        continue;
-                    }
-                    let smoothed = smooth_stroke_points(points, state.smoothing_steps);
-                    let stroke_w = width * scale;
-                    let stroke_c = if *is_highlighter {
-                        Color32::from_rgba_unmultiplied(color.r, color.g, color.b, hl_alpha)
-                    } else {
-                        color.to_color32()
-                    };
-                    let mesh = tessellate_stroke_styled(
-                        &smoothed,
-                        stroke_w,
-                        stroke_c,
-                        *is_highlighter,
-                        *style,
-                        page_to_zw,
-                    );
-                    painter.add(mesh);
-                }
-                _ if pass_is_highlighter => {
+                let smoothed = smooth_stroke_points(points, state.smoothing_steps);
+                let stroke_w = width * scale;
+                let mesh = tessellate_stroke_styled(
+                    &smoothed,
+                    stroke_w,
+                    color.to_color32(),
+                    false,
+                    *style,
+                    page_to_zw,
+                );
+                painter.add(mesh);
+            }
+            other => {
+                let b = object_bounds(obj);
+                if !b.intersects(target.expand(20.0)) {
                     continue;
                 }
-                other => {
-                    let b = object_bounds(obj);
-                    if !b.intersects(target.expand(20.0)) {
-                        continue;
-                    }
-                    draw_non_stroke_object(
-                        &painter,
-                        other,
-                        &page.objects,
-                        page_to_zw,
-                        scale,
-                        |id| state.get_texture(id).map(|t| t.id()),
-                    );
-                }
+                draw_non_stroke_object(&painter, other, &page.objects, page_to_zw, scale, |id| {
+                    state.get_texture(id).map(|t| t.id())
+                });
             }
         }
     }
@@ -345,20 +330,17 @@ pub fn render_zoom_window_canvas(
                     let is_highlighter = state.current_tool == ActiveTool::Highlighter;
                     let stroke_width = zoom_stroke_width(state);
                     let color = if is_highlighter {
-                        let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
-                        Color32::from_rgba_unmultiplied(
-                            state.stroke_color.r(),
-                            state.stroke_color.g(),
-                            state.stroke_color.b(),
-                            hl_alpha,
+                        crate::geometry::highlighter_stroke_color_data(
+                            state.stroke_color,
+                            state.highlighter_opacity,
                         )
                     } else {
-                        state.stroke_color
+                        state.stroke_color.into()
                     };
                     page.objects.push(DrawObject::Stroke {
                         id: Uuid::new_v4().to_string(),
                         points: pts,
-                        color: color.into(),
+                        color,
                         width: stroke_width,
                         is_highlighter,
                         style: state.stroke_style,
@@ -378,27 +360,51 @@ pub fn render_zoom_window_canvas(
         }
     }
 
-    // 5. Render draft stroke yang sedang ditulis di Zoom Window
-    if let Some(pts) = &state.zoom_draft_stroke {
-        let is_highlighter = state.current_tool == ActiveTool::Highlighter;
-        let stroke_w = zoom_stroke_width(state) * scale;
-        let color = if is_highlighter {
-            let hl_alpha = (state.highlighter_opacity * 255.0).clamp(20.0, 255.0) as u8;
-            Color32::from_rgba_unmultiplied(
-                state.stroke_color.r(),
-                state.stroke_color.g(),
-                state.stroke_color.b(),
-                hl_alpha,
-            )
+    // Populate Pass 1 (Highlighter Underlay Layer) for Zoom Window including active highlighter draft
+    let zoom_draft_pts = state.zoom_draft_stroke.as_deref().or_else(|| {
+        if state.active_stroke_page_id.as_deref() == Some(&page.id)
+            && state.recognized_draft_shape.is_none()
+        {
+            state.draft_stroke.as_deref()
         } else {
-            state.stroke_color
-        };
+            None
+        }
+    });
+    let active_hl_draft = active_highlighter_draft(
+        state.current_tool,
+        zoom_draft_pts,
+        state.stroke_color,
+        state.stroke_width,
+        state.stroke_style,
+    );
+    if let Some(hl_shape) = build_highlighter_layer_shape(
+        ui.ctx(),
+        HighlighterCacheScope::ZoomWindow,
+        page,
+        active_hl_draft,
+        &mut state.highlighter_cache,
+        state.highlighter_opacity,
+        state.smoothing_steps,
+        scale,
+        zw_rect,
+        zw_rect,
+        target,
+        page_to_zw,
+    ) {
+        painter.set(hl_shape_idx, hl_shape);
+    }
+
+    // 5. Render draft stroke yang sedang ditulis di Zoom Window (Pen/Pencil; Highlighter sudah terkomposit di Pass 1)
+    if state.current_tool != ActiveTool::Highlighter
+        && let Some(pts) = &state.zoom_draft_stroke
+    {
+        let stroke_w = zoom_stroke_width(state) * scale;
         let smoothed = smooth_stroke_points(pts, state.smoothing_steps);
         let mesh = tessellate_stroke_styled(
             &smoothed,
             stroke_w,
-            color,
-            is_highlighter,
+            state.stroke_color,
+            false,
             state.stroke_style,
             page_to_zw,
         );
