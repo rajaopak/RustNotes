@@ -15,7 +15,7 @@ use super::widgets::{render_equation_modal_dialog, render_inline_text_editor};
 use super::zoom_window::render_zoom_target_indicator;
 use crate::geometry::{
     object_bounds, object_bounds_with_context, shape_connection_point, smooth_stroke_points,
-    tessellate_stroke_styled,
+    tessellate_stroke_styled_aa,
 };
 use crate::model::{ConnectionSite, ConnectorEnd, DrawObject, Page, Point2D, ShapeKind};
 use eframe::egui::{self, Color32, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
@@ -56,11 +56,13 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
     }
 
     // 1 & 2. Draw Paper Background, Patterns, Reserve Highlighter Underlay Slot, and Draw Content Layer
+    let ppp = ui.ctx().pixels_per_point().max(1.0);
     let hl_shape_idx = render_page_background_and_objects(
         &painter,
         rect,
         screen_clip_rect,
         origin,
+        ppp,
         page,
         state,
         page_to_screen,
@@ -222,11 +224,13 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
 }
 
 /// Merender latar belakang kertas/aset, mencadangkan slot underlay highlighter, dan merender objek lapisan konten.
+#[allow(clippy::too_many_arguments)]
 fn render_page_background_and_objects(
     painter: &egui::Painter,
     rect: Rect,
     screen_clip_rect: Rect,
     origin: Pos2,
+    ppp: f32,
     page: &Page,
     state: &mut CanvasState,
     page_to_screen: impl Fn(Pos2) -> Pos2 + Copy,
@@ -271,21 +275,25 @@ fn render_page_background_and_objects(
                     continue;
                 }
 
-                // Simpan mesh di dalam cache menggunakan koordinat lokal kertas (`|p| p`, skala 1.0),
-                // lalu transformasikan ke posisi layar (`origin` + `state.zoom`) setiap frame agar
-                // goresan tidak pernah bergeser atau hilang ketika halaman di-scroll maupun di-zoom.
-                let style_rev: u32 = (state.smoothing_steps as u32) << 8;
+                // Simpan mesh di dalam cache menggunakan koordinat lokal kertas (`|p| p`, skala 1.0)
+                // beserta AA feathering tepi presisi layar per bucket zoom/DPI, lalu transformasikan ke
+                // posisi layar (`origin` + `state.zoom`) agar goresan tetap bebas pixelated di semua zoom.
+                let aa_bucket = (state.zoom * ppp * 16.0).round().clamp(1.0, 65535.0) as u32;
+                let style_rev: u32 = ((state.smoothing_steps as u32) << 16) | aa_bucket;
                 let key = (id.clone(), style_rev);
                 let page_mesh = if let Some(cached) = state.mesh_cache.get(&key) {
                     cached.clone()
                 } else {
+                    let aa_screen_px = (1.15 / ppp).clamp(0.6, 1.25);
+                    let aa_page = aa_screen_px / state.zoom.max(0.05);
                     let smoothed = smooth_stroke_points(points, state.smoothing_steps);
-                    let mesh = tessellate_stroke_styled(
+                    let mesh = tessellate_stroke_styled_aa(
                         &smoothed,
                         *width,
                         color.to_color32(),
                         false,
                         *style,
+                        aa_page,
                         |p| p,
                     );
                     if state.mesh_cache.len() > 1500 {
@@ -404,13 +412,15 @@ fn render_active_draft_and_lasso(
                 state.stroke_width
             };
             let stroke_width = page_stroke_width * state.zoom;
+            let aa_px = (1.15 / ui.ctx().pixels_per_point().max(1.0)).clamp(0.6, 1.25);
             let smoothed = smooth_stroke_points(pts, state.smoothing_steps);
-            let mesh = tessellate_stroke_styled(
+            let mesh = tessellate_stroke_styled_aa(
                 &smoothed,
                 stroke_width,
                 state.stroke_color,
                 false,
                 state.stroke_style,
+                aa_px,
                 page_to_screen,
             );
             painter.add(mesh);

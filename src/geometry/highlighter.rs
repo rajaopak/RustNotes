@@ -192,7 +192,7 @@ fn rasterize_circle_max(
     if !center.x.is_finite() || !center.y.is_finite() {
         return;
     }
-    let outer_r = r_px + 0.5;
+    let outer_r = r_px + 0.75;
     let max_x_bound = mask_w as f32 - 1.0;
     let max_y_bound = mask_h as f32 - 1.0;
     let px_min_f = (center.x - outer_r).floor();
@@ -209,8 +209,9 @@ fn rasterize_circle_max(
     let py_max = py_max_f.min(max_y_bound) as usize;
 
     let outer_r_sq = outer_r * outer_r;
-    let inner_r = (r_px - 0.5).max(0.0);
+    let inner_r = (r_px - 0.75).max(0.0);
     let inner_r_sq = inner_r * inner_r;
+    let inv_band = 1.0 / (outer_r - inner_r).max(1e-4);
     let alpha_f = alpha as f32;
 
     for py in py_min..=py_max {
@@ -224,7 +225,8 @@ fn rasterize_circle_max(
                 let eff_a = if d_sq <= inner_r_sq {
                     alpha
                 } else {
-                    let cov = (outer_r - d_sq.sqrt()).clamp(0.0, 1.0);
+                    let t = ((outer_r - d_sq.sqrt()) * inv_band).clamp(0.0, 1.0);
+                    let cov = t * t * (3.0 - 2.0 * t);
                     (alpha_f * cov).round() as u8
                 };
                 let slot = &mut mask[row_offset + px];
@@ -262,7 +264,7 @@ fn rasterize_capsule_segment_max(
         return;
     }
 
-    let outer_r = r_px + 0.5;
+    let outer_r = r_px + 0.75;
     let max_x_bound = mask_w as f32 - 1.0;
     let max_y_bound = mask_h as f32 - 1.0;
     let px_min_f = (a.x.min(b.x) - outer_r).floor();
@@ -280,8 +282,9 @@ fn rasterize_capsule_segment_max(
 
     let inv_ab_len_sq = 1.0 / ab_len_sq;
     let outer_r_sq = outer_r * outer_r;
-    let inner_r = (r_px - 0.5).max(0.0);
+    let inner_r = (r_px - 0.75).max(0.0);
     let inner_r_sq = inner_r * inner_r;
+    let inv_band = 1.0 / (outer_r - inner_r).max(1e-4);
     let alpha_f = alpha as f32;
 
     for py in py_min..=py_max {
@@ -299,7 +302,8 @@ fn rasterize_capsule_segment_max(
                 let eff_a = if d_sq <= inner_r_sq {
                     alpha
                 } else {
-                    let cov = (outer_r - d_sq.sqrt()).clamp(0.0, 1.0);
+                    let s = ((outer_r - d_sq.sqrt()) * inv_band).clamp(0.0, 1.0);
+                    let cov = s * s * (3.0 - 2.0 * s);
                     (alpha_f * cov).round() as u8
                 };
                 let slot = &mut mask[row_offset + px];

@@ -334,16 +334,44 @@ pub fn tessellate_stroke_styled(
     style: StrokeStyle,
     page_to_screen: impl Fn(Pos2) -> Pos2,
 ) -> Mesh {
+    tessellate_stroke_styled_aa(
+        points,
+        base_width,
+        color,
+        is_highlighter,
+        style,
+        0.0,
+        page_to_screen,
+    )
+}
+
+/// Versi tessellator dengan *per-edge anti-aliasing feathering* (`aa_feather` dalam satuan koordinat target/layar)
+/// agar tepi mesh mentah tampil sehalus kurva vektor tanpa efek bergerigi/pixelated.
+pub fn tessellate_stroke_styled_aa(
+    points: &[StrokePoint],
+    base_width: f32,
+    color: Color32,
+    is_highlighter: bool,
+    style: StrokeStyle,
+    aa_feather: f32,
+    page_to_screen: impl Fn(Pos2) -> Pos2,
+) -> Mesh {
     let mut mesh = Mesh::default();
     if points.is_empty() {
         return mesh;
     }
+    let aa_feather = if aa_feather.is_finite() {
+        aa_feather.max(0.0)
+    } else {
+        0.0
+    };
 
     // Dukungan goresan 1 titik (Single-point stroke / tap)
     if points.len() == 1 {
         let center = page_to_screen(points[0].to_pos2());
         let r = stroke_radius_at_pressure(base_width, points[0].pressure, is_highlighter);
-        add_round_cap(&mut mesh, center, r, color, 16);
+        let segs = if aa_feather > 1e-4 { 20 } else { 16 };
+        add_round_cap_aa(&mut mesh, center, r, color, aa_feather, segs);
         return mesh;
     }
 
@@ -363,17 +391,20 @@ pub fn tessellate_stroke_styled(
             .fold(0.05_f32, f32::max);
         let center = page_to_screen(points[0].to_pos2());
         let r = stroke_radius_at_pressure(base_width, max_p, is_highlighter);
-        add_round_cap(&mut mesh, center, r, color, 16);
+        let segs = if aa_feather > 1e-4 { 20 } else { 16 };
+        add_round_cap_aa(&mut mesh, center, r, color, aa_feather, segs);
         return mesh;
     }
 
+    let dot_segs = if aa_feather > 1e-4 { 16 } else { 12 };
     match style {
         StrokeStyle::Solid => {
-            tessellate_single_ribbon(
+            tessellate_single_ribbon_aa(
                 points,
                 base_width,
                 color,
                 is_highlighter,
+                aa_feather,
                 &page_to_screen,
                 &mut mesh,
             );
@@ -385,7 +416,7 @@ pub fn tessellate_stroke_styled(
                 let pt = sample_point_at_dist(points, &dists, s);
                 let center = page_to_screen(pt.to_pos2());
                 let r = stroke_radius_at_pressure(base_width, pt.pressure, is_highlighter).max(0.8);
-                add_round_cap(&mut mesh, center, r, color, 12);
+                add_round_cap_aa(&mut mesh, center, r, color, aa_feather, dot_segs);
                 s += dot_spacing;
             }
         }
@@ -403,13 +434,14 @@ pub fn tessellate_stroke_styled(
                     let r =
                         stroke_radius_at_pressure(base_width, sub_pts[0].pressure, is_highlighter)
                             .max(1.0);
-                    add_round_cap(&mut mesh, center, r, color, 12);
+                    add_round_cap_aa(&mut mesh, center, r, color, aa_feather, dot_segs);
                 } else if sub_pts.len() >= 2 {
-                    tessellate_single_ribbon(
+                    tessellate_single_ribbon_aa(
                         &sub_pts,
                         base_width,
                         color,
                         is_highlighter,
+                        aa_feather,
                         &page_to_screen,
                         &mut mesh,
                     );
@@ -434,13 +466,14 @@ pub fn tessellate_stroke_styled(
                     let r =
                         stroke_radius_at_pressure(base_width, dash_pts[0].pressure, is_highlighter)
                             .max(1.0);
-                    add_round_cap(&mut mesh, center, r, color, 12);
+                    add_round_cap_aa(&mut mesh, center, r, color, aa_feather, dot_segs);
                 } else if dash_pts.len() >= 2 {
-                    tessellate_single_ribbon(
+                    tessellate_single_ribbon_aa(
                         &dash_pts,
                         base_width,
                         color,
                         is_highlighter,
+                        aa_feather,
                         &page_to_screen,
                         &mut mesh,
                     );
@@ -453,7 +486,7 @@ pub fn tessellate_stroke_styled(
                     let center = page_to_screen(dot_pt.to_pos2());
                     let r = stroke_radius_at_pressure(base_width, dot_pt.pressure, is_highlighter)
                         .max(0.8);
-                    add_round_cap(&mut mesh, center, r, color, 12);
+                    add_round_cap_aa(&mut mesh, center, r, color, aa_feather, dot_segs);
                 }
                 curr += cycle;
             }
@@ -795,11 +828,26 @@ pub fn filter_stroke_points_adaptive(
     filtered
 }
 
-fn tessellate_single_ribbon(
+#[inline]
+fn aa_radii(radius: f32, aa_feather: f32) -> (f32, f32) {
+    if aa_feather <= 1e-4 {
+        return (radius, radius);
+    }
+    let half_f = (aa_feather * 0.5).min(radius * 0.65);
+    ((radius - half_f).max(0.0), radius + half_f)
+}
+
+#[inline]
+fn push_quad(indices: &mut Vec<u32>, a: u32, b: u32, c: u32, d: u32) {
+    indices.extend_from_slice(&[a, b, c, b, d, c]);
+}
+
+fn tessellate_single_ribbon_aa(
     points: &[StrokePoint],
     base_width: f32,
     color: Color32,
     is_highlighter: bool,
+    aa_feather: f32,
     page_to_screen: &impl Fn(Pos2) -> Pos2,
     mesh: &mut Mesh,
 ) {
@@ -814,7 +862,8 @@ fn tessellate_single_ribbon(
         let center = page_to_screen(points[0].to_pos2());
         let r = stroke_radius_at_pressure(page_base_width, points[0].pressure, is_highlighter)
             * coord_scale;
-        add_round_cap(mesh, center, r, color, 16);
+        let segs = if aa_feather > 1e-4 { 20 } else { 16 };
+        add_round_cap_aa(mesh, center, r, color, aa_feather, segs);
         return;
     }
 
@@ -828,7 +877,8 @@ fn tessellate_single_ribbon(
         let center = page_to_screen(filtered[0].to_pos2());
         let r = stroke_radius_at_pressure(page_base_width, filtered[0].pressure, is_highlighter)
             * coord_scale;
-        add_round_cap(mesh, center, r, color, 16);
+        let segs = if aa_feather > 1e-4 { 20 } else { 16 };
+        add_round_cap_aa(mesh, center, r, color, aa_feather, segs);
         return;
     }
     let pts_to_use = &filtered[..];
@@ -858,35 +908,57 @@ fn tessellate_single_ribbon(
         seg_norms.push(norm);
     }
 
+    let has_aa = aa_feather > 1e-4;
+    let mut aa_indices: Vec<u32> = if has_aa {
+        Vec::with_capacity(m * 16)
+    } else {
+        Vec::new()
+    };
+    let mut core_indices: Vec<u32> = Vec::with_capacity(m * 12);
+
     // Start semicircle cap (untuk Pen, Pencil, dan Highlighter agar ujung membulat seperti kapsul).
     // Hitung segmen berdasarkan ketebalan dalam koordinat halaman agar tetap 100% zoom-invariant.
     let cap_segments = ((page_base_width * 0.45).ceil() as usize).clamp(12, 24);
     let is_opaque = !is_highlighter && color.a() == 255;
     let start_outward = -seg_dirs[0];
-    add_semicircle_cap(
+    add_semicircle_cap_aa(
         mesh,
+        &mut aa_indices,
+        &mut core_indices,
         screen_pts[0],
         radii[0],
         start_outward,
         color,
+        aa_feather,
         cap_segments,
     );
 
     // Titik awal pita (i = 0)
     let p0 = screen_pts[0];
     let n0 = seg_norms[0];
-    let r0 = radii[0];
-    let mut prev_left = p0 + n0 * r0;
-    let mut prev_right = p0 - n0 * r0;
+    let (r0_core, r0_outer) = aa_radii(radii[0], aa_feather);
+    let mut prev_left = p0 + n0 * r0_core;
+    let mut prev_right = p0 - n0 * r0_core;
     let mut curr_l_idx = mesh.vertices.len() as u32;
     mesh.colored_vertex(prev_left, color);
     let mut curr_r_idx = mesh.vertices.len() as u32;
     mesh.colored_vertex(prev_right, color);
 
+    let (mut curr_l_outer_idx, mut curr_r_outer_idx) = if has_aa {
+        let l_out = mesh.vertices.len() as u32;
+        mesh.colored_vertex(p0 + n0 * r0_outer, Color32::TRANSPARENT);
+        let r_out = mesh.vertices.len() as u32;
+        mesh.colored_vertex(p0 - n0 * r0_outer, Color32::TRANSPARENT);
+        (l_out, r_out)
+    } else {
+        (0, 0)
+    };
+
     // Bangun simpul pita sepanjang titik interior bebas spike (tanpa ekstrusi tangensial keluar radius).
     for i in 1..(m - 1) {
         let p = screen_pts[i];
         let r = radii[i];
+        let (r_core, r_outer) = aa_radii(r, aa_feather);
         let t_in = seg_dirs[i - 1];
         let n_in = seg_norms[i - 1];
         let t_out = seg_dirs[i];
@@ -903,16 +975,43 @@ fn tessellate_single_ribbon(
                 } else {
                     n_out
                 };
-                let left = p + bisect * r;
-                let right = p - bisect * r;
+                let left = p + bisect * r_core;
+                let right = p - bisect * r_core;
 
                 let next_l_idx = mesh.vertices.len() as u32;
                 mesh.colored_vertex(left, color);
                 let next_r_idx = mesh.vertices.len() as u32;
                 mesh.colored_vertex(right, color);
+                push_quad(
+                    &mut core_indices,
+                    curr_l_idx,
+                    curr_r_idx,
+                    next_l_idx,
+                    next_r_idx,
+                );
 
-                mesh.add_triangle(curr_l_idx, curr_r_idx, next_l_idx);
-                mesh.add_triangle(curr_r_idx, next_r_idx, next_l_idx);
+                if has_aa {
+                    let next_l_outer = mesh.vertices.len() as u32;
+                    mesh.colored_vertex(p + bisect * r_outer, Color32::TRANSPARENT);
+                    let next_r_outer = mesh.vertices.len() as u32;
+                    mesh.colored_vertex(p - bisect * r_outer, Color32::TRANSPARENT);
+                    push_quad(
+                        &mut aa_indices,
+                        curr_l_idx,
+                        curr_l_outer_idx,
+                        next_l_idx,
+                        next_l_outer,
+                    );
+                    push_quad(
+                        &mut aa_indices,
+                        curr_r_idx,
+                        curr_r_outer_idx,
+                        next_r_idx,
+                        next_r_outer,
+                    );
+                    curr_l_outer_idx = next_l_outer;
+                    curr_r_outer_idx = next_r_outer;
+                }
 
                 curr_l_idx = next_l_idx;
                 curr_r_idx = next_r_idx;
@@ -928,7 +1027,7 @@ fn tessellate_single_ribbon(
                 n_out
             };
             let miter_scale = (1.0 / bisect.dot(n_in).abs().max(0.95)).clamp(1.0, 1.03);
-            let eff_r = r * miter_scale;
+            let eff_r = r_core * miter_scale;
             let left = p + bisect * eff_r;
             let right = p - bisect * eff_r;
             let l_proj = (left - prev_left).dot(t_in);
@@ -938,9 +1037,37 @@ fn tessellate_single_ribbon(
                 mesh.colored_vertex(left, color);
                 let next_r_idx = mesh.vertices.len() as u32;
                 mesh.colored_vertex(right, color);
+                push_quad(
+                    &mut core_indices,
+                    curr_l_idx,
+                    curr_r_idx,
+                    next_l_idx,
+                    next_r_idx,
+                );
 
-                mesh.add_triangle(curr_l_idx, curr_r_idx, next_l_idx);
-                mesh.add_triangle(curr_r_idx, next_r_idx, next_l_idx);
+                if has_aa {
+                    let eff_outer = r_outer * miter_scale;
+                    let next_l_outer = mesh.vertices.len() as u32;
+                    mesh.colored_vertex(p + bisect * eff_outer, Color32::TRANSPARENT);
+                    let next_r_outer = mesh.vertices.len() as u32;
+                    mesh.colored_vertex(p - bisect * eff_outer, Color32::TRANSPARENT);
+                    push_quad(
+                        &mut aa_indices,
+                        curr_l_idx,
+                        curr_l_outer_idx,
+                        next_l_idx,
+                        next_l_outer,
+                    );
+                    push_quad(
+                        &mut aa_indices,
+                        curr_r_idx,
+                        curr_r_outer_idx,
+                        next_r_idx,
+                        next_r_outer,
+                    );
+                    curr_l_outer_idx = next_l_outer;
+                    curr_r_outer_idx = next_r_outer;
+                }
 
                 curr_l_idx = next_l_idx;
                 curr_r_idx = next_r_idx;
@@ -952,35 +1079,71 @@ fn tessellate_single_ribbon(
 
         // Sambungan tegak lurus + kipas Round Join melingkar pada belokan atau pelipatan dalam:
         // seluruh vertex berada persis pada jarak <= r dari p sehingga spike secara matematis mustahil terjadi.
-        let in_left = p + n_in * r;
-        let in_right = p - n_in * r;
+        let in_left = p + n_in * r_core;
+        let in_right = p - n_in * r_core;
         let in_l_idx = mesh.vertices.len() as u32;
         mesh.colored_vertex(in_left, color);
         let in_r_idx = mesh.vertices.len() as u32;
         mesh.colored_vertex(in_right, color);
+        push_quad(
+            &mut core_indices,
+            curr_l_idx,
+            curr_r_idx,
+            in_l_idx,
+            in_r_idx,
+        );
 
-        mesh.add_triangle(curr_l_idx, curr_r_idx, in_l_idx);
-        mesh.add_triangle(curr_r_idx, in_r_idx, in_l_idx);
+        if has_aa {
+            let in_l_outer = mesh.vertices.len() as u32;
+            mesh.colored_vertex(p + n_in * r_outer, Color32::TRANSPARENT);
+            let in_r_outer = mesh.vertices.len() as u32;
+            mesh.colored_vertex(p - n_in * r_outer, Color32::TRANSPARENT);
+            push_quad(
+                &mut aa_indices,
+                curr_l_idx,
+                curr_l_outer_idx,
+                in_l_idx,
+                in_l_outer,
+            );
+            push_quad(
+                &mut aa_indices,
+                curr_r_idx,
+                curr_r_outer_idx,
+                in_r_idx,
+                in_r_outer,
+            );
+        }
 
-        let out_left = p + n_out * r;
-        let out_right = p - n_out * r;
+        let out_left = p + n_out * r_core;
+        let out_right = p - n_out * r_core;
         let out_l_idx = mesh.vertices.len() as u32;
         mesh.colored_vertex(out_left, color);
         let out_r_idx = mesh.vertices.len() as u32;
         mesh.colored_vertex(out_right, color);
+
+        let (out_l_outer, out_r_outer) = if has_aa {
+            let l_out = mesh.vertices.len() as u32;
+            mesh.colored_vertex(p + n_out * r_outer, Color32::TRANSPARENT);
+            let r_out = mesh.vertices.len() as u32;
+            mesh.colored_vertex(p - n_out * r_outer, Color32::TRANSPARENT);
+            (l_out, r_out)
+        } else {
+            (0, 0)
+        };
 
         let center_idx = mesh.vertices.len() as u32;
         mesh.colored_vertex(p, color);
 
         if !is_opaque {
             if cross >= 0.0 {
-                mesh.add_triangle(center_idx, in_l_idx, out_l_idx);
+                core_indices.extend_from_slice(&[center_idx, in_l_idx, out_l_idx]);
             } else {
-                mesh.add_triangle(center_idx, in_r_idx, out_r_idx);
+                core_indices.extend_from_slice(&[center_idx, in_r_idx, out_r_idx]);
             }
         } else {
-            mesh.add_triangle(center_idx, in_l_idx, out_l_idx);
-            mesh.add_triangle(center_idx, in_r_idx, out_r_idx);
+            core_indices.extend_from_slice(&[
+                center_idx, in_l_idx, out_l_idx, center_idx, in_r_idx, out_r_idx,
+            ]);
         }
 
         let (start_norm, end_norm) = if cross >= 0.0 {
@@ -988,10 +1151,24 @@ fn tessellate_single_ribbon(
         } else {
             (n_in, n_out)
         };
-        add_round_join_fan(mesh, center_idx, p, r, start_norm, end_norm, cross, color);
+        add_round_join_fan_aa(
+            mesh,
+            &mut aa_indices,
+            &mut core_indices,
+            center_idx,
+            p,
+            r,
+            start_norm,
+            end_norm,
+            cross,
+            color,
+            aa_feather,
+        );
 
         curr_l_idx = out_l_idx;
         curr_r_idx = out_r_idx;
+        curr_l_outer_idx = out_l_outer;
+        curr_r_outer_idx = out_r_outer;
         prev_left = out_left;
         prev_right = out_right;
     }
@@ -1000,28 +1177,69 @@ fn tessellate_single_ribbon(
     let last_idx = m - 1;
     let p_last = screen_pts[last_idx];
     let r_last = radii[last_idx];
+    let (r_last_core, r_last_outer) = aa_radii(r_last, aa_feather);
     let t_last = seg_dirs[last_idx - 1];
     let n_last = seg_norms[last_idx - 1];
 
-    let left_last = p_last + n_last * r_last;
-    let right_last = p_last - n_last * r_last;
+    let left_last = p_last + n_last * r_last_core;
+    let right_last = p_last - n_last * r_last_core;
 
     let end_l_idx = mesh.vertices.len() as u32;
     mesh.colored_vertex(left_last, color);
     let end_r_idx = mesh.vertices.len() as u32;
     mesh.colored_vertex(right_last, color);
+    push_quad(
+        &mut core_indices,
+        curr_l_idx,
+        curr_r_idx,
+        end_l_idx,
+        end_r_idx,
+    );
 
-    mesh.add_triangle(curr_l_idx, curr_r_idx, end_l_idx);
-    mesh.add_triangle(curr_r_idx, end_r_idx, end_l_idx);
+    if has_aa {
+        let end_l_outer = mesh.vertices.len() as u32;
+        mesh.colored_vertex(p_last + n_last * r_last_outer, Color32::TRANSPARENT);
+        let end_r_outer = mesh.vertices.len() as u32;
+        mesh.colored_vertex(p_last - n_last * r_last_outer, Color32::TRANSPARENT);
+        push_quad(
+            &mut aa_indices,
+            curr_l_idx,
+            curr_l_outer_idx,
+            end_l_idx,
+            end_l_outer,
+        );
+        push_quad(
+            &mut aa_indices,
+            curr_r_idx,
+            curr_r_outer_idx,
+            end_r_idx,
+            end_r_outer,
+        );
+    }
 
     // End semicircle cap
-    add_semicircle_cap(mesh, p_last, r_last, t_last, color, cap_segments);
+    add_semicircle_cap_aa(
+        mesh,
+        &mut aa_indices,
+        &mut core_indices,
+        p_last,
+        r_last,
+        t_last,
+        color,
+        aa_feather,
+        cap_segments,
+    );
+
+    mesh.indices.extend_from_slice(&aa_indices);
+    mesh.indices.extend_from_slice(&core_indices);
 }
 
 /// Menambahkan kipas busur melingkar (Round Join) pada sudut tajam untuk mencegah ujung bergerigi atau lonjakan miter.
 #[allow(clippy::too_many_arguments)]
-fn add_round_join_fan(
+fn add_round_join_fan_aa(
     mesh: &mut Mesh,
+    aa_indices: &mut Vec<u32>,
+    core_indices: &mut Vec<u32>,
     center_idx: u32,
     center: Pos2,
     radius: f32,
@@ -1029,6 +1247,7 @@ fn add_round_join_fan(
     end_norm: Vec2,
     cross: f32,
     color: Color32,
+    aa_feather: f32,
 ) {
     if radius <= 1e-4 {
         return;
@@ -1051,30 +1270,57 @@ fn add_round_join_fan(
         };
     }
 
+    let (r_core, r_outer) = aa_radii(radius, aa_feather);
+    let has_aa = aa_feather > 1e-4;
     let steps = ((delta.abs() / 0.18).ceil() as usize).clamp(2, 16);
     let start_idx = mesh.vertices.len() as u32;
     for s in 0..=steps {
         let t = s as f32 / steps as f32;
         let angle = a0 + delta * t;
-        let pos = center + Vec2::new(angle.cos(), angle.sin()) * radius;
+        let pos = center + Vec2::new(angle.cos(), angle.sin()) * r_core;
         mesh.colored_vertex(pos, color);
     }
     for s in 0..steps as u32 {
-        mesh.add_triangle(center_idx, start_idx + s, start_idx + s + 1);
+        core_indices.extend_from_slice(&[center_idx, start_idx + s, start_idx + s + 1]);
+    }
+
+    if has_aa {
+        let outer_start = mesh.vertices.len() as u32;
+        for s in 0..=steps {
+            let t = s as f32 / steps as f32;
+            let angle = a0 + delta * t;
+            let pos = center + Vec2::new(angle.cos(), angle.sin()) * r_outer;
+            mesh.colored_vertex(pos, Color32::TRANSPARENT);
+        }
+        for s in 0..steps as u32 {
+            push_quad(
+                aa_indices,
+                start_idx + s,
+                outer_start + s,
+                start_idx + s + 1,
+                outer_start + s + 1,
+            );
+        }
     }
 }
 
-fn add_semicircle_cap(
+#[allow(clippy::too_many_arguments)]
+fn add_semicircle_cap_aa(
     mesh: &mut Mesh,
+    aa_indices: &mut Vec<u32>,
+    core_indices: &mut Vec<u32>,
     center: Pos2,
     radius: f32,
     outward_dir: Vec2,
     color: Color32,
+    aa_feather: f32,
     segments: usize,
 ) {
     if outward_dir.length_sq() < 1e-6 {
         return;
     }
+    let (r_core, r_outer) = aa_radii(radius, aa_feather);
+    let has_aa = aa_feather > 1e-4;
     let center_idx = mesh.vertices.len() as u32;
     mesh.colored_vertex(center, color);
 
@@ -1085,27 +1331,80 @@ fn add_semicircle_cap(
         let offset_angle =
             -std::f32::consts::FRAC_PI_2 + (i as f32 / segments as f32) * std::f32::consts::PI;
         let angle = base_angle + offset_angle;
-        let pos = center + Vec2::new(angle.cos(), angle.sin()) * radius;
+        let pos = center + Vec2::new(angle.cos(), angle.sin()) * r_core;
         mesh.colored_vertex(pos, color);
     }
 
     for i in 0..segments as u32 {
-        mesh.add_triangle(center_idx, start_idx + i, start_idx + i + 1);
+        core_indices.extend_from_slice(&[center_idx, start_idx + i, start_idx + i + 1]);
+    }
+
+    if has_aa {
+        let outer_start = mesh.vertices.len() as u32;
+        for i in 0..=segments {
+            let offset_angle =
+                -std::f32::consts::FRAC_PI_2 + (i as f32 / segments as f32) * std::f32::consts::PI;
+            let angle = base_angle + offset_angle;
+            let pos = center + Vec2::new(angle.cos(), angle.sin()) * r_outer;
+            mesh.colored_vertex(pos, Color32::TRANSPARENT);
+        }
+        for i in 0..segments as u32 {
+            push_quad(
+                aa_indices,
+                start_idx + i,
+                outer_start + i,
+                start_idx + i + 1,
+                outer_start + i + 1,
+            );
+        }
     }
 }
 
-fn add_round_cap(mesh: &mut Mesh, center: Pos2, radius: f32, color: Color32, segments: usize) {
+fn add_round_cap_aa(
+    mesh: &mut Mesh,
+    center: Pos2,
+    radius: f32,
+    color: Color32,
+    aa_feather: f32,
+    segments: usize,
+) {
+    let (r_core, r_outer) = aa_radii(radius, aa_feather);
+    let has_aa = aa_feather > 1e-4;
+    let mut aa_indices = Vec::new();
+    let mut core_indices = Vec::new();
+
     let center_idx = mesh.vertices.len() as u32;
     mesh.colored_vertex(center, color);
 
     let start_idx = mesh.vertices.len() as u32;
     for i in 0..=segments {
         let angle = (i as f32 / segments as f32) * std::f32::consts::TAU;
-        let pos = center + Vec2::new(angle.cos(), angle.sin()) * radius;
+        let pos = center + Vec2::new(angle.cos(), angle.sin()) * r_core;
         mesh.colored_vertex(pos, color);
     }
 
     for i in 0..segments as u32 {
-        mesh.add_triangle(center_idx, start_idx + i, start_idx + i + 1);
+        core_indices.extend_from_slice(&[center_idx, start_idx + i, start_idx + i + 1]);
     }
+
+    if has_aa {
+        let outer_start = mesh.vertices.len() as u32;
+        for i in 0..=segments {
+            let angle = (i as f32 / segments as f32) * std::f32::consts::TAU;
+            let pos = center + Vec2::new(angle.cos(), angle.sin()) * r_outer;
+            mesh.colored_vertex(pos, Color32::TRANSPARENT);
+        }
+        for i in 0..segments as u32 {
+            push_quad(
+                &mut aa_indices,
+                start_idx + i,
+                outer_start + i,
+                start_idx + i + 1,
+                outer_start + i + 1,
+            );
+        }
+    }
+
+    mesh.indices.extend_from_slice(&aa_indices);
+    mesh.indices.extend_from_slice(&core_indices);
 }

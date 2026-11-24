@@ -250,7 +250,7 @@ pub fn build_highlighter_layer_shape(
     let desired_ppp = if scope == HighlighterCacheScope::Thumbnail {
         1.0
     } else {
-        ctx.pixels_per_point().clamp(1.0, 2.0)
+        (ctx.pixels_per_point() * 2.0).clamp(2.0, 3.0)
     };
     let max_side = ctx
         .input(|i| i.max_texture_side)

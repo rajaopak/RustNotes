@@ -10,7 +10,7 @@ use super::state::CanvasState;
 use super::types::ActiveTool;
 use crate::geometry::{
     object_bounds, recognize_handwriting_from_strokes, smooth_stroke_points,
-    tessellate_stroke_styled,
+    tessellate_stroke_styled_aa,
 };
 use crate::model::{DrawObject, Page};
 use eframe::egui::{self, Color32, PointerButton, Pos2, Rect, Sense, Stroke, Ui, Vec2};
@@ -103,12 +103,14 @@ pub fn render_zoom_window_canvas(
                 }
                 let smoothed = smooth_stroke_points(points, state.smoothing_steps);
                 let stroke_w = width * scale;
-                let mesh = tessellate_stroke_styled(
+                let aa_px = (1.15 / ui.ctx().pixels_per_point().max(1.0)).clamp(0.6, 1.25);
+                let mesh = tessellate_stroke_styled_aa(
                     &smoothed,
                     stroke_w,
                     color.to_color32(),
                     false,
                     *style,
+                    aa_px,
                     page_to_zw,
                 );
                 painter.add(mesh);
@@ -400,13 +402,15 @@ pub fn render_zoom_window_canvas(
         && let Some(pts) = &state.zoom_draft_stroke
     {
         let stroke_w = zoom_stroke_width(state) * scale;
+        let aa_px = (1.15 / ui.ctx().pixels_per_point().max(1.0)).clamp(0.6, 1.25);
         let smoothed = smooth_stroke_points(pts, state.smoothing_steps);
-        let mesh = tessellate_stroke_styled(
+        let mesh = tessellate_stroke_styled_aa(
             &smoothed,
             stroke_w,
             state.stroke_color,
             false,
             state.stroke_style,
+            aa_px,
             page_to_zw,
         );
         painter.add(mesh);
