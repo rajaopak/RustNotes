@@ -10,8 +10,13 @@ pub const MIN_EQUATION_SCALE: f32 = 0.2;
 pub const MAX_EQUATION_SCALE: f32 = 10.0;
 pub const MIN_STROKE_WIDTH: f32 = 0.5;
 pub const MAX_STROKE_WIDTH: f32 = 64.0;
+pub const MIN_IMAGE_DIM: f32 = 8.0;
+pub const MAX_OBJECT_DIM: f32 = 10_000.0;
 
 pub fn translate_object(obj: &mut DrawObject, dx: f32, dy: f32) {
+    if !dx.is_finite() || !dy.is_finite() {
+        return;
+    }
     match obj {
         DrawObject::Stroke { points, .. } => {
             for p in points {
@@ -56,8 +61,12 @@ pub fn translate_object(obj: &mut DrawObject, dx: f32, dy: f32) {
             start,
             end,
             control_points,
+            locked,
             ..
         } => {
+            if *locked {
+                return;
+            }
             if let crate::model::ConnectorEnd::Free { x, y } = start {
                 *x += dx;
                 *y += dy;
@@ -111,8 +120,8 @@ pub fn scale_object(obj: &mut DrawObject, origin: Pos2, sx: f32, sy: f32) {
             }
             *x = origin.x + (*x - origin.x) * sx;
             *y = origin.y + (*y - origin.y) * sy;
-            *width *= sx;
-            *height *= sy;
+            *width = (*width * sx).clamp(-MAX_OBJECT_DIM, MAX_OBJECT_DIM);
+            *height = (*height * sy).clamp(-MAX_OBJECT_DIM, MAX_OBJECT_DIM);
             for cp in curve_points {
                 cp.x = origin.x + (cp.x - origin.x) * sx;
                 cp.y = origin.y + (cp.y - origin.y) * sy;
@@ -158,14 +167,14 @@ pub fn scale_object(obj: &mut DrawObject, origin: Pos2, sx: f32, sy: f32) {
             let nw = *width * sx;
             let nh = *height * sy;
             *width = if nw < 0.0 {
-                nw.min(-20.0)
+                nw.clamp(-MAX_OBJECT_DIM, -20.0)
             } else {
-                nw.max(20.0)
+                nw.clamp(20.0, MAX_OBJECT_DIM)
             };
             *height = if nh < 0.0 {
-                nh.min(-20.0)
+                nh.clamp(-MAX_OBJECT_DIM, -20.0)
             } else {
-                nh.max(20.0)
+                nh.clamp(20.0, MAX_OBJECT_DIM)
             };
             let prev_fs = if font_size.is_finite() && *font_size > 1e-4 {
                 *font_size
@@ -184,8 +193,18 @@ pub fn scale_object(obj: &mut DrawObject, origin: Pos2, sx: f32, sy: f32) {
         } => {
             *x = origin.x + (*x - origin.x) * sx;
             *y = origin.y + (*y - origin.y) * sy;
-            *width *= sx;
-            *height *= sy;
+            let nw = *width * sx;
+            let nh = *height * sy;
+            *width = if nw < 0.0 {
+                nw.clamp(-MAX_OBJECT_DIM, -MIN_IMAGE_DIM)
+            } else {
+                nw.clamp(MIN_IMAGE_DIM, MAX_OBJECT_DIM)
+            };
+            *height = if nh < 0.0 {
+                nh.clamp(-MAX_OBJECT_DIM, -MIN_IMAGE_DIM)
+            } else {
+                nh.clamp(MIN_IMAGE_DIM, MAX_OBJECT_DIM)
+            };
         }
         DrawObject::Equation {
             x,
@@ -214,8 +233,12 @@ pub fn scale_object(obj: &mut DrawObject, origin: Pos2, sx: f32, sy: f32) {
             end,
             control_points,
             style,
+            locked,
             ..
         } => {
+            if *locked {
+                return;
+            }
             if let crate::model::ConnectorEnd::Free { x, y } = start {
                 *x = origin.x + (*x - origin.x) * sx;
                 *y = origin.y + (*y - origin.y) * sy;
@@ -554,8 +577,12 @@ pub fn rotate_object(obj: &mut DrawObject, origin: Pos2, angle_rad: f32) {
             start,
             end,
             control_points,
+            locked,
             ..
         } => {
+            if *locked {
+                return;
+            }
             if let crate::model::ConnectorEnd::Free { x, y } = start {
                 let (nx, ny) = rotate_pt(*x, *y);
                 *x = nx;
@@ -740,8 +767,12 @@ fn rotate_object_90_cw(obj: &mut DrawObject, old_h: f32) {
             start,
             end,
             control_points,
+            locked,
             ..
         } => {
+            if *locked {
+                return;
+            }
             if let crate::model::ConnectorEnd::Free { x, y } = start {
                 let nx = old_h - *y;
                 let ny = *x;
@@ -903,8 +934,12 @@ fn rotate_object_90_ccw(obj: &mut DrawObject, old_w: f32) {
             start,
             end,
             control_points,
+            locked,
             ..
         } => {
+            if *locked {
+                return;
+            }
             if let crate::model::ConnectorEnd::Free { x, y } = start {
                 let nx = *y;
                 let ny = old_w - *x;
@@ -1059,8 +1094,12 @@ fn rotate_object_180(obj: &mut DrawObject, old_w: f32, old_h: f32) {
             start,
             end,
             control_points,
+            locked,
             ..
         } => {
+            if *locked {
+                return;
+            }
             if let crate::model::ConnectorEnd::Free { x, y } = start {
                 *x = old_w - *x;
                 *y = old_h - *y;

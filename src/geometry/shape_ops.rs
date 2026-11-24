@@ -880,17 +880,41 @@ impl ShapeTransformBox {
     }
 }
 
+pub const MAX_SHAPE_DIM: f32 = 10_000.0;
+
 /// Menghitung skala proporsional bentuk dari sudut berlawanan (A1: "scale").
 /// Anchor adalah sudut yang berlawanan dan tetap diam di tempatnya.
-/// Hasil dijamin memiliki ukuran minimal `min_dim` (misal 4.0 pt) dan tidak pernah menghasilkan NaN.
+/// Menggunakan proyeksi vektor diagonal kontinu agar gerak mouse 1:1 mulus (tidak loncat/licin).
+/// Hasil dijamin memiliki ukuran minimal `min_dim` (misal 4.0 pt), maksimal `MAX_SHAPE_DIM`, dan bebas NaN.
 pub fn calculate_proportional_scale(
     corner: TransformHandleKind,
     cur_pos: Point2D,
     orig: ShapeTransformBox,
     min_dim: f32,
 ) -> (f32, f32, f32, f32) {
-    let w0 = orig.width.abs().max(min_dim);
-    let h0 = orig.height.abs().max(min_dim);
+    let min_dim = if min_dim.is_finite() {
+        min_dim.max(1.0)
+    } else {
+        4.0
+    };
+    if !cur_pos.x.is_finite()
+        || !cur_pos.y.is_finite()
+        || !orig.x.is_finite()
+        || !orig.y.is_finite()
+        || !orig.width.is_finite()
+        || !orig.height.is_finite()
+        || !orig.rotation.is_finite()
+    {
+        return (
+            orig.x,
+            orig.y,
+            orig.width.abs().clamp(min_dim, MAX_SHAPE_DIM),
+            orig.height.abs().clamp(min_dim, MAX_SHAPE_DIM),
+        );
+    }
+
+    let w0 = orig.width.abs().clamp(min_dim, MAX_SHAPE_DIM);
+    let h0 = orig.height.abs().clamp(min_dim, MAX_SHAPE_DIM);
     let cx0 = orig.x + orig.width * 0.5;
     let cy0 = orig.y + orig.height * 0.5;
 
@@ -916,15 +940,11 @@ pub fn calculate_proportional_scale(
     let local_x = (dx * cos_r + dy * sin_r) * sign_x;
     let local_y = (-dx * sin_r + dy * cos_r) * sign_y;
 
-    // Skala proporsional mempertahankan rasio aspek
-    let scale_x = local_x / w0;
-    let scale_y = local_y / h0;
-    let mut scale = scale_x.max(scale_y);
-
+    // Proyeksi diagonal kontinu: halus dan bebas hipersensitivitas pada objek pipih
+    let diag_len_sq = (w0 * w0 + h0 * h0).max(1.0);
     let min_scale = min_dim / w0.min(h0);
-    if scale < min_scale {
-        scale = min_scale;
-    }
+    let max_scale = (MAX_SHAPE_DIM / w0.max(h0)).max(min_scale);
+    let scale = ((local_x * w0 + local_y * h0) / diag_len_sq).clamp(min_scale, max_scale);
 
     let new_w = w0 * scale;
     let new_h = h0 * scale;
@@ -944,8 +964,29 @@ pub fn calculate_single_axis_resize(
     orig: ShapeTransformBox,
     min_dim: f32,
 ) -> (f32, f32, f32, f32) {
-    let w0 = orig.width.abs().max(min_dim);
-    let h0 = orig.height.abs().max(min_dim);
+    let min_dim = if min_dim.is_finite() {
+        min_dim.max(1.0)
+    } else {
+        4.0
+    };
+    if !cur_pos.x.is_finite()
+        || !cur_pos.y.is_finite()
+        || !orig.x.is_finite()
+        || !orig.y.is_finite()
+        || !orig.width.is_finite()
+        || !orig.height.is_finite()
+        || !orig.rotation.is_finite()
+    {
+        return (
+            orig.x,
+            orig.y,
+            orig.width.abs().clamp(min_dim, MAX_SHAPE_DIM),
+            orig.height.abs().clamp(min_dim, MAX_SHAPE_DIM),
+        );
+    }
+
+    let w0 = orig.width.abs().clamp(min_dim, MAX_SHAPE_DIM);
+    let h0 = orig.height.abs().clamp(min_dim, MAX_SHAPE_DIM);
     let cx0 = orig.x + orig.width * 0.5;
     let cy0 = orig.y + orig.height * 0.5;
 
@@ -966,22 +1007,22 @@ pub fn calculate_single_axis_resize(
     match edge {
         TransformHandleKind::East => {
             let half_w = local_x.max(-w0 * 0.5 + min_dim);
-            new_w = (half_w + w0 * 0.5).max(min_dim);
+            new_w = (half_w + w0 * 0.5).clamp(min_dim, MAX_SHAPE_DIM);
             shift_lx = (new_w - w0) * 0.5;
         }
         TransformHandleKind::West => {
             let half_w = (-local_x).max(-w0 * 0.5 + min_dim);
-            new_w = (half_w + w0 * 0.5).max(min_dim);
+            new_w = (half_w + w0 * 0.5).clamp(min_dim, MAX_SHAPE_DIM);
             shift_lx = -(new_w - w0) * 0.5;
         }
         TransformHandleKind::South => {
             let half_h = local_y.max(-h0 * 0.5 + min_dim);
-            new_h = (half_h + h0 * 0.5).max(min_dim);
+            new_h = (half_h + h0 * 0.5).clamp(min_dim, MAX_SHAPE_DIM);
             shift_ly = (new_h - h0) * 0.5;
         }
         TransformHandleKind::North => {
             let half_h = (-local_y).max(-h0 * 0.5 + min_dim);
-            new_h = (half_h + h0 * 0.5).max(min_dim);
+            new_h = (half_h + h0 * 0.5).clamp(min_dim, MAX_SHAPE_DIM);
             shift_ly = -(new_h - h0) * 0.5;
         }
         _ => {}
@@ -991,6 +1032,51 @@ pub fn calculate_single_axis_resize(
     let new_cy = cy0 + shift_lx * sin_r + shift_ly * cos_r;
 
     (new_cx - new_w * 0.5, new_cy - new_h * 0.5, new_w, new_h)
+}
+
+/// Memetakan ulang `curve_points` (`ShapeKind::Curve`) mengikuti perubahan kotak batas hasil resize
+/// tanpa merusak bentuk kurva relatif terhadap kotak baru.
+pub fn remap_curve_points_for_resize(
+    init_points: &[Point2D],
+    init_box: ShapeTransformBox,
+    new_x: f32,
+    new_y: f32,
+    new_w: f32,
+    new_h: f32,
+) -> Vec<Point2D> {
+    if init_points.is_empty()
+        || !init_box.x.is_finite()
+        || !init_box.y.is_finite()
+        || !init_box.width.is_finite()
+        || !init_box.height.is_finite()
+        || !new_x.is_finite()
+        || !new_y.is_finite()
+        || !new_w.is_finite()
+        || !new_h.is_finite()
+    {
+        return init_points.to_vec();
+    }
+    let init_cx = init_box.x + init_box.width * 0.5;
+    let init_cy = init_box.y + init_box.height * 0.5;
+    let new_cx = new_x + new_w * 0.5;
+    let new_cy = new_y + new_h * 0.5;
+    let sx = if init_box.width.abs() > 1e-4 {
+        new_w / init_box.width
+    } else {
+        1.0
+    };
+    let sy = if init_box.height.abs() > 1e-4 {
+        new_h / init_box.height
+    } else {
+        1.0
+    };
+    if !sx.is_finite() || !sy.is_finite() {
+        return init_points.to_vec();
+    }
+    init_points
+        .iter()
+        .map(|p| Point2D::new(new_cx + (p.x - init_cx) * sx, new_cy + (p.y - init_cy) * sy))
+        .collect()
 }
 
 /// Menghitung rotasi baru dari drag handle rotasi, dengan opsi snapping 15° (Shift).
