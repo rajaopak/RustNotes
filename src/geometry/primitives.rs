@@ -69,8 +69,13 @@ pub fn text_approx_size(text: &str, font_size: f32) -> (f32, f32) {
     let lines: Vec<&str> = text.lines().collect();
     let line_count = lines.len().max(1) as f32;
     let max_line_len = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1) as f32;
-    let approx_w = (max_line_len * (font_size * 0.58).max(8.0)).max(20.0);
-    let approx_h = line_count * (font_size * 1.35).max(18.0);
+    let safe_fs = if font_size.is_finite() {
+        font_size.clamp(4.0, 200.0)
+    } else {
+        18.0
+    };
+    let approx_w = (max_line_len * (safe_fs * 0.58)).max(16.0);
+    let approx_h = (line_count * (safe_fs * 1.35)).max(12.0);
     (approx_w, approx_h)
 }
 

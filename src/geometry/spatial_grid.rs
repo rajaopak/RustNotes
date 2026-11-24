@@ -3,11 +3,15 @@ use crate::model::DrawObject;
 use eframe::egui::{Pos2, Rect};
 use std::collections::HashMap;
 
+const MAX_CELLS_PER_OBJECT: usize = 4096;
+const MAX_CELL_COORD: f32 = 100_000.0;
+
 /// 2D Uniform Grid Spatial Index for O(1) / O(k) hit testing on dense pages.
 #[derive(Clone, Debug)]
 pub struct SpatialGrid {
     cell_size: f32,
     cells: HashMap<(i32, i32), Vec<usize>>,
+    overflow_indices: Vec<usize>,
 }
 
 impl Default for SpatialGrid {
@@ -15,6 +19,7 @@ impl Default for SpatialGrid {
         Self {
             cell_size: 100.0,
             cells: HashMap::new(),
+            overflow_indices: Vec::new(),
         }
     }
 }
@@ -24,14 +29,30 @@ impl SpatialGrid {
         Self {
             cell_size: cell_size.max(20.0),
             cells: HashMap::new(),
+            overflow_indices: Vec::new(),
         }
+    }
+
+    #[inline]
+    fn cell_coord(&self, v: f32) -> i32 {
+        let cs = self.cell_size.max(20.0);
+        let q = v / cs;
+        if !q.is_finite() {
+            return if v.is_sign_negative() {
+                -(MAX_CELL_COORD as i32)
+            } else {
+                MAX_CELL_COORD as i32
+            };
+        }
+        q.clamp(-MAX_CELL_COORD, MAX_CELL_COORD).floor() as i32
     }
 
     pub fn rebuild(&mut self, objects: &[DrawObject]) {
         self.cells.clear();
+        self.overflow_indices.clear();
         for (idx, obj) in objects.iter().enumerate() {
             let b = object_bounds_with_context(obj, objects);
-            if !b.is_finite() || b.min.x > b.max.x || b.min.y > b.max.y {
+            if !b.is_finite() || b == Rect::NOTHING || b.min.x > b.max.x || b.min.y > b.max.y {
                 continue;
             }
             let pad = match obj {
@@ -40,10 +61,24 @@ impl SpatialGrid {
                 _ => 2.0,
             };
             let eb = b.expand(pad);
-            let min_cx = (eb.left() / self.cell_size).floor() as i32;
-            let max_cx = (eb.right() / self.cell_size).floor() as i32;
-            let min_cy = (eb.top() / self.cell_size).floor() as i32;
-            let max_cy = (eb.bottom() / self.cell_size).floor() as i32;
+            if !eb.is_finite() {
+                self.overflow_indices.push(idx);
+                continue;
+            }
+            let min_cx = self.cell_coord(eb.left());
+            let max_cx = self.cell_coord(eb.right());
+            let min_cy = self.cell_coord(eb.top());
+            let max_cy = self.cell_coord(eb.bottom());
+
+            let span_x = (max_cx as i64) - (min_cx as i64) + 1;
+            let span_y = (max_cy as i64) - (min_cy as i64) + 1;
+            if span_x <= 0
+                || span_y <= 0
+                || span_x.saturating_mul(span_y) > MAX_CELLS_PER_OBJECT as i64
+            {
+                self.overflow_indices.push(idx);
+                continue;
+            }
 
             for cx in min_cx..=max_cx {
                 for cy in min_cy..=max_cy {
@@ -54,39 +89,51 @@ impl SpatialGrid {
     }
 
     pub fn query_point(&self, p: Pos2, tolerance: f32) -> Vec<usize> {
-        let tol = tolerance.max(0.0);
-        let min_cx = ((p.x - tol) / self.cell_size).floor() as i32;
-        let max_cx = ((p.x + tol) / self.cell_size).floor() as i32;
-        let min_cy = ((p.y - tol) / self.cell_size).floor() as i32;
-        let max_cy = ((p.y + tol) / self.cell_size).floor() as i32;
-
-        let mut candidates = Vec::new();
-        for cx in min_cx..=max_cx {
-            for cy in min_cy..=max_cy {
-                if let Some(list) = self.cells.get(&(cx, cy)) {
-                    candidates.extend_from_slice(list);
-                }
-            }
+        if !p.x.is_finite() || !p.y.is_finite() || !tolerance.is_finite() || tolerance < 0.0 {
+            return Vec::new();
         }
-        candidates.sort_unstable();
-        candidates.dedup();
-        candidates
+        let tol = tolerance.max(0.0);
+        let min_cx = self.cell_coord(p.x - tol);
+        let max_cx = self.cell_coord(p.x + tol);
+        let min_cy = self.cell_coord(p.y - tol);
+        let max_cy = self.cell_coord(p.y + tol);
+
+        self.collect_cell_range(min_cx, max_cx, min_cy, max_cy)
     }
 
     pub fn query_rect(&self, r: Rect) -> Vec<usize> {
-        let min_cx = (r.left() / self.cell_size).floor() as i32;
-        let max_cx = (r.right() / self.cell_size).floor() as i32;
-        let min_cy = (r.top() / self.cell_size).floor() as i32;
-        let max_cy = (r.bottom() / self.cell_size).floor() as i32;
+        if !r.is_finite() || r == Rect::NOTHING || r.min.x > r.max.x || r.min.y > r.max.y {
+            return Vec::new();
+        }
+        let min_cx = self.cell_coord(r.left());
+        let max_cx = self.cell_coord(r.right());
+        let min_cy = self.cell_coord(r.top());
+        let max_cy = self.cell_coord(r.bottom());
 
+        self.collect_cell_range(min_cx, max_cx, min_cy, max_cy)
+    }
+
+    fn collect_cell_range(&self, min_cx: i32, max_cx: i32, min_cy: i32, max_cy: i32) -> Vec<usize> {
+        let span_x = (max_cx as i64) - (min_cx as i64) + 1;
+        let span_y = (max_cy as i64) - (min_cy as i64) + 1;
         let mut candidates = Vec::new();
-        for cx in min_cx..=max_cx {
-            for cy in min_cy..=max_cy {
-                if let Some(list) = self.cells.get(&(cx, cy)) {
-                    candidates.extend_from_slice(list);
+        if span_x <= 0 || span_y <= 0 {
+            return candidates;
+        }
+        if span_x.saturating_mul(span_y) > MAX_CELLS_PER_OBJECT as i64 {
+            for list in self.cells.values() {
+                candidates.extend_from_slice(list);
+            }
+        } else {
+            for cx in min_cx..=max_cx {
+                for cy in min_cy..=max_cy {
+                    if let Some(list) = self.cells.get(&(cx, cy)) {
+                        candidates.extend_from_slice(list);
+                    }
                 }
             }
         }
+        candidates.extend_from_slice(&self.overflow_indices);
         candidates.sort_unstable();
         candidates.dedup();
         candidates

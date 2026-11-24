@@ -2,6 +2,15 @@ use super::primitives::shape_vertices;
 use crate::model::{DrawObject, Page, ShapeKind};
 use eframe::egui::Pos2;
 
+pub const MIN_TEXT_FONT_SIZE: f32 = 6.0;
+pub const MAX_TEXT_FONT_SIZE: f32 = 200.0;
+pub const MIN_STICKY_FONT_SIZE: f32 = 6.0;
+pub const MAX_STICKY_FONT_SIZE: f32 = 100.0;
+pub const MIN_EQUATION_SCALE: f32 = 0.2;
+pub const MAX_EQUATION_SCALE: f32 = 10.0;
+pub const MIN_STROKE_WIDTH: f32 = 0.5;
+pub const MAX_STROKE_WIDTH: f32 = 64.0;
+
 pub fn translate_object(obj: &mut DrawObject, dx: f32, dy: f32) {
     match obj {
         DrawObject::Stroke { points, .. } => {
@@ -66,13 +75,24 @@ pub fn translate_object(obj: &mut DrawObject, dx: f32, dy: f32) {
 }
 
 pub fn scale_object(obj: &mut DrawObject, origin: Pos2, sx: f32, sy: f32) {
+    if !origin.x.is_finite() || !origin.y.is_finite() || !sx.is_finite() || !sy.is_finite() {
+        return;
+    }
+    let clamp_scale = |s: f32| -> f32 {
+        let mag = s.abs().clamp(0.02, 50.0);
+        if s < 0.0 { -mag } else { mag }
+    };
+    let sx = clamp_scale(sx);
+    let sy = clamp_scale(sy);
+
     match obj {
         DrawObject::Stroke { points, width, .. } => {
             for p in points {
                 p.x = origin.x + (p.x - origin.x) * sx;
                 p.y = origin.y + (p.y - origin.y) * sy;
             }
-            *width *= (sx.abs() + sy.abs()) / 2.0;
+            *width =
+                (*width * ((sx.abs() + sy.abs()) / 2.0)).clamp(MIN_STROKE_WIDTH, MAX_STROKE_WIDTH);
         }
         DrawObject::Shape {
             x,
@@ -98,18 +118,32 @@ pub fn scale_object(obj: &mut DrawObject, origin: Pos2, sx: f32, sy: f32) {
                 cp.y = origin.y + (cp.y - origin.y) * sy;
             }
             let avg_s = (sx.abs() + sy.abs()) / 2.0;
-            *stroke_width *= avg_s;
-            *corner_radius *= avg_s;
+            *stroke_width = (*stroke_width * avg_s).clamp(MIN_STROKE_WIDTH, MAX_STROKE_WIDTH);
+            *corner_radius = (*corner_radius * avg_s).clamp(0.0, 500.0);
             if let Some(lbl) = label {
-                lbl.font_size *= avg_s;
+                let prev_fs = if lbl.font_size.is_finite() && lbl.font_size > 1e-4 {
+                    lbl.font_size
+                } else {
+                    16.0
+                };
+                lbl.font_size = (prev_fs * avg_s).clamp(MIN_TEXT_FONT_SIZE, MAX_TEXT_FONT_SIZE);
             }
         }
         DrawObject::Text {
             x, y, font_size, ..
         } => {
-            *x = origin.x + (*x - origin.x) * sx;
-            *y = origin.y + (*y - origin.y) * sy;
-            *font_size *= (sx.abs() + sy.abs()) / 2.0;
+            let prev_fs = if font_size.is_finite() && *font_size > 1e-4 {
+                *font_size
+            } else {
+                16.0
+            };
+            let avg_s = (sx.abs() + sy.abs()) * 0.5;
+            let new_fs = (prev_fs * avg_s).clamp(MIN_TEXT_FONT_SIZE, MAX_TEXT_FONT_SIZE);
+            // Skala posisi mengikuti rasio efektif font agar titik jangkar tidak bergeser saat font menyentuh batas clamp.
+            let eff_s = new_fs / prev_fs;
+            *x = origin.x + (*x - origin.x) * eff_s;
+            *y = origin.y + (*y - origin.y) * eff_s;
+            *font_size = new_fs;
         }
         DrawObject::StickyNote {
             x,
@@ -121,9 +155,25 @@ pub fn scale_object(obj: &mut DrawObject, origin: Pos2, sx: f32, sy: f32) {
         } => {
             *x = origin.x + (*x - origin.x) * sx;
             *y = origin.y + (*y - origin.y) * sy;
-            *width *= sx;
-            *height *= sy;
-            *font_size *= (sx.abs() + sy.abs()) / 2.0;
+            let nw = *width * sx;
+            let nh = *height * sy;
+            *width = if nw < 0.0 {
+                nw.min(-20.0)
+            } else {
+                nw.max(20.0)
+            };
+            *height = if nh < 0.0 {
+                nh.min(-20.0)
+            } else {
+                nh.max(20.0)
+            };
+            let prev_fs = if font_size.is_finite() && *font_size > 1e-4 {
+                *font_size
+            } else {
+                14.0
+            };
+            *font_size = (prev_fs * ((sx.abs() + sy.abs()) / 2.0))
+                .clamp(MIN_STICKY_FONT_SIZE, MAX_STICKY_FONT_SIZE);
         }
         DrawObject::Image {
             x,
@@ -147,9 +197,17 @@ pub fn scale_object(obj: &mut DrawObject, origin: Pos2, sx: f32, sy: f32) {
             if *locked {
                 return;
             }
-            *x = origin.x + (*x - origin.x) * sx;
-            *y = origin.y + (*y - origin.y) * sy;
-            *scale *= (sx.abs() + sy.abs()) / 2.0;
+            let prev_scale = if scale.is_finite() && *scale > 1e-4 {
+                *scale
+            } else {
+                1.0
+            };
+            let avg_s = (sx.abs() + sy.abs()) * 0.5;
+            let new_scale = (prev_scale * avg_s).clamp(MIN_EQUATION_SCALE, MAX_EQUATION_SCALE);
+            let eff_s = new_scale / prev_scale;
+            *x = origin.x + (*x - origin.x) * eff_s;
+            *y = origin.y + (*y - origin.y) * eff_s;
+            *scale = new_scale;
         }
         DrawObject::Connector {
             start,
@@ -170,7 +228,8 @@ pub fn scale_object(obj: &mut DrawObject, origin: Pos2, sx: f32, sy: f32) {
                 *x = origin.x + (*x - origin.x) * sx;
                 *y = origin.y + (*y - origin.y) * sy;
             }
-            style.stroke_width *= (sx.abs() + sy.abs()) / 2.0;
+            style.stroke_width = (style.stroke_width * ((sx.abs() + sy.abs()) / 2.0))
+                .clamp(MIN_STROKE_WIDTH, MAX_STROKE_WIDTH);
         }
     }
 }
