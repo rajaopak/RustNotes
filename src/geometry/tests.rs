@@ -6207,3 +6207,99 @@ fn test_recognize_shape_for_hold_to_snap_open_strokes_and_autoshape_preservation
         ShapeKind::Rectangle
     );
 }
+
+#[test]
+fn test_thick_28px_pen_stroke_has_zero_spikes_beyond_radius_envelope() {
+    // Goresan melengkung berliku dengan lebar 28px + tangga piksel 1px mouse yang rapat
+    let mut raw = Vec::new();
+    for i in 0..=80 {
+        let t = i as f32 / 80.0;
+        let angle = t * std::f32::consts::TAU * 1.35;
+        let radius = 45.0 + (t * std::f32::consts::PI * 3.0).sin() * 25.0;
+        let x = 200.0 + angle.cos() * radius;
+        let y = 200.0 + angle.sin() * radius;
+        // Kuantisasi integer 1px untuk meniru input mouse Windows nyata pada kurva rapat
+        raw.push(StrokePoint::new(x.round(), y.round(), 1.0));
+    }
+
+    let smoothed = smooth_stroke_points(&raw, 3);
+    let max_dist_to_polyline = |pts: &[StrokePoint], mesh: &eframe::egui::Mesh| -> f32 {
+        mesh.vertices
+            .iter()
+            .map(|v| {
+                pts.windows(2)
+                    .map(|w| point_to_segment_dist(v.pos, w[0].to_pos2(), w[1].to_pos2()))
+                    .fold(f32::INFINITY, f32::min)
+            })
+            .fold(0.0_f32, f32::max)
+    };
+
+    // 1. Uji jalur buram (Pen / Pencil) pada ketebalan maksimal 28px (radius = 14px)
+    let opaque_mesh = tessellate_stroke(&smoothed, 28.0, Color32::from_rgb(25, 27, 32), |p| p);
+    assert_mesh_valid_and_finite(&opaque_mesh, "pen-28px-opaque");
+    let max_opaque_r = max_dist_to_polyline(&smoothed, &opaque_mesh);
+    assert!(
+        max_opaque_r <= 14.15,
+        "28px opaque stroke must have zero spikes beyond radius 14.0px, got max={max_opaque_r}"
+    );
+
+    // 2. Uji jalur semi-transparan pada ketebalan 28px (radius = 14px, batas bisector 1.03x = 14.42px)
+    let trans_mesh = tessellate_stroke(
+        &smoothed,
+        28.0,
+        Color32::from_rgba_unmultiplied(25, 27, 32, 160),
+        |p| p,
+    );
+    assert_mesh_valid_and_finite(&trans_mesh, "pen-28px-translucent");
+    let max_trans_r = max_dist_to_polyline(&smoothed, &trans_mesh);
+    assert!(
+        max_trans_r <= 14.6,
+        "28px translucent stroke must have zero spikes beyond bisector limit, got max={max_trans_r}"
+    );
+}
+
+#[test]
+fn test_smooth_stroke_points_relaxes_1px_mouse_staircase_without_overshoot() {
+    // Tangga piksel 1px diagonal dari (0,0) ke (10,10)
+    let mut staircase = Vec::new();
+    for i in 0..10 {
+        staircase.push(StrokePoint::new(i as f32, i as f32, 0.7));
+        staircase.push(StrokePoint::new((i + 1) as f32, i as f32, 0.7));
+    }
+    staircase.push(StrokePoint::new(10.0, 10.0, 0.7));
+
+    let smoothed = smooth_stroke_points(&staircase, 3);
+    assert_eq!(smoothed.first().unwrap().to_pos2(), Pos2::new(0.0, 0.0));
+    assert_eq!(smoothed.last().unwrap().to_pos2(), Pos2::new(10.0, 10.0));
+
+    let sqrt2_inv = std::f32::consts::FRAC_1_SQRT_2;
+    // Tangga sepihak (i, i) -> (i+1, i) memiliki sumbu tengah geometris pada garis y = x - 0.5
+    // (deviasi maksimal 0.7071 dari y=x dan zigzag puncak-ke-puncak sebesar 0.7071px).
+    // Setelah relaksasi, seluruh titik harus menyatu rapat ke garis tengah halus tanpa overshoot.
+    let mut interior_signed_dists = Vec::new();
+    for pt in &smoothed {
+        assert!(
+            pt.x >= -1e-4 && pt.x <= 10.0 + 1e-4 && pt.y >= -1e-4 && pt.y <= 10.0 + 1e-4,
+            "No convex hull overshoot allowed, got ({}, {})",
+            pt.x,
+            pt.y
+        );
+        if pt.x >= 1.5 && pt.x <= 8.5 {
+            let signed_dev = (pt.x - pt.y - 0.5) * sqrt2_inv;
+            interior_signed_dists.push(signed_dev);
+        }
+    }
+    let min_center_dev = interior_signed_dists
+        .iter()
+        .copied()
+        .fold(f32::INFINITY, f32::min);
+    let max_center_dev = interior_signed_dists
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max);
+    let zigzag_span = max_center_dev - min_center_dev;
+    assert!(
+        zigzag_span < 0.15,
+        "1px diagonal mouse staircase (raw zigzag ~0.707px) must relax smoothly, got zigzag={zigzag_span}"
+    );
+}

@@ -5336,3 +5336,66 @@ fn test_laser_rainbow_mode_produces_multi_hue_gradient_and_animates_over_time() 
         "Advancing animation time must shift rainbow laser colors"
     );
 }
+
+#[test]
+fn test_laser_sharp_turn_round_join_has_no_spikes_or_pinch() {
+    use super::laser::{
+        rainbow_laser_color, tessellate_laser_layer, tessellate_laser_layer_colored,
+    };
+
+    let hairpin = vec![
+        Pos2::new(20.0, 20.0),
+        Pos2::new(80.0, 20.0),
+        Pos2::new(80.0, 80.0), // belokan 90 deg
+        Pos2::new(25.0, 74.0), // belokan tajam mendekati 170 deg
+    ];
+    let width = 20.0; // radius = 10.0
+    let meshes = [
+        tessellate_laser_layer(
+            &hairpin,
+            width,
+            Color32::from_rgba_unmultiplied(0, 212, 255, 180),
+        ),
+        tessellate_laser_layer_colored(&hairpin, width, |arc| rainbow_laser_color(arc, 0.25, 220)),
+    ];
+
+    for (idx, mesh) in meshes.iter().enumerate() {
+        assert!(
+            !mesh.vertices.is_empty(),
+            "Laser mesh {idx} must not be empty"
+        );
+        assert!(
+            !mesh.indices.is_empty(),
+            "Laser mesh {idx} must have triangles"
+        );
+        for &tri_idx in &mesh.indices {
+            assert!((tri_idx as usize) < mesh.vertices.len());
+        }
+        let max_dist = mesh
+            .vertices
+            .iter()
+            .map(|v| {
+                assert!(v.pos.x.is_finite() && v.pos.y.is_finite());
+                hairpin
+                    .windows(2)
+                    .map(|w| crate::geometry::point_to_segment_dist(v.pos, w[0], w[1]))
+                    .fold(f32::INFINITY, f32::min)
+            })
+            .fold(0.0_f32, f32::max);
+        assert!(
+            max_dist <= 10.6,
+            "Laser mesh {idx} must have no spikes beyond radius 10px, got max={max_dist}"
+        );
+        // Pastikan sisi luar sudut (80, 20) memiliki cakupan radius penuh (tidak terjepit/pinched)
+        let corner_max_x = mesh
+            .vertices
+            .iter()
+            .filter(|v| v.pos.y <= 35.0)
+            .map(|v| v.pos.x)
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            corner_max_x >= 89.5,
+            "Laser corner must preserve outer radius coverage (~90px), got {corner_max_x}"
+        );
+    }
+}
