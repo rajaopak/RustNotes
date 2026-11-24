@@ -4778,3 +4778,415 @@ fn test_hold_to_snap_wavy_stroke_converts_to_line_with_undo_and_respects_smart_g
         }],
     );
 }
+
+fn step_two_pages_vertical(
+    ctx: &eframe::egui::Context,
+    page1: &mut Page,
+    page2: &mut Page,
+    state: &mut CanvasState,
+    events: Vec<eframe::egui::Event>,
+) -> (Pos2, Pos2, eframe::egui::FullOutput) {
+    let mut origin1 = Pos2::ZERO;
+    let mut origin2 = Pos2::ZERO;
+    let output = ctx.run(
+        eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                Pos2::ZERO,
+                Vec2::new(1000.0, 2000.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ctx| {
+            eframe::egui::CentralPanel::default()
+                .frame(eframe::egui::Frame::NONE)
+                .show(ctx, |ui| {
+                    let r1 = render_page_canvas(ui, page1, state);
+                    origin1 = r1.rect.min;
+                    ui.add_space(16.0);
+                    let r2 = render_page_canvas(ui, page2, state);
+                    origin2 = r2.rect.min;
+                });
+        },
+    );
+    (origin1, origin2, output)
+}
+
+fn collect_circle_shapes(
+    shape: &eframe::egui::Shape,
+    out: &mut Vec<eframe::egui::epaint::CircleShape>,
+) {
+    match shape {
+        eframe::egui::Shape::Circle(c) => out.push(*c),
+        eframe::egui::Shape::Vec(children) => {
+            for child in children {
+                collect_circle_shapes(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn make_box_with_diagonals(prefix: &str) -> Vec<DrawObject> {
+    let black = ColorData {
+        r: 20,
+        g: 22,
+        b: 28,
+        a: 255,
+    };
+    vec![
+        DrawObject::Shape {
+            id: format!("{prefix}-rect"),
+            shape_type: ShapeKind::Rectangle,
+            x: 200.0,
+            y: 80.0,
+            width: 160.0,
+            height: 100.0,
+            color: black.clone(),
+            stroke_width: 2.0,
+            fill: None,
+            rotation: 0.0,
+            corner_radius: 0.0,
+            label: None,
+            locked: false,
+            curve_points: Vec::new(),
+        },
+        DrawObject::Stroke {
+            id: format!("{prefix}-diag1"),
+            points: vec![
+                StrokePoint {
+                    x: 200.0,
+                    y: 80.0,
+                    pressure: 1.0,
+                },
+                StrokePoint {
+                    x: 360.0,
+                    y: 180.0,
+                    pressure: 1.0,
+                },
+            ],
+            color: black.clone(),
+            width: 2.0,
+            is_highlighter: false,
+            style: StrokeStyle::Solid,
+        },
+        DrawObject::Stroke {
+            id: format!("{prefix}-diag2"),
+            points: vec![
+                StrokePoint {
+                    x: 360.0,
+                    y: 80.0,
+                    pressure: 1.0,
+                },
+                StrokePoint {
+                    x: 200.0,
+                    y: 180.0,
+                    pressure: 1.0,
+                },
+            ],
+            color: black,
+            width: 2.0,
+            is_highlighter: false,
+            style: StrokeStyle::Solid,
+        },
+    ]
+}
+
+#[test]
+fn test_continuous_vertical_eraser_on_blank_page1_preserves_objects_above() {
+    for mode in [EraserMode::Partial, EraserMode::WholeStroke] {
+        let ctx = eframe::egui::Context::default();
+        let mut page1 = Page::new(PageTemplate::Ruled);
+        page1.id = "scroll-page-1".to_string();
+        page1.objects = make_box_with_diagonals("p1");
+
+        let mut page2 = Page::new(PageTemplate::Blank);
+        page2.id = "scroll-page-2".to_string();
+        page2.objects = make_box_with_diagonals("p2");
+
+        let mut state = CanvasState {
+            current_tool: ActiveTool::Eraser,
+            eraser_mode: mode,
+            zoom: 1.0,
+            ..Default::default()
+        };
+
+        let (orig1, _, _) =
+            step_two_pages_vertical(&ctx, &mut page1, &mut page2, &mut state, vec![]);
+
+        // Geser penghapus di area kertas kosong bawah Halaman 1 (y = 620..640) jauh dari objek (y = 80..180)
+        let start = orig1 + Vec2::new(280.0, 620.0);
+        step_two_pages_vertical(
+            &ctx,
+            &mut page1,
+            &mut page2,
+            &mut state,
+            vec![
+                eframe::egui::Event::PointerMoved(start),
+                eframe::egui::Event::PointerButton {
+                    pos: start,
+                    button: eframe::egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+
+        for dx in [20.0_f32, 40.0, 60.0] {
+            let p = start + Vec2::new(dx, dx * 0.25);
+            step_two_pages_vertical(
+                &ctx,
+                &mut page1,
+                &mut page2,
+                &mut state,
+                vec![eframe::egui::Event::PointerMoved(p)],
+            );
+        }
+
+        let end = start + Vec2::new(60.0, 15.0);
+        step_two_pages_vertical(
+            &ctx,
+            &mut page1,
+            &mut page2,
+            &mut state,
+            vec![eframe::egui::Event::PointerButton {
+                pos: end,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+
+        assert_eq!(
+            page1.objects.len(),
+            3,
+            "Erasing blank bottom area on page 1 in scroll mode ({mode:?}) must preserve all top objects"
+        );
+        assert_eq!(
+            page2.objects.len(),
+            3,
+            "Erasing blank area on page 1 in scroll mode ({mode:?}) must preserve all page 2 objects"
+        );
+        assert!(state.active_stroke_page_id.is_none());
+        assert!(state.last_erase_sample_pos.is_none());
+    }
+}
+
+#[test]
+fn test_continuous_vertical_eraser_on_page2_does_not_corrupt_page1_and_erases_target() {
+    let ctx = eframe::egui::Context::default();
+    let mut page1 = Page::new(PageTemplate::Blank);
+    page1.id = "scroll-p1-keep".to_string();
+    page1.objects = make_box_with_diagonals("keep");
+
+    let mut page2 = Page::new(PageTemplate::Blank);
+    page2.id = "scroll-p2-erase".to_string();
+    page2.objects.push(DrawObject::Stroke {
+        id: "p2-stroke".to_string(),
+        points: vec![
+            StrokePoint {
+                x: 200.0,
+                y: 140.0,
+                pressure: 1.0,
+            },
+            StrokePoint {
+                x: 340.0,
+                y: 140.0,
+                pressure: 1.0,
+            },
+        ],
+        color: ColorData {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+        width: 3.0,
+        is_highlighter: false,
+        style: StrokeStyle::Solid,
+    });
+
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Eraser,
+        eraser_mode: EraserMode::WholeStroke,
+        zoom: 1.0,
+        ..Default::default()
+    };
+
+    let (_, orig2, _) = step_two_pages_vertical(&ctx, &mut page1, &mut page2, &mut state, vec![]);
+    let start = orig2 + Vec2::new(260.0, 130.0);
+    let mid = orig2 + Vec2::new(270.0, 140.0);
+    let end = orig2 + Vec2::new(280.0, 150.0);
+
+    step_two_pages_vertical(
+        &ctx,
+        &mut page1,
+        &mut page2,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(start),
+            eframe::egui::Event::PointerButton {
+                pos: start,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+    step_two_pages_vertical(
+        &ctx,
+        &mut page1,
+        &mut page2,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(mid)],
+    );
+    step_two_pages_vertical(
+        &ctx,
+        &mut page1,
+        &mut page2,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(end),
+            eframe::egui::Event::PointerButton {
+                pos: end,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+
+    assert_eq!(page1.objects.len(), 3, "Page 1 objects must stay intact");
+    assert!(
+        page2.objects.is_empty(),
+        "Targeted stroke on Page 2 must be erased"
+    );
+}
+
+#[test]
+fn test_eraser_radius_helpers_scale_with_zoom_and_mode() {
+    let mut state = CanvasState {
+        eraser_mode: EraserMode::Partial,
+        zoom: 1.0,
+        ..Default::default()
+    };
+    assert!((state.eraser_page_radius() - 10.0).abs() < 1e-4);
+    assert!((state.eraser_screen_radius() - 10.0).abs() < 1e-4);
+
+    // Partial clamps page_radius to max 16.0 at 0.5x zoom -> 8.0 screen px
+    state.zoom = 0.5;
+    assert!((state.eraser_page_radius() - 16.0).abs() < 1e-4);
+    assert!((state.eraser_screen_radius() - 8.0).abs() < 1e-4);
+
+    // Partial clamps page_radius to min 4.0 at 4.0x zoom -> 16.0 screen px
+    state.zoom = 4.0;
+    assert!((state.eraser_page_radius() - 4.0).abs() < 1e-4);
+    assert!((state.eraser_screen_radius() - 16.0).abs() < 1e-4);
+
+    // WholeStroke at 1.0x -> 3.8 page & 3.8 screen px; at 2.0x -> 1.9 page & 3.8 screen px
+    state.eraser_mode = EraserMode::WholeStroke;
+    state.zoom = 1.0;
+    assert!((state.eraser_page_radius() - 3.8).abs() < 1e-4);
+    assert!((state.eraser_screen_radius() - 3.8).abs() < 1e-4);
+    state.zoom = 2.0;
+    assert!((state.eraser_page_radius() - 1.9).abs() < 1e-4);
+    assert!((state.eraser_screen_radius() - 3.8).abs() < 1e-4);
+}
+
+#[test]
+fn test_eraser_circular_cursor_renders_matching_screen_radius_on_hover() {
+    let ctx = eframe::egui::Context::default();
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "eraser-cursor-preview-page".to_string();
+
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Eraser,
+        eraser_mode: EraserMode::Partial,
+        zoom: 1.0,
+        ..Default::default()
+    };
+
+    let run_hover =
+        |ctx: &eframe::egui::Context, page: &mut Page, state: &mut CanvasState, hover: Pos2| {
+            ctx.run(
+                eframe::egui::RawInput {
+                    screen_rect: Some(eframe::egui::Rect::from_min_size(
+                        Pos2::ZERO,
+                        Vec2::new(1000.0, 1000.0),
+                    )),
+                    events: vec![eframe::egui::Event::PointerMoved(hover)],
+                    ..Default::default()
+                },
+                |ctx| {
+                    eframe::egui::CentralPanel::default()
+                        .frame(eframe::egui::Frame::NONE)
+                        .show(ctx, |ui| {
+                            let _ = render_page_canvas(ui, page, state);
+                        });
+                },
+            )
+        };
+
+    let hover = Pos2::new(220.0, 260.0);
+    let _ = run_hover(&ctx, &mut page, &mut state, hover);
+    let out_partial = run_hover(&ctx, &mut page, &mut state, hover);
+    assert_eq!(
+        out_partial.platform_output.cursor_icon,
+        eframe::egui::CursorIcon::None
+    );
+    let mut circles = Vec::new();
+    for clipped in &out_partial.shapes {
+        collect_circle_shapes(&clipped.shape, &mut circles);
+    }
+    assert!(
+        circles
+            .iter()
+            .any(|c| (c.center - hover).length() < 0.1 && (c.radius - 10.0).abs() < 1e-3),
+        "Partial eraser at zoom 1.0 must render circular cursor with radius 10.0px, found: {circles:?}"
+    );
+
+    // Zoom 0.5 Partial -> radius 8.0px
+    state.zoom = 0.5;
+    let out_zoom_half = run_hover(&ctx, &mut page, &mut state, hover);
+    circles.clear();
+    for clipped in &out_zoom_half.shapes {
+        collect_circle_shapes(&clipped.shape, &mut circles);
+    }
+    assert!(
+        circles
+            .iter()
+            .any(|c| (c.center - hover).length() < 0.1 && (c.radius - 8.0).abs() < 1e-3),
+        "Partial eraser at zoom 0.5 must render circular cursor with radius 8.0px, found: {circles:?}"
+    );
+
+    // WholeStroke zoom 1.0 -> radius 3.8px
+    state.zoom = 1.0;
+    state.eraser_mode = EraserMode::WholeStroke;
+    let out_whole = run_hover(&ctx, &mut page, &mut state, hover);
+    circles.clear();
+    for clipped in &out_whole.shapes {
+        collect_circle_shapes(&clipped.shape, &mut circles);
+    }
+    assert!(
+        circles
+            .iter()
+            .any(|c| (c.center - hover).length() < 0.1 && (c.radius - 3.8).abs() < 1e-3),
+        "WholeStroke eraser at zoom 1.0 must render circular cursor with radius 3.8px, found: {circles:?}"
+    );
+
+    // Switching back to Pen hides eraser cursor circle & restores cursor icon
+    state.current_tool = ActiveTool::Pen;
+    let out_pen = run_hover(&ctx, &mut page, &mut state, hover);
+    assert_ne!(
+        out_pen.platform_output.cursor_icon,
+        eframe::egui::CursorIcon::None
+    );
+    circles.clear();
+    for clipped in &out_pen.shapes {
+        collect_circle_shapes(&clipped.shape, &mut circles);
+    }
+    assert!(
+        !circles.iter().any(|c| (c.center - hover).length() < 0.1),
+        "Pen tool must not draw eraser circular cursor"
+    );
+}
