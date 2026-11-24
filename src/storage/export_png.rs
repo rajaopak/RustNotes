@@ -72,13 +72,20 @@ fn draw_egui_text(
     font_family: crate::model::FontFamilyPreset,
     bold: bool,
     italic: bool,
+    alignment: crate::model::TextAlign,
+    align_box_width_pt: Option<f32>,
 ) {
     if text.trim().is_empty() {
         return;
     }
-    let font_id =
-        eframe::egui::FontId::new(font_size_pt * scale, font_family.to_egui_font_family());
-    let mut job = eframe::egui::text::LayoutJob::default();
+    let registered = fonts.families();
+    let (egui_family, needs_faux_bold) =
+        font_family.resolve_egui_font_family(bold, |fam| registered.contains(fam));
+    let font_id = eframe::egui::FontId::new(font_size_pt * scale, egui_family);
+    let mut job = eframe::egui::text::LayoutJob {
+        halign: alignment.to_egui_align(),
+        ..Default::default()
+    };
     job.append(
         text,
         0.0,
@@ -92,6 +99,16 @@ fn draw_egui_text(
         },
     );
     let galley = fonts.layout_job(job);
+    let align_offset_glyph = if let Some(box_w_pt) = align_box_width_pt {
+        let box_w = box_w_pt.max(galley.size().x);
+        match alignment {
+            crate::model::TextAlign::Left => -galley.rect.min.x,
+            crate::model::TextAlign::Center => box_w * 0.5,
+            crate::model::TextAlign::Right => box_w,
+        }
+    } else {
+        0.0
+    };
 
     let font_image = fonts.image();
     let atlas_w = font_image.width();
@@ -128,8 +145,9 @@ fn draw_egui_text(
                     let coverage = font_image[(u, v)];
                     if coverage > 0.005 {
                         let eff_alpha = ((color[3] as f32 * coverage).clamp(0.0, 255.0)) as u8;
+                        let gx = glyph.pos.x + align_offset_glyph;
                         let (px, py) = if is_rotated {
-                            let lx = glyph.pos.x + uv_rect.offset.x + dx as f32;
+                            let lx = gx + uv_rect.offset.x + dx as f32;
                             let ly = glyph.pos.y + uv_rect.offset.y + dy as f32;
                             let rx = lx * cos_a - ly * sin_a;
                             let ry = lx * sin_a + ly * cos_a;
@@ -139,14 +157,13 @@ fn draw_egui_text(
                             )
                         } else {
                             (
-                                ((x_pt + glyph.pos.x + uv_rect.offset.x + dx as f32) * scale)
-                                    .round() as i32,
+                                ((x_pt + gx + uv_rect.offset.x + dx as f32) * scale).round() as i32,
                                 ((y_pt + glyph.pos.y + uv_rect.offset.y + dy as f32) * scale)
                                     .round() as i32,
                             )
                         };
                         blend_pixel(img, px, py, [color[0], color[1], color[2], eff_alpha]);
-                        if bold {
+                        if needs_faux_bold {
                             blend_pixel(img, px + 1, py, [color[0], color[1], color[2], eff_alpha]);
                         }
                     }
@@ -192,7 +209,7 @@ pub fn render_page_to_rgba_image(
 
     let mut img = image::RgbaImage::new(width_px, height_px);
     let fonts =
-        eframe::egui::text::Fonts::new(scale, 4096, eframe::egui::FontDefinitions::default());
+        eframe::egui::text::Fonts::new(scale, 4096, crate::model::build_app_font_definitions());
 
     // 1. Isi warna kertas dasar
     let bg_color = image::Rgba([
@@ -695,6 +712,8 @@ pub fn render_page_to_rgba_image(
                         crate::model::FontFamilyPreset::SansSerif,
                         false,
                         false,
+                        crate::model::TextAlign::Left,
+                        None,
                     );
                 }
             }
@@ -857,6 +876,8 @@ pub fn render_page_to_rgba_image(
                     *font_family,
                     *bold,
                     *italic,
+                    *alignment,
+                    None,
                 );
             }
             crate::model::DrawObject::Text {
@@ -869,8 +890,10 @@ pub fn render_page_to_rgba_image(
                 font_family,
                 bold,
                 italic,
+                alignment,
                 ..
             } => {
+                let (approx_w, _) = crate::geometry::text_approx_size(text, *font_size);
                 draw_egui_text(
                     &mut img,
                     &fonts,
@@ -884,6 +907,8 @@ pub fn render_page_to_rgba_image(
                     *font_family,
                     *bold,
                     *italic,
+                    *alignment,
+                    Some(approx_w),
                 );
             }
             crate::model::DrawObject::Equation {
@@ -942,6 +967,8 @@ pub fn render_page_to_rgba_image(
                                 crate::model::FontFamilyPreset::Serif,
                                 false,
                                 *is_italic,
+                                crate::model::TextAlign::Left,
+                                None,
                             );
                         }
                         crate::geometry::math::MathLayoutItem::Line {

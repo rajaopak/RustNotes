@@ -646,6 +646,12 @@ pub fn export_page_to_svg(page: &Page) -> String {
                 let lines: Vec<&str> = text.lines().collect();
                 let line_h = font_size * 1.25;
                 let start_y = *y + font_size * 0.85;
+                let (approx_w, _) = crate::geometry::text_approx_size(text, *font_size);
+                let anchor_x = match alignment {
+                    crate::model::TextAlign::Left => *x,
+                    crate::model::TextAlign::Center => *x + approx_w * 0.5,
+                    crate::model::TextAlign::Right => *x + approx_w,
+                };
                 let ff = font_family.to_svg_font_family();
                 let weight_attr = if *bold { " font-weight=\"bold\"" } else { "" };
                 let style_attr = if *italic {
@@ -656,13 +662,13 @@ pub fn export_page_to_svg(page: &Page) -> String {
                 let anchor_attr = format!(" text-anchor=\"{}\"", alignment.to_svg_anchor());
 
                 out.push_str(&format!(
-                    "<text x=\"{x:.1}\" y=\"{start_y:.1}\" font-family=\"{ff}\" font-size=\"{font_size:.1}\" fill=\"{text_col}\"{weight_attr}{style_attr}{anchor_attr}{rot_attr}>"
+                    "<text x=\"{anchor_x:.1}\" y=\"{start_y:.1}\" font-family=\"{ff}\" font-size=\"{font_size:.1}\" fill=\"{text_col}\"{weight_attr}{style_attr}{anchor_attr}{rot_attr}>"
                 ));
                 for (i, line) in lines.iter().enumerate() {
                     let dy_str = if i == 0 {
                         String::new()
                     } else {
-                        format!(" x=\"{x:.1}\" dy=\"{line_h:.1}\"")
+                        format!(" x=\"{anchor_x:.1}\" dy=\"{line_h:.1}\"")
                     };
                     out.push_str(&format!("<tspan{dy_str}>{}</tspan>", escape_xml(line)));
                 }

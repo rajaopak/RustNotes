@@ -375,6 +375,9 @@ pub fn render_selection_gizmo(
             Color32::from_rgb(0, 114, 206),
         );
     } else if let Some(frame) = &sel.frame {
+        if state.editing_text_id.is_some() && state.editing_text_id == sel.single_text_id {
+            return;
+        }
         let mut handle_screen_map = HashMap::new();
         for h in &frame.handles {
             handle_screen_map.insert(h.kind, page_to_screen(h.pos.to_pos2()));

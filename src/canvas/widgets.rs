@@ -1086,6 +1086,9 @@ pub fn render_inline_text_editor(
                     font_size,
                     color,
                     font_family,
+                    bold,
+                    italic,
+                    alignment,
                     ..
                 } => {
                     let screen_tl = page_to_screen(Pos2::new(*x, *y));
@@ -1097,24 +1100,48 @@ pub fn render_inline_text_editor(
                         .unwrap_or(12)
                         .max(12) as f32;
                     let scaled_font = (*font_size * state.zoom).clamp(6.0, 200.0);
-                    let egui_family = font_family.to_egui_font_family();
-                    let box_w = (max_chars * scaled_font * 0.62 + 28.0).max(180.0);
-                    let box_h = ((lines_cnt + 0.6) * scaled_font * 1.35 + 12.0).max(36.0);
+                    let (egui_family, _needs_faux_bold) = ui.fonts(|fonts| {
+                        let registered = fonts.families();
+                        font_family.resolve_egui_font_family(*bold, |fam| registered.contains(fam))
+                    });
+                    let (approx_w, _) = crate::geometry::text_approx_size(text, *font_size);
+                    let box_w = if text.is_empty() {
+                        (scaled_font * 8.0).max(160.0)
+                    } else {
+                        (approx_w * state.zoom + 16.0)
+                            .max((max_chars * scaled_font * 0.62 + 24.0).max(120.0))
+                    };
+                    let box_h =
+                        ((lines_cnt + 0.6) * scaled_font * 1.35 + 8.0).max(scaled_font * 1.6);
                     let edit_rect = Rect::from_min_size(screen_tl, Vec2::new(box_w, box_h));
 
-                    painter.rect_stroke(
-                        edit_rect.expand(3.0),
-                        4.0,
-                        Stroke::new(1.2_f32, Color32::from_rgba_unmultiplied(0, 114, 206, 150)),
-                        egui::StrokeKind::Outside,
-                    );
-
                     let te_id = egui::Id::new(("canvas_inline_text", &edit_id));
+                    let text_c = color.to_color32();
+                    let halign = alignment.to_egui_align();
+                    let is_italic = *italic;
+                    let font_id = egui::FontId::new(scaled_font, egui_family);
+                    let mut layouter = |ui: &egui::Ui, buf: &str, wrap_width: f32| {
+                        let mut job = egui::text::LayoutJob {
+                            halign,
+                            ..Default::default()
+                        };
+                        job.wrap.max_width = wrap_width;
+                        job.append(
+                            buf,
+                            0.0,
+                            egui::TextFormat {
+                                font_id: font_id.clone(),
+                                color: text_c,
+                                italics: is_italic,
+                                ..Default::default()
+                            },
+                        );
+                        ui.fonts(|f| f.layout_job(job))
+                    };
                     let te = egui::TextEdit::multiline(text)
                         .id(te_id)
-                        .font(egui::FontId::new(scaled_font, egui_family))
-                        .text_color(color.to_color32())
-                        .hint_text("Ketik teks di sini...")
+                        .horizontal_align(halign)
+                        .layouter(&mut layouter)
                         .frame(false)
                         .desired_width(box_w);
                     let prev_bg = ui.visuals().extreme_bg_color;
@@ -1137,14 +1164,20 @@ pub fn render_inline_text_editor(
                     text_color,
                     font_size,
                     font_family,
+                    bold,
+                    italic,
+                    alignment,
                     ..
                 } => {
                     let p1 = page_to_screen(Pos2::new(*x, *y)) + Vec2::new(8.0, 8.0);
                     let p2 =
                         page_to_screen(Pos2::new(*x + *width, *y + *height)) - Vec2::new(8.0, 8.0);
                     let edit_rect = Rect::from_two_pos(p1, p2);
-                    let scaled_font = (*font_size * state.zoom).clamp(10.0, 42.0);
-                    let egui_family = font_family.to_egui_font_family();
+                    let scaled_font = (*font_size * state.zoom).clamp(6.0, 100.0);
+                    let (egui_family, _needs_faux_bold) = ui.fonts(|fonts| {
+                        let registered = fonts.families();
+                        font_family.resolve_egui_font_family(*bold, |fam| registered.contains(fam))
+                    });
 
                     painter.rect_stroke(
                         edit_rect.expand(6.0),
@@ -1154,10 +1187,32 @@ pub fn render_inline_text_editor(
                     );
 
                     let te_id = egui::Id::new(("canvas_inline_sticky", &edit_id));
+                    let text_c = text_color.to_color32();
+                    let halign = alignment.to_egui_align();
+                    let is_italic = *italic;
+                    let font_id = egui::FontId::new(scaled_font, egui_family);
+                    let mut layouter = |ui: &egui::Ui, buf: &str, wrap_width: f32| {
+                        let mut job = egui::text::LayoutJob {
+                            halign,
+                            ..Default::default()
+                        };
+                        job.wrap.max_width = wrap_width;
+                        job.append(
+                            buf,
+                            0.0,
+                            egui::TextFormat {
+                                font_id: font_id.clone(),
+                                color: text_c,
+                                italics: is_italic,
+                                ..Default::default()
+                            },
+                        );
+                        ui.fonts(|f| f.layout_job(job))
+                    };
                     let te = egui::TextEdit::multiline(text)
                         .id(te_id)
-                        .font(egui::FontId::new(scaled_font, egui_family))
-                        .text_color(text_color.to_color32())
+                        .horizontal_align(halign)
+                        .layouter(&mut layouter)
                         .hint_text("Tulis catatan tempel...")
                         .frame(false)
                         .desired_width(edit_rect.width());

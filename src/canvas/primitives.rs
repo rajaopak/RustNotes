@@ -470,7 +470,10 @@ pub fn draw_non_stroke_object(
             ..
         } => {
             let pos = page_to_screen(Pos2::new(*x, *y));
-            let egui_family = font_family.to_egui_font_family();
+            let (egui_family, needs_faux_bold) = painter.fonts(|fonts| {
+                let registered = fonts.families();
+                font_family.resolve_egui_font_family(*bold, |fam| registered.contains(fam))
+            });
             let scaled_font = (*font_size * zoom).clamp(4.0, 200.0);
             let font_id = egui::FontId::new(scaled_font, egui_family);
             let text_c = color.to_color32();
@@ -490,13 +493,26 @@ pub fn draw_non_stroke_object(
                 },
             );
             let galley = painter.layout_job(job);
-            let mut text_shape = egui::epaint::TextShape::new(pos, galley.clone(), text_c);
+            // Kompensasi titik jangkar halign agar rata tengah/kanan berada di dalam kotak [x, x + approx_w], bukan offside ke kiri.
+            let (approx_w, _) = crate::geometry::text_approx_size(text, *font_size);
+            let align_w = (approx_w * zoom).max(galley.size().x);
+            let local_offset_x = match alignment {
+                crate::model::TextAlign::Left => -galley.rect.min.x,
+                crate::model::TextAlign::Center => align_w * 0.5,
+                crate::model::TextAlign::Right => align_w,
+            };
+            let cos_a = rotation.cos();
+            let sin_a = rotation.sin();
+            let aligned_pos = pos + Vec2::new(local_offset_x * cos_a, local_offset_x * sin_a);
+
+            let mut text_shape = egui::epaint::TextShape::new(aligned_pos, galley.clone(), text_c);
             text_shape.angle = *rotation;
             painter.add(text_shape);
-            if *bold {
-                let bold_offset = Vec2::new(0.6 * zoom.clamp(0.5, 2.0), 0.0);
+            if needs_faux_bold {
+                let bold_dx = (scaled_font * 0.035).clamp(0.6, 2.5);
+                let bold_offset = Vec2::new(bold_dx * cos_a, bold_dx * sin_a);
                 let mut bold_shape =
-                    egui::epaint::TextShape::new(pos + bold_offset, galley, text_c);
+                    egui::epaint::TextShape::new(aligned_pos + bold_offset, galley, text_c);
                 bold_shape.angle = *rotation;
                 painter.add(bold_shape);
             }
@@ -548,7 +564,10 @@ pub fn draw_non_stroke_object(
             }
 
             let scaled_font = (*font_size * zoom).clamp(6.0, 100.0);
-            let egui_family = font_family.to_egui_font_family();
+            let (egui_family, needs_faux_bold) = painter.fonts(|fonts| {
+                let registered = fonts.families();
+                font_family.resolve_egui_font_family(*bold, |fam| registered.contains(fam))
+            });
             let font_id = egui::FontId::new(scaled_font, egui_family);
             let t_col = text_color.to_color32();
 
@@ -569,6 +588,7 @@ pub fn draw_non_stroke_object(
             );
             let galley = painter.layout_job(job);
 
+            let bold_step = (scaled_font * 0.035).clamp(0.6, 2.2);
             let (text_pos, bold_offset) = if rot.abs() < 1e-4 {
                 let r = Rect::from_center_size(s_center, Vec2::new(sw, sh));
                 let tp = match alignment {
@@ -576,7 +596,7 @@ pub fn draw_non_stroke_object(
                     crate::model::TextAlign::Center => Pos2::new(r.center().x, r.top() + 10.0),
                     crate::model::TextAlign::Right => Pos2::new(r.right() - 10.0, r.top() + 10.0),
                 };
-                (tp, Vec2::new(0.6 * zoom.clamp(0.5, 2.0), 0.0))
+                (tp, Vec2::new(bold_step, 0.0))
             } else {
                 let cos_a = rot.cos();
                 let sin_a = rot.sin();
@@ -589,14 +609,14 @@ pub fn draw_non_stroke_object(
                     crate::model::TextAlign::Right => Vec2::new(hw - pad, -hh + pad),
                 };
                 let tp = s_center + rot_vec(local_pos.x, local_pos.y);
-                let bo = rot_vec(0.6 * zoom.clamp(0.5, 2.0), 0.0);
+                let bo = rot_vec(bold_step, 0.0);
                 (tp, bo)
             };
 
             let mut text_shape = egui::epaint::TextShape::new(text_pos, galley.clone(), t_col);
             text_shape.angle = rot;
             painter.add(text_shape);
-            if *bold {
+            if needs_faux_bold {
                 let mut bold_shape =
                     egui::epaint::TextShape::new(text_pos + bold_offset, galley, t_col);
                 bold_shape.angle = rot;
