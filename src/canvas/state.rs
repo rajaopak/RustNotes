@@ -138,6 +138,9 @@ pub struct CanvasState {
     pub smart_guides: bool,
     pub grid_spacing: f32,
     pub active_alignment_guides: Vec<crate::geometry::AlignmentGuide>,
+
+    // Sinkronisasi konfigurasi shortcut untuk label dinamis pada menu konteks kanvas
+    pub shortcuts: crate::model::ShortcutSettings,
 }
 
 impl Default for CanvasState {
@@ -231,6 +234,7 @@ impl Default for CanvasState {
             smart_guides: true,
             grid_spacing: 30.0,
             active_alignment_guides: Vec::new(),
+            shortcuts: crate::model::ShortcutSettings::default(),
         }
     }
 }

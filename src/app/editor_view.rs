@@ -463,7 +463,7 @@ impl RustNotesApp {
                 self.perform_redo(nb_idx);
             }
 
-            // Tool shortcuts (dapat disesuaikan lewat Settings)
+            // Tool shortcuts (seluruh alat terdaftar dapat disesuaikan lewat Settings)
             ctx.input(|i| {
                 if crate::app::is_action_triggered(
                     ShortcutAction::ToolPen,
@@ -471,6 +471,12 @@ impl RustNotesApp {
                     i,
                 ) {
                     self.canvas_state.current_tool = ActiveTool::Pen;
+                } else if crate::app::is_action_triggered(
+                    ShortcutAction::ToolPencil,
+                    &self.settings.shortcuts,
+                    i,
+                ) {
+                    self.canvas_state.current_tool = ActiveTool::Pencil;
                 } else if crate::app::is_action_triggered(
                     ShortcutAction::ToolHighlighter,
                     &self.settings.shortcuts,
@@ -500,7 +506,9 @@ impl RustNotesApp {
                     &self.settings.shortcuts,
                     i,
                 ) {
-                    self.canvas_state.current_tool = ActiveTool::Shape(ShapeKind::Rectangle);
+                    if !matches!(self.canvas_state.current_tool, ActiveTool::Shape(_)) {
+                        self.canvas_state.current_tool = ActiveTool::Shape(ShapeKind::Rectangle);
+                    }
                 } else if crate::app::is_action_triggered(
                     ShortcutAction::ToolConnector,
                     &self.settings.shortcuts,
@@ -513,6 +521,27 @@ impl RustNotesApp {
                     i,
                 ) {
                     self.canvas_state.current_tool = ActiveTool::StickyNote;
+                } else if crate::app::is_action_triggered(
+                    ShortcutAction::ToolEquation,
+                    &self.settings.shortcuts,
+                    i,
+                ) {
+                    self.canvas_state.current_tool = ActiveTool::Equation;
+                    self.canvas_state.show_equation_dialog = true;
+                    self.canvas_state.editing_equation_id = None;
+                    self.canvas_state.equation_latex_buffer.clear();
+                } else if crate::app::is_action_triggered(
+                    ShortcutAction::ToolLaser,
+                    &self.settings.shortcuts,
+                    i,
+                ) {
+                    self.canvas_state.current_tool = ActiveTool::Laser;
+                } else if crate::app::is_action_triggered(
+                    ShortcutAction::ToolHand,
+                    &self.settings.shortcuts,
+                    i,
+                ) {
+                    self.canvas_state.current_tool = ActiveTool::Hand;
                 }
             });
 
@@ -585,8 +614,10 @@ impl RustNotesApp {
                     ShortcutAction::ToggleSidebar,
                     &self.settings.shortcuts,
                     i,
-                ) || i.key_pressed(egui::Key::F6)
-                    || (i.modifiers.command && i.key_pressed(egui::Key::B))
+                ) || (self.settings.shortcuts.get(ShortcutAction::ToggleSidebar)
+                    == ShortcutAction::ToggleSidebar.default_binding()
+                    && i.modifiers.command
+                    && i.key_pressed(egui::Key::B))
             }) {
                 self.show_thumbnail_sidebar = !self.show_thumbnail_sidebar;
             }
@@ -595,7 +626,7 @@ impl RustNotesApp {
                     ShortcutAction::ToggleZoomWindow,
                     &self.settings.shortcuts,
                     i,
-                ) || (i.modifiers.alt && i.key_pressed(egui::Key::Z))
+                )
             }) {
                 self.canvas_state.show_zoom_window = !self.canvas_state.show_zoom_window;
             }
@@ -1115,7 +1146,11 @@ impl RustNotesApp {
                                             )
                                             .frame(false),
                                         )
-                                        .on_hover_text("Klik untuk Reset Zoom ke 100% (Ctrl+0)")
+                                        .on_hover_text(self.action_hover_text(
+                                            ShortcutAction::ResetZoom,
+                                            "Klik untuk Reset Zoom ke 100%",
+                                            "Click to Reset Zoom to 100%",
+                                        ))
                                         .clicked()
                                     {
                                         self.apply_zoom_anchored(nb_idx, 1.0, None);
@@ -1306,5 +1341,91 @@ mod tests {
             app.can_canvas_receive_scroll(&ctx, Some(uncovered_canvas_pos)),
             "Scroll di area kanvas yang tidak tertutup jendela mengambang tetap harus diterima"
         );
+    }
+
+    #[test]
+    fn test_all_tool_shortcuts_and_custom_rebindings_switch_active_tool() {
+        use crate::model::KeyBinding;
+
+        let ctx = egui::Context::default();
+        let mut app = test_app_with_single_page();
+        step_editor(&mut app, &ctx, vec![]);
+
+        let press_key = |app: &mut RustNotesApp, ctx: &egui::Context, key: egui::Key, alt: bool| {
+            let modifiers = egui::Modifiers {
+                alt,
+                ..Default::default()
+            };
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, 800.0))),
+                modifiers,
+                events: vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                app.render_editor_view(ctx);
+            });
+        };
+
+        // Default bindings for previously missing / unwired tools
+        press_key(&mut app, &ctx, egui::Key::B, false);
+        assert_eq!(app.canvas_state.current_tool, ActiveTool::Pencil);
+
+        press_key(&mut app, &ctx, egui::Key::R, false);
+        assert_eq!(app.canvas_state.current_tool, ActiveTool::Laser);
+
+        press_key(&mut app, &ctx, egui::Key::Space, false);
+        assert_eq!(app.canvas_state.current_tool, ActiveTool::Hand);
+
+        press_key(&mut app, &ctx, egui::Key::E, true);
+        assert_eq!(app.canvas_state.current_tool, ActiveTool::Equation);
+        assert!(app.canvas_state.show_equation_dialog);
+        app.canvas_state.show_equation_dialog = false;
+
+        // Rebind tools to custom keys and verify old defaults no longer trigger while new ones do
+        app.settings
+            .shortcuts
+            .set(ShortcutAction::ToolPencil, KeyBinding::plain("K"));
+        app.settings
+            .shortcuts
+            .set(ShortcutAction::ToolLaser, KeyBinding::plain("J"));
+        app.settings
+            .shortcuts
+            .set(ShortcutAction::ToolHand, KeyBinding::plain("M"));
+        app.settings
+            .shortcuts
+            .set(ShortcutAction::ToolEquation, KeyBinding::alt("Q"));
+
+        app.canvas_state.current_tool = ActiveTool::Pen;
+        press_key(&mut app, &ctx, egui::Key::B, false);
+        assert_eq!(
+            app.canvas_state.current_tool,
+            ActiveTool::Pen,
+            "Old default key B must not activate Pencil after rebinding"
+        );
+        press_key(&mut app, &ctx, egui::Key::K, false);
+        assert_eq!(app.canvas_state.current_tool, ActiveTool::Pencil);
+
+        press_key(&mut app, &ctx, egui::Key::R, false);
+        assert_eq!(app.canvas_state.current_tool, ActiveTool::Pencil);
+        press_key(&mut app, &ctx, egui::Key::J, false);
+        assert_eq!(app.canvas_state.current_tool, ActiveTool::Laser);
+
+        press_key(&mut app, &ctx, egui::Key::Space, false);
+        assert_eq!(app.canvas_state.current_tool, ActiveTool::Laser);
+        press_key(&mut app, &ctx, egui::Key::M, false);
+        assert_eq!(app.canvas_state.current_tool, ActiveTool::Hand);
+
+        press_key(&mut app, &ctx, egui::Key::E, true);
+        assert_eq!(app.canvas_state.current_tool, ActiveTool::Hand);
+        press_key(&mut app, &ctx, egui::Key::Q, true);
+        assert_eq!(app.canvas_state.current_tool, ActiveTool::Equation);
+        assert!(app.canvas_state.show_equation_dialog);
     }
 }

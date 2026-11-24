@@ -557,6 +557,7 @@ fn render_canvas_context_menu(
     click_page_p: Pos2,
     has_selection_on_this_page: bool,
 ) {
+    use crate::model::ShortcutAction;
     response.context_menu(|ui| {
         if has_selection_on_this_page {
             let count = page
@@ -566,28 +567,39 @@ fn render_canvas_context_menu(
                 .count();
             ui.label(format!("{} objek dipilih", count));
             ui.separator();
-            if ui.button("📋 Salin (Ctrl+C)").clicked() {
+            let copy_key = state.shortcuts.get(ShortcutAction::Copy).display_string();
+            if ui.button(format!("📋 Salin ({copy_key})")).clicked() {
                 state.copy_selected(&page.objects);
                 ui.close_menu();
             }
-            if ui.button("✂ Potong (Ctrl+X)").clicked() {
+            let cut_key = state.shortcuts.get(ShortcutAction::Cut).display_string();
+            if ui.button(format!("✂ Potong ({cut_key})")).clicked() {
                 state.cut_selected(page);
                 ui.close_menu();
             }
-            if ui.button("📄 Gandakan (Ctrl+D)").clicked() {
+            let dup_key = state
+                .shortcuts
+                .get(ShortcutAction::Duplicate)
+                .display_string();
+            if ui.button(format!("📄 Gandakan ({dup_key})")).clicked() {
                 state.duplicate_selected(page);
                 ui.close_menu();
             }
-            if ui.button("🗑 Hapus (Del)").clicked() {
+            let del_key = state.shortcuts.get(ShortcutAction::Delete).display_string();
+            if ui.button(format!("🗑 Hapus ({del_key})")).clicked() {
                 state.delete_selected(page);
                 ui.close_menu();
             }
             ui.separator();
             let is_locked = state.is_selected_locked(page);
+            let lock_key = state
+                .shortcuts
+                .get(ShortcutAction::ToggleLock)
+                .display_string();
             let lock_label = if is_locked {
-                "🔓 Buka Kunci (Ctrl+L)"
+                format!("🔓 Buka Kunci ({lock_key})")
             } else {
-                "🔒 Kunci Objek (Ctrl+L)"
+                format!("🔒 Kunci Objek ({lock_key})")
             };
             if ui.button(lock_label).clicked() {
                 state.toggle_lock_selected(page);
@@ -613,7 +625,11 @@ fn render_canvas_context_menu(
             }
         } else {
             if !state.object_clipboard.is_empty() {
-                if ui.button("📋 Tempel Objek (Ctrl+V)").clicked() {
+                let paste_key = state.shortcuts.get(ShortcutAction::Paste).display_string();
+                if ui
+                    .button(format!("📋 Tempel Objek ({paste_key})"))
+                    .clicked()
+                {
                     state.paste_clipboard(page, Some(click_page_p));
                     state.last_interacted_page_id = Some(page.id.clone());
                     ui.close_menu();
@@ -626,7 +642,14 @@ fn render_canvas_context_menu(
                 ui.close_menu();
             }
             ui.separator();
-            if ui.button("Pilih Semua (Ctrl+A)").clicked() {
+            let select_all_key = state
+                .shortcuts
+                .get(ShortcutAction::SelectAll)
+                .display_string();
+            if ui
+                .button(format!("Pilih Semua ({select_all_key})"))
+                .clicked()
+            {
                 state.selected_ids = page.objects.iter().map(|o| o.id().to_string()).collect();
                 ui.close_menu();
             }

@@ -177,9 +177,10 @@ impl RustNotesApp {
                     .min_size(Vec2::new(28.0, 28.0));
                     if ui
                         .add(sb_btn)
-                        .on_hover_text(lang.tr(
-                            "Panel Halaman, Bookmark & Outline (Ctrl+B)",
-                            "Pages, Bookmarks & Outline Sidebar (Ctrl+B)",
+                        .on_hover_text(self.action_hover_text(
+                            crate::model::ShortcutAction::ToggleSidebar,
+                            "Panel Halaman, Bookmark & Outline",
+                            "Pages, Bookmarks & Outline Sidebar",
                         ))
                         .clicked()
                     {
@@ -198,9 +199,11 @@ impl RustNotesApp {
                             .min_size(Vec2::new(28.0, 28.0));
                     if ui
                         .add(find_btn)
-                        .on_hover_text(
-                            lang.tr("Cari di Dokumen (Ctrl+F)", "Find in Document (Ctrl+F)"),
-                        )
+                        .on_hover_text(self.action_hover_text(
+                            crate::model::ShortcutAction::Search,
+                            "Cari di Dokumen",
+                            "Find in Document",
+                        ))
                         .clicked()
                     {
                         self.show_in_doc_search = !self.show_in_doc_search;
@@ -218,9 +221,10 @@ impl RustNotesApp {
                         .min_size(Vec2::new(30.0, 28.0));
                     if ui
                         .add(zw_btn)
-                        .on_hover_text(lang.tr(
-                            "Jendela Pembesar Tulis / Zoom Window (Alt+Z)",
-                            "Zoom Window for Detailed Writing (Alt+Z)",
+                        .on_hover_text(self.action_hover_text(
+                            crate::model::ShortcutAction::ToggleZoomWindow,
+                            "Jendela Pembesar Tulis / Zoom Window",
+                            "Zoom Window for Detailed Writing",
                         ))
                         .clicked()
                     {
@@ -490,166 +494,7 @@ impl RustNotesApp {
                                     .layout(Layout::left_to_right(Align::Center)),
                             );
                             center_ui.spacing_mut().item_spacing.x = 4.0;
-
-                            let active_shape_kind = match self.canvas_state.current_tool {
-                                ActiveTool::Shape(k) => k,
-                                _ => ShapeKind::Rectangle,
-                            };
-                            let tools = [
-                                (
-                                    ActiveTool::Pen,
-                                    "✒",
-                                    "Pen (P) — Klik lagi untuk atur ketebalan & warna",
-                                ),
-                                (ActiveTool::Pencil, "✏", "Pencil — Goresan pensil"),
-                                (
-                                    ActiveTool::Highlighter,
-                                    "🖍",
-                                    "Highlighter (H) — Stabilo transparan",
-                                ),
-                                (
-                                    ActiveTool::Eraser,
-                                    "⌫",
-                                    "Eraser (E) — Klik lagi untuk opsi Partial / Whole Stroke",
-                                ),
-                                (
-                                    ActiveTool::Shape(active_shape_kind),
-                                    "📐",
-                                    "Shapes — Klik lagi untuk pilih bentuk",
-                                ),
-                                (
-                                    ActiveTool::Connector,
-                                    "🔗",
-                                    "Connector (C) — Tarik garis penghubung antar bentuk",
-                                ),
-                                (ActiveTool::Lasso, "✂", "Lasso Selection (L)"),
-                                (ActiveTool::Text, "T", "Text Box (T)"),
-                                (ActiveTool::StickyNote, "🗒", "Sticky Note"),
-                                (
-                                    ActiveTool::Equation,
-                                    "∑",
-                                    "Equation / LaTeX Tool (Alt+E)",
-                                ),
-                                (ActiveTool::Laser, "✨", "Laser Pointer"),
-                                (ActiveTool::Hand, "✋", "Hand / Pan Mode (Space)"),
-                            ];
-
-                            for (tool_var, icon, tooltip) in tools {
-                                let is_sel = match (self.canvas_state.current_tool, tool_var) {
-                                    (ActiveTool::Shape(_), ActiveTool::Shape(_)) => true,
-                                    (a, b) => a == b,
-                                };
-                                let icon_col = if is_sel {
-                                    Color32::from_rgb(30, 58, 95)
-                                } else {
-                                    Color32::WHITE
-                                };
-                                let btn = if tool_var == ActiveTool::Eraser {
-                                    Button::new(" ")
-                                } else {
-                                    Button::new(
-                                        RichText::new(icon)
-                                            .size(14.0)
-                                            .strong()
-                                            .color(icon_col),
-                                    )
-                                }
-                                .fill(if is_sel {
-                                    Color32::from_rgb(214, 232, 255)
-                                } else {
-                                    Color32::TRANSPARENT
-                                })
-                                .corner_radius(7.0)
-                                .min_size(Vec2::new(28.0, 28.0));
-
-                                let resp = center_ui.add(btn).on_hover_text(tooltip);
-                                if tool_var == ActiveTool::Eraser {
-                                    paint_eraser_glyph(center_ui.painter(), resp.rect, icon_col);
-                                }
-
-                                if resp.clicked() {
-                                    if is_sel {
-                                        self.show_tool_popup = !self.show_tool_popup;
-                                        self.show_more_menu_popup = false;
-                                        self.show_doc_title_popup = false;
-                                    } else {
-                                        self.canvas_state.current_tool = tool_var;
-                                        if tool_var == ActiveTool::Equation {
-                                            self.canvas_state.show_equation_dialog = true;
-                                            self.canvas_state.editing_equation_id = None;
-                                            self.canvas_state.equation_latex_buffer.clear();
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Insert Image Icon (`🖼`)
-                            let img_btn = Button::new(
-                                RichText::new("🖼").size(14.0).color(Color32::WHITE),
-                            )
-                            .fill(Color32::TRANSPARENT)
-                            .corner_radius(7.0)
-                            .min_size(Vec2::new(28.0, 28.0));
-                            if center_ui
-                                .add(img_btn)
-                                .on_hover_text(
-                                    lang.tr("Sisipkan Gambar ke Halaman", "Insert Image to Page"),
-                                )
-                                .clicked()
-                                && let Some(path) = rfd::FileDialog::new()
-                                    .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
-                                    .pick_file()
-                                && let Ok(bytes) = std::fs::read(&path)
-                            {
-                                let ext =
-                                    path.extension().and_then(|s| s.to_str()).unwrap_or("png");
-                                if self.insert_image_to_page(
-                                    nb_idx,
-                                    self.current_page_index,
-                                    &bytes,
-                                    ext,
-                                    None,
-                                ) {
-                                    self.toast_message = Some(
-                                        "✅ Gambar berhasil disisipkan ke halaman.".to_string(),
-                                    );
-                                }
-                            }
-
-                            // Active Stroke & Color Pop-up Pill (`● 3.0px ▾`)
-                            let (sw_rect, sw_resp) = center_ui
-                                .allocate_exact_size(Vec2::new(74.0, 28.0), Sense::click());
-                            let pill_bg = if self.show_tool_popup || sw_resp.hovered() {
-                                Color32::from_rgb(54, 95, 145)
-                            } else {
-                                Color32::from_rgb(31, 56, 90)
-                            };
-                            center_ui.painter().rect_filled(sw_rect, 14.0, pill_bg);
-                            let dot_center = Pos2::new(sw_rect.left() + 14.0, sw_rect.center().y);
-                            center_ui.painter().circle(
-                                dot_center,
-                                7.0,
-                                self.canvas_state.stroke_color,
-                                Stroke::new(1.5_f32, Color32::WHITE),
-                            );
-                            center_ui.painter().text(
-                                Pos2::new(sw_rect.left() + 26.0, sw_rect.center().y),
-                                egui::Align2::LEFT_CENTER,
-                                format!("{:.1}px ▾", self.canvas_state.stroke_width),
-                                FontId::proportional(11.5),
-                                Color32::WHITE,
-                            );
-                            if sw_resp
-                                .on_hover_text(lang.tr(
-                                    "Pengaturan Ketebalan Pena, Warna & Opsi Alat",
-                                    "Stroke Width, Color Palette & Tool Options Pop-up",
-                                ))
-                                .clicked()
-                            {
-                                self.show_tool_popup = !self.show_tool_popup;
-                                self.show_more_menu_popup = false;
-                                self.show_doc_title_popup = false;
-                            }
+                            self.render_editor_tools_strip(&mut center_ui, nb_idx);
                         }
                     });
                 });
@@ -663,163 +508,7 @@ impl RustNotesApp {
                         ui.horizontal_wrapped(|ui| {
                             ui.add_space(start_x);
                             ui.spacing_mut().item_spacing.x = 4.0;
-                            let active_shape_kind = match self.canvas_state.current_tool {
-                                ActiveTool::Shape(k) => k,
-                                _ => ShapeKind::Rectangle,
-                            };
-                            let tools = [
-                                (
-                                    ActiveTool::Pen,
-                                    "✒",
-                                    "Pen (P) — Klik lagi untuk atur ketebalan & warna",
-                                ),
-                                (ActiveTool::Pencil, "✏", "Pencil — Goresan pensil"),
-                                (
-                                    ActiveTool::Highlighter,
-                                    "🖍",
-                                    "Highlighter (H) — Stabilo transparan",
-                                ),
-                                (
-                                    ActiveTool::Eraser,
-                                    "⌫",
-                                    "Eraser (E) — Klik lagi untuk opsi Partial / Whole Stroke",
-                                ),
-                                (
-                                    ActiveTool::Shape(active_shape_kind),
-                                    "📐",
-                                    "Shapes — Klik lagi untuk pilih bentuk",
-                                ),
-                                (
-                                    ActiveTool::Connector,
-                                    "🔗",
-                                    "Connector (C) — Tarik garis penghubung antar bentuk",
-                                ),
-                                (ActiveTool::Lasso, "✂", "Lasso Selection (L)"),
-                                (ActiveTool::Text, "T", "Text Box (T)"),
-                                (ActiveTool::StickyNote, "🗒", "Sticky Note"),
-                                (
-                                    ActiveTool::Equation,
-                                    "∑",
-                                    "Equation / LaTeX Tool (Alt+E)",
-                                ),
-                                (ActiveTool::Laser, "✨", "Laser Pointer"),
-                                (ActiveTool::Hand, "✋", "Hand / Pan Mode (Space)"),
-                            ];
-
-                            for (tool_var, icon, tooltip) in tools {
-                                let is_sel = match (self.canvas_state.current_tool, tool_var) {
-                                    (ActiveTool::Shape(_), ActiveTool::Shape(_)) => true,
-                                    (a, b) => a == b,
-                                };
-                                let icon_col = if is_sel {
-                                    Color32::from_rgb(30, 58, 95)
-                                } else {
-                                    Color32::WHITE
-                                };
-                                let btn = if tool_var == ActiveTool::Eraser {
-                                    Button::new(" ")
-                                } else {
-                                    Button::new(
-                                        RichText::new(icon)
-                                            .size(14.0)
-                                            .strong()
-                                            .color(icon_col),
-                                    )
-                                }
-                                .fill(if is_sel {
-                                    Color32::from_rgb(214, 232, 255)
-                                } else {
-                                    Color32::TRANSPARENT
-                                })
-                                .corner_radius(7.0)
-                                .min_size(Vec2::new(28.0, 28.0));
-
-                                let resp = ui.add(btn).on_hover_text(tooltip);
-                                if tool_var == ActiveTool::Eraser {
-                                    paint_eraser_glyph(ui.painter(), resp.rect, icon_col);
-                                }
-
-                                if resp.clicked() {
-                                    if is_sel {
-                                        self.show_tool_popup = !self.show_tool_popup;
-                                        self.show_more_menu_popup = false;
-                                        self.show_doc_title_popup = false;
-                                    } else {
-                                        self.canvas_state.current_tool = tool_var;
-                                        if tool_var == ActiveTool::Equation {
-                                            self.canvas_state.show_equation_dialog = true;
-                                            self.canvas_state.editing_equation_id = None;
-                                            self.canvas_state.equation_latex_buffer.clear();
-                                        }
-                                    }
-                                }
-                            }
-
-                            let img_btn = Button::new(
-                                RichText::new("🖼").size(14.0).color(Color32::WHITE),
-                            )
-                            .fill(Color32::TRANSPARENT)
-                            .corner_radius(7.0)
-                            .min_size(Vec2::new(28.0, 28.0));
-                            if ui
-                                .add(img_btn)
-                                .on_hover_text(
-                                    lang.tr("Sisipkan Gambar ke Halaman", "Insert Image to Page"),
-                                )
-                                .clicked()
-                                && let Some(path) = rfd::FileDialog::new()
-                                    .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
-                                    .pick_file()
-                                && let Ok(bytes) = std::fs::read(&path)
-                            {
-                                let ext =
-                                    path.extension().and_then(|s| s.to_str()).unwrap_or("png");
-                                if self.insert_image_to_page(
-                                    nb_idx,
-                                    self.current_page_index,
-                                    &bytes,
-                                    ext,
-                                    None,
-                                ) {
-                                    self.toast_message = Some(
-                                        "✅ Gambar berhasil disisipkan ke halaman.".to_string(),
-                                    );
-                                }
-                            }
-
-                            let (sw_rect, sw_resp) =
-                                ui.allocate_exact_size(Vec2::new(74.0, 28.0), Sense::click());
-                            let pill_bg = if self.show_tool_popup || sw_resp.hovered() {
-                                Color32::from_rgb(54, 95, 145)
-                            } else {
-                                Color32::from_rgb(31, 56, 90)
-                            };
-                            ui.painter().rect_filled(sw_rect, 14.0, pill_bg);
-                            let dot_center = Pos2::new(sw_rect.left() + 14.0, sw_rect.center().y);
-                            ui.painter().circle(
-                                dot_center,
-                                7.0,
-                                self.canvas_state.stroke_color,
-                                Stroke::new(1.5_f32, Color32::WHITE),
-                            );
-                            ui.painter().text(
-                                Pos2::new(sw_rect.left() + 26.0, sw_rect.center().y),
-                                egui::Align2::LEFT_CENTER,
-                                format!("{:.1}px ▾", self.canvas_state.stroke_width),
-                                FontId::proportional(11.5),
-                                Color32::WHITE,
-                            );
-                            if sw_resp
-                                .on_hover_text(lang.tr(
-                                    "Pengaturan Ketebalan Pena, Warna & Opsi Alat",
-                                    "Stroke Width, Color Palette & Tool Options Pop-up",
-                                ))
-                                .clicked()
-                            {
-                                self.show_tool_popup = !self.show_tool_popup;
-                                self.show_more_menu_popup = false;
-                                self.show_doc_title_popup = false;
-                            }
+                            self.render_editor_tools_strip(ui, nb_idx);
                         });
                     });
                 }
@@ -1646,7 +1335,11 @@ impl RustNotesApp {
                                     "{}%",
                                     (self.canvas_state.zoom * 100.0).round() as i32
                                 ))
-                                .on_hover_text("Klik untuk reset Zoom ke 100%")
+                                .on_hover_text(self.action_hover_text(
+                                    crate::model::ShortcutAction::ResetZoom,
+                                    "Klik untuk reset Zoom ke 100%",
+                                    "Click to Reset Zoom to 100%",
+                                ))
                                 .clicked()
                             {
                                 self.apply_zoom_anchored(nb_idx, 1.0, None);
@@ -1704,5 +1397,309 @@ impl RustNotesApp {
                     }
                 });
         }
+    }
+
+    pub(crate) fn tool_shortcut_action(tool: ActiveTool) -> crate::model::ShortcutAction {
+        use crate::model::ShortcutAction;
+        match tool {
+            ActiveTool::Pen => ShortcutAction::ToolPen,
+            ActiveTool::Pencil => ShortcutAction::ToolPencil,
+            ActiveTool::Highlighter => ShortcutAction::ToolHighlighter,
+            ActiveTool::Eraser => ShortcutAction::ToolEraser,
+            ActiveTool::Shape(_) => ShortcutAction::ToolShape,
+            ActiveTool::Connector => ShortcutAction::ToolConnector,
+            ActiveTool::Lasso => ShortcutAction::ToolLasso,
+            ActiveTool::Text => ShortcutAction::ToolText,
+            ActiveTool::StickyNote => ShortcutAction::ToolStickyNote,
+            ActiveTool::Equation => ShortcutAction::ToolEquation,
+            ActiveTool::Laser => ShortcutAction::ToolLaser,
+            ActiveTool::Hand => ShortcutAction::ToolHand,
+        }
+    }
+
+    pub(crate) fn action_hover_text(
+        &self,
+        action: crate::model::ShortcutAction,
+        label_id: &str,
+        label_en: &str,
+    ) -> String {
+        let lang = self.settings.language;
+        let key = self.settings.shortcuts.get(action).display_string();
+        format!("{} ({key})", lang.tr(label_id, label_en))
+    }
+
+    pub(crate) fn tool_hover_text(&self, tool: ActiveTool) -> String {
+        let lang = self.settings.language;
+        let key = self
+            .settings
+            .shortcuts
+            .get(Self::tool_shortcut_action(tool))
+            .display_string();
+        match tool {
+            ActiveTool::Pen => format!(
+                "{} ({key}) — {}",
+                lang.tr("Pena", "Pen"),
+                lang.tr(
+                    "Klik lagi untuk atur ketebalan & warna",
+                    "Click again for width & color",
+                )
+            ),
+            ActiveTool::Pencil => format!(
+                "{} ({key}) — {}",
+                lang.tr("Pensil", "Pencil"),
+                lang.tr("Goresan pensil", "Pencil stroke")
+            ),
+            ActiveTool::Highlighter => format!(
+                "{} ({key}) — {}",
+                lang.tr("Highlighter", "Highlighter"),
+                lang.tr("Stabilo transparan", "Transparent highlighter")
+            ),
+            ActiveTool::Eraser => format!(
+                "{} ({key}) — {}",
+                lang.tr("Penghapus", "Eraser"),
+                lang.tr(
+                    "Klik lagi untuk opsi Partial / Whole Stroke",
+                    "Click again for Partial / Whole Stroke",
+                )
+            ),
+            ActiveTool::Shape(_) => format!(
+                "{} ({key}) — {}",
+                lang.tr("Bentuk", "Shapes"),
+                lang.tr("Klik lagi untuk pilih bentuk", "Click again to pick shape")
+            ),
+            ActiveTool::Connector => format!(
+                "{} ({key}) — {}",
+                lang.tr("Konektor", "Connector"),
+                lang.tr(
+                    "Tarik garis penghubung antar bentuk",
+                    "Connect shapes with smart lines",
+                )
+            ),
+            ActiveTool::Lasso => format!("{} ({key})", lang.tr("Seleksi Lasso", "Lasso Selection")),
+            ActiveTool::Text => format!("{} ({key})", lang.tr("Kotak Teks", "Text Box")),
+            ActiveTool::StickyNote => {
+                format!("{} ({key})", lang.tr("Catatan Tempel", "Sticky Note"))
+            }
+            ActiveTool::Equation => format!(
+                "{} ({key})",
+                lang.tr("Alat Rumus / LaTeX", "Equation / LaTeX Tool")
+            ),
+            ActiveTool::Laser => format!("{} ({key})", lang.tr("Penunjuk Laser", "Laser Pointer")),
+            ActiveTool::Hand => format!(
+                "{} ({key})",
+                lang.tr("Mode Tangan / Geser Kanvas", "Hand / Pan Mode")
+            ),
+        }
+    }
+
+    fn render_editor_tools_strip(&mut self, ui: &mut egui::Ui, nb_idx: usize) {
+        let lang = self.settings.language;
+        let active_shape_kind = match self.canvas_state.current_tool {
+            ActiveTool::Shape(k) => k,
+            _ => ShapeKind::Rectangle,
+        };
+        let tools = [
+            (ActiveTool::Pen, "✒"),
+            (ActiveTool::Pencil, "✏"),
+            (ActiveTool::Highlighter, "🖍"),
+            (ActiveTool::Eraser, "⌫"),
+            (ActiveTool::Shape(active_shape_kind), "📐"),
+            (ActiveTool::Connector, "🔗"),
+            (ActiveTool::Lasso, "✂"),
+            (ActiveTool::Text, "T"),
+            (ActiveTool::StickyNote, "🗒"),
+            (ActiveTool::Equation, "∑"),
+            (ActiveTool::Laser, "✨"),
+            (ActiveTool::Hand, "✋"),
+        ];
+
+        for (tool_var, icon) in tools {
+            let tooltip = self.tool_hover_text(tool_var);
+            let is_sel = match (self.canvas_state.current_tool, tool_var) {
+                (ActiveTool::Shape(_), ActiveTool::Shape(_)) => true,
+                (a, b) => a == b,
+            };
+            let icon_col = if is_sel {
+                Color32::from_rgb(30, 58, 95)
+            } else {
+                Color32::WHITE
+            };
+            let btn = if tool_var == ActiveTool::Eraser {
+                Button::new(" ")
+            } else {
+                Button::new(RichText::new(icon).size(14.0).strong().color(icon_col))
+            }
+            .fill(if is_sel {
+                Color32::from_rgb(214, 232, 255)
+            } else {
+                Color32::TRANSPARENT
+            })
+            .corner_radius(7.0)
+            .min_size(Vec2::new(28.0, 28.0));
+
+            let resp = ui.add(btn).on_hover_text(tooltip);
+            if tool_var == ActiveTool::Eraser {
+                paint_eraser_glyph(ui.painter(), resp.rect, icon_col);
+            }
+
+            if resp.clicked() {
+                if is_sel {
+                    self.show_tool_popup = !self.show_tool_popup;
+                    self.show_more_menu_popup = false;
+                    self.show_doc_title_popup = false;
+                } else {
+                    self.canvas_state.current_tool = tool_var;
+                    if tool_var == ActiveTool::Equation {
+                        self.canvas_state.show_equation_dialog = true;
+                        self.canvas_state.editing_equation_id = None;
+                        self.canvas_state.equation_latex_buffer.clear();
+                    }
+                }
+            }
+        }
+
+        // Insert Image Icon (`🖼`)
+        let img_btn = Button::new(RichText::new("🖼").size(14.0).color(Color32::WHITE))
+            .fill(Color32::TRANSPARENT)
+            .corner_radius(7.0)
+            .min_size(Vec2::new(28.0, 28.0));
+        if ui
+            .add(img_btn)
+            .on_hover_text(lang.tr("Sisipkan Gambar ke Halaman", "Insert Image to Page"))
+            .clicked()
+            && let Some(path) = rfd::FileDialog::new()
+                .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
+                .pick_file()
+            && let Ok(bytes) = std::fs::read(&path)
+        {
+            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("png");
+            if self.insert_image_to_page(nb_idx, self.current_page_index, &bytes, ext, None) {
+                self.toast_message = Some("✅ Gambar berhasil disisipkan ke halaman.".to_string());
+            }
+        }
+
+        // Active Stroke & Color Pop-up Pill (`● 3.0px ▾`)
+        let (sw_rect, sw_resp) = ui.allocate_exact_size(Vec2::new(74.0, 28.0), Sense::click());
+        let pill_bg = if self.show_tool_popup || sw_resp.hovered() {
+            Color32::from_rgb(54, 95, 145)
+        } else {
+            Color32::from_rgb(31, 56, 90)
+        };
+        ui.painter().rect_filled(sw_rect, 14.0, pill_bg);
+        let dot_center = Pos2::new(sw_rect.left() + 14.0, sw_rect.center().y);
+        ui.painter().circle(
+            dot_center,
+            7.0,
+            self.canvas_state.stroke_color,
+            Stroke::new(1.5_f32, Color32::WHITE),
+        );
+        ui.painter().text(
+            Pos2::new(sw_rect.left() + 26.0, sw_rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            format!("{:.1}px ▾", self.canvas_state.stroke_width),
+            FontId::proportional(11.5),
+            Color32::WHITE,
+        );
+        if sw_resp
+            .on_hover_text(lang.tr(
+                "Pengaturan Ketebalan Pena, Warna & Opsi Alat",
+                "Stroke Width, Color Palette & Tool Options Pop-up",
+            ))
+            .clicked()
+        {
+            self.show_tool_popup = !self.show_tool_popup;
+            self.show_more_menu_popup = false;
+            self.show_doc_title_popup = false;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{KeyBinding, ShortcutAction};
+
+    #[test]
+    fn test_all_tool_and_navbar_hover_tooltips_follow_custom_keybinds() {
+        let mut app = RustNotesApp::default();
+
+        let all_tools = [
+            (ActiveTool::Pen, "(P)"),
+            (ActiveTool::Pencil, "(B)"),
+            (ActiveTool::Highlighter, "(H)"),
+            (ActiveTool::Eraser, "(E)"),
+            (ActiveTool::Shape(ShapeKind::Rectangle), "(S)"),
+            (ActiveTool::Connector, "(C)"),
+            (ActiveTool::Lasso, "(L)"),
+            (ActiveTool::Text, "(T)"),
+            (ActiveTool::StickyNote, "(N)"),
+            (ActiveTool::Equation, "(Alt + E)"),
+            (ActiveTool::Laser, "(R)"),
+            (ActiveTool::Hand, "(Space)"),
+        ];
+
+        for (tool, expected_key) in all_tools {
+            let tip = app.tool_hover_text(tool);
+            assert!(
+                tip.contains(expected_key),
+                "Tooltip '{tip}' for {tool:?} must contain default keybind '{expected_key}'"
+            );
+        }
+
+        // Rebind several tools and navbar actions -> hover placeholders must update immediately
+        app.settings
+            .shortcuts
+            .set(ShortcutAction::ToolPen, KeyBinding::plain("Q"));
+        app.settings
+            .shortcuts
+            .set(ShortcutAction::ToolPencil, KeyBinding::plain("K"));
+        app.settings
+            .shortcuts
+            .set(ShortcutAction::ToolLaser, KeyBinding::plain("J"));
+        app.settings
+            .shortcuts
+            .set(ShortcutAction::ToolHand, KeyBinding::plain("M"));
+        app.settings
+            .shortcuts
+            .set(ShortcutAction::ToolEquation, KeyBinding::alt("Q"));
+        app.settings
+            .shortcuts
+            .set(ShortcutAction::ToggleSidebar, KeyBinding::ctrl("B"));
+        app.settings
+            .shortcuts
+            .set(ShortcutAction::Search, KeyBinding::ctrl("K"));
+        app.settings
+            .shortcuts
+            .set(ShortcutAction::ToggleZoomWindow, KeyBinding::alt("W"));
+        app.settings
+            .shortcuts
+            .set(ShortcutAction::ResetZoom, KeyBinding::ctrl("1"));
+
+        let pen_tip = app.tool_hover_text(ActiveTool::Pen);
+        assert!(pen_tip.contains("(Q)") && !pen_tip.contains("(P)"));
+
+        let pencil_tip = app.tool_hover_text(ActiveTool::Pencil);
+        assert!(pencil_tip.contains("(K)") && !pencil_tip.contains("(B)"));
+
+        let laser_tip = app.tool_hover_text(ActiveTool::Laser);
+        assert!(laser_tip.contains("(J)") && !laser_tip.contains("(R)"));
+
+        let hand_tip = app.tool_hover_text(ActiveTool::Hand);
+        assert!(hand_tip.contains("(M)") && !hand_tip.contains("(Space)"));
+
+        let eq_tip = app.tool_hover_text(ActiveTool::Equation);
+        assert!(eq_tip.contains("(Alt + Q)") && !eq_tip.contains("(Alt + E)"));
+
+        let sb_tip = app.action_hover_text(ShortcutAction::ToggleSidebar, "Panel", "Sidebar");
+        assert!(sb_tip.contains("(Ctrl + B)") && !sb_tip.contains("(F6)"));
+
+        let find_tip = app.action_hover_text(ShortcutAction::Search, "Cari", "Find");
+        assert!(find_tip.contains("(Ctrl + K)") && !find_tip.contains("(Ctrl + F)"));
+
+        let zw_tip = app.action_hover_text(ShortcutAction::ToggleZoomWindow, "Zoom", "Zoom");
+        assert!(zw_tip.contains("(Alt + W)") && !zw_tip.contains("(Alt + Z)"));
+
+        let rz_tip = app.action_hover_text(ShortcutAction::ResetZoom, "Reset", "Reset");
+        assert!(rz_tip.contains("(Ctrl + 1)") && !rz_tip.contains("(Ctrl + 0)"));
     }
 }
