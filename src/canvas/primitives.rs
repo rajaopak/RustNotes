@@ -1,4 +1,4 @@
-use crate::model::{DrawObject, PageTemplate, ShapeKind};
+use crate::model::{DrawObject, PageTemplate, ShapeKind, StrokePoint};
 use eframe::egui::{self, Color32, Mesh, Painter, Pos2, Rect, Stroke, Vec2};
 
 /// Transformasikan `Mesh` goresan yang di-cache dalam koordinat lokal halaman (`0..width`, `0..height`)
@@ -197,7 +197,20 @@ pub fn draw_shape_primitive(
                     .rotate_around(rot_center, rotation)
                     .to_pos2();
             }
-            painter.line_segment([page_to_screen(p1), page_to_screen(p2)], stroke);
+            if stroke.width >= 3.0 {
+                let pts = [
+                    StrokePoint::new(p1.x, p1.y, 1.0),
+                    StrokePoint::new(p2.x, p2.y, 1.0),
+                ];
+                painter.add(crate::geometry::tessellate_stroke(
+                    &pts,
+                    stroke.width,
+                    stroke.color,
+                    &page_to_screen,
+                ));
+            } else {
+                painter.line_segment([page_to_screen(p1), page_to_screen(p2)], stroke);
+            }
         }
         ShapeKind::Rectangle => {
             if corner_radius > 0.0 || rotation.abs() > 1e-5 {
@@ -208,7 +221,7 @@ pub fn draw_shape_primitive(
                     height,
                     corner_radius,
                     rotation,
-                    8,
+                    12,
                 );
                 let screen_verts: Vec<Pos2> = verts
                     .into_iter()
@@ -221,9 +234,8 @@ pub fn draw_shape_primitive(
                         Stroke::NONE,
                     ));
                 }
-                for i in 0..screen_verts.len() {
-                    let next = (i + 1) % screen_verts.len();
-                    painter.line_segment([screen_verts[i], screen_verts[next]], stroke);
+                if screen_verts.len() >= 2 {
+                    painter.add(egui::Shape::closed_line(screen_verts, stroke));
                 }
             } else {
                 let p1 = page_to_screen(Pos2::new(x, y));
@@ -236,7 +248,7 @@ pub fn draw_shape_primitive(
             if rotation.abs() > 1e-5 {
                 let rx = abs_w * 0.5;
                 let ry = abs_h * 0.5;
-                let steps = 36;
+                let steps = 64;
                 let rot_center = crate::model::Point2D::from(center);
                 let mut screen_verts = Vec::with_capacity(steps);
                 for i in 0..steps {
@@ -255,10 +267,7 @@ pub fn draw_shape_primitive(
                         Stroke::NONE,
                     ));
                 }
-                for i in 0..screen_verts.len() {
-                    let next = (i + 1) % screen_verts.len();
-                    painter.line_segment([screen_verts[i], screen_verts[next]], stroke);
-                }
+                painter.add(egui::Shape::closed_line(screen_verts, stroke));
             } else {
                 let p1 = page_to_screen(Pos2::new(x, y));
                 let p2 = page_to_screen(Pos2::new(x + width, y + height));
@@ -294,16 +303,22 @@ pub fn draw_shape_primitive(
                     Stroke::NONE,
                 ));
             }
-            for i in 0..screen_verts.len() {
-                let next = (i + 1) % screen_verts.len();
-                painter.line_segment([screen_verts[i], screen_verts[next]], stroke);
-            }
+            painter.add(egui::Shape::closed_line(screen_verts, stroke));
         }
         ShapeKind::Curve => {
             let poly =
                 crate::geometry::curve_shape_polyline(x, y, width, height, rotation, curve_points);
-            for w in poly.windows(2) {
-                painter.line_segment([page_to_screen(w[0]), page_to_screen(w[1])], stroke);
+            if poly.len() >= 2 && stroke.width > 0.0 {
+                let stroke_pts: Vec<StrokePoint> = poly
+                    .iter()
+                    .map(|p| StrokePoint::new(p.x, p.y, 1.0))
+                    .collect();
+                painter.add(crate::geometry::tessellate_stroke(
+                    &stroke_pts,
+                    stroke.width,
+                    stroke.color,
+                    &page_to_screen,
+                ));
             }
         }
         ShapeKind::Triangle
@@ -331,9 +346,8 @@ pub fn draw_shape_primitive(
                     Stroke::NONE,
                 ));
             }
-            for i in 0..verts.len() {
-                let next = (i + 1) % verts.len();
-                painter.line_segment([verts[i], verts[next]], stroke);
+            if verts.len() >= 2 {
+                painter.add(egui::Shape::closed_line(verts, stroke));
             }
         }
     }

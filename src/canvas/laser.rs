@@ -40,35 +40,55 @@ pub fn smooth_laser_points(pts: &[Pos2]) -> Vec<Pos2> {
     if pts.len() <= 2 {
         return pts.to_vec();
     }
-    let mut smoothed = Vec::with_capacity(pts.len() * 4);
-    smoothed.push(pts[0]);
-    for i in 0..(pts.len() - 1) {
+    let mut relaxed = pts.to_vec();
+    if relaxed.len() >= 5 {
+        for _pass in 0..2 {
+            let snap = relaxed.clone();
+            for i in 1..(relaxed.len() - 1) {
+                let len_in = (snap[i] - snap[i - 1]).length();
+                let len_out = (snap[i + 1] - snap[i]).length();
+                if len_in.min(len_out) < 4.0 && len_in.max(len_out) < 10.0 {
+                    relaxed[i] = Pos2::new(
+                        0.25 * snap[i - 1].x + 0.50 * snap[i].x + 0.25 * snap[i + 1].x,
+                        0.25 * snap[i - 1].y + 0.50 * snap[i].y + 0.25 * snap[i + 1].y,
+                    );
+                }
+            }
+        }
+    }
+
+    let mut smoothed = Vec::with_capacity(relaxed.len() * 6);
+    smoothed.push(relaxed[0]);
+    for i in 0..(relaxed.len() - 1) {
         let p0 = if i == 0 {
-            pts[0]
+            relaxed[0]
         } else {
             Pos2::new(
-                (pts[i - 1].x + pts[i].x) / 2.0,
-                (pts[i - 1].y + pts[i].y) / 2.0,
+                (relaxed[i - 1].x + relaxed[i].x) / 2.0,
+                (relaxed[i - 1].y + relaxed[i].y) / 2.0,
             )
         };
-        let p1 = pts[i];
-        let p2 = if i + 2 >= pts.len() {
-            pts[pts.len() - 1]
+        let p1 = relaxed[i];
+        let p2 = if i + 2 >= relaxed.len() {
+            relaxed[relaxed.len() - 1]
         } else {
             Pos2::new(
-                (pts[i].x + pts[i + 1].x) / 2.0,
-                (pts[i].y + pts[i + 1].y) / 2.0,
+                (relaxed[i].x + relaxed[i + 1].x) / 2.0,
+                (relaxed[i].y + relaxed[i + 1].y) / 2.0,
             )
         };
-        for step in 1..=4 {
-            let t = step as f32 / 4.0;
+        let chord_mid = Pos2::new((p0.x + p2.x) * 0.5, (p0.y + p2.y) * 0.5);
+        let sagitta = (p1 - chord_mid).length();
+        let steps = (4 + (sagitta * 0.8).round() as usize).clamp(4, 10);
+        for step in 1..=steps {
+            let t = step as f32 / steps as f32;
             let one_minus_t = 1.0 - t;
             let x = one_minus_t * one_minus_t * p0.x + 2.0 * one_minus_t * t * p1.x + t * t * p2.x;
             let y = one_minus_t * one_minus_t * p0.y + 2.0 * one_minus_t * t * p1.y + t * t * p2.y;
             smoothed.push(Pos2::new(x, y));
         }
     }
-    if let Some(&last) = pts.last()
+    if let Some(&last) = relaxed.last()
         && let Some(res_last) = smoothed.last_mut()
     {
         *res_last = last;
@@ -81,8 +101,7 @@ pub fn tessellate_laser_layer(points: &[Pos2], width: f32, color: Color32) -> Me
     tessellate_laser_layer_colored(points, width, |_| color)
 }
 
-/// Menghasilkan mesh pita segitiga (triangle strip) kontinu untuk layer laser dengan warna per panjang busur.
-/// Mengeliminasi artifak segmen/kotak berulang (ladder rung) yang muncul jika memakai PathShape polyline.
+/// Menghasilkan mesh pita segitiga (triangle strip) kontinu bebas pinch/spike untuk layer laser dengan warna per panjang busur.
 pub fn tessellate_laser_layer_colored<F>(points: &[Pos2], width: f32, color_at: F) -> Mesh
 where
     F: Fn(f32) -> Color32,
@@ -117,73 +136,193 @@ where
 
     if filtered.len() < 2 {
         if let Some(&p) = filtered.first() {
-            add_round_cap(&mut mesh, p, r, color_at(0.0), 12);
+            add_round_cap(&mut mesh, p, r, color_at(0.0), 18);
         }
         return mesh;
     }
 
     let pts = &filtered;
+    let m = pts.len();
 
-    let mut arc_lengths: Vec<f32> = Vec::with_capacity(pts.len());
+    let mut arc_lengths: Vec<f32> = Vec::with_capacity(m);
     arc_lengths.push(0.0);
-    for i in 1..pts.len() {
+    for i in 1..m {
         let prev = arc_lengths[i - 1];
         arc_lengths.push(prev + (pts[i] - pts[i - 1]).length());
     }
 
-    // Hitung vektor normal rata-rata per titik
-    let mut normals: Vec<Vec2> = Vec::with_capacity(pts.len());
-    for i in 0..pts.len() {
-        let dir = if i == 0 {
-            pts[1] - pts[0]
-        } else if i == pts.len() - 1 {
-            pts[i] - pts[i - 1]
+    let mut seg_dirs: Vec<Vec2> = Vec::with_capacity(m - 1);
+    let mut seg_norms: Vec<Vec2> = Vec::with_capacity(m - 1);
+    for i in 0..(m - 1) {
+        let d = pts[i + 1] - pts[i];
+        let len = d.length();
+        let dir = if len > 1e-4 {
+            d / len
         } else {
-            (pts[i + 1] - pts[i - 1]) / 2.0
+            Vec2::new(1.0, 0.0)
         };
-        let len = dir.length();
-        let normal = if len > 1e-4 {
-            Vec2::new(-dir.y, dir.x) / len
-        } else {
-            Vec2::new(0.0, 1.0)
-        };
-        normals.push(normal);
+        seg_dirs.push(dir);
+        seg_norms.push(Vec2::new(-dir.y, dir.x));
     }
 
     // Round cap di awal garis (menghadap ke arah belakang garis)
-    let start_dir = (pts[0] - pts[1]).normalized();
-    add_semicircle_cap(&mut mesh, pts[0], r, start_dir, color_at(0.0), 8);
+    add_semicircle_cap(&mut mesh, pts[0], r, -seg_dirs[0], color_at(0.0), 14);
 
-    // Badan pita (ribbon): simpul kiri dan kanan menyambung halus tanpa tumpang tindih
-    let base_idx = mesh.vertices.len() as u32;
-    for i in 0..pts.len() {
+    let c0 = color_at(arc_lengths[0]);
+    let mut prev_left = pts[0] + seg_norms[0] * r;
+    let mut prev_right = pts[0] - seg_norms[0] * r;
+    let mut curr_l_idx = mesh.vertices.len() as u32;
+    mesh.colored_vertex(prev_left, c0);
+    let mut curr_r_idx = mesh.vertices.len() as u32;
+    mesh.colored_vertex(prev_right, c0);
+
+    // Bangun pita bebas pinch & spike dengan bisector aman serta Round Join melingkar
+    for i in 1..(m - 1) {
         let p = pts[i];
-        let n = normals[i];
-        let left = p + n * r;
-        let right = p - n * r;
         let col = color_at(arc_lengths[i]);
+        let t_in = seg_dirs[i - 1];
+        let n_in = seg_norms[i - 1];
+        let t_out = seg_dirs[i];
+        let n_out = seg_norms[i];
 
-        mesh.colored_vertex(left, col);
-        mesh.colored_vertex(right, col);
+        let cos_turn = t_in.dot(t_out).clamp(-1.0, 1.0);
+        let cross = t_in.x * t_out.y - t_in.y * t_out.x;
+
+        if cos_turn >= 0.94 {
+            let sum_n = n_in + n_out;
+            let bisect = if sum_n.length_sq() > 1e-5 {
+                sum_n.normalized()
+            } else {
+                n_out
+            };
+            let miter_scale = (1.0 / bisect.dot(n_in).abs().max(0.94)).clamp(1.0, 1.04);
+            let eff_r = r * miter_scale;
+            let left = p + bisect * eff_r;
+            let right = p - bisect * eff_r;
+            let l_proj = (left - prev_left).dot(t_in);
+            let r_proj = (right - prev_right).dot(t_in);
+            if l_proj >= 0.0 && r_proj >= 0.0 {
+                let next_l_idx = mesh.vertices.len() as u32;
+                mesh.colored_vertex(left, col);
+                let next_r_idx = mesh.vertices.len() as u32;
+                mesh.colored_vertex(right, col);
+
+                mesh.add_triangle(curr_l_idx, curr_r_idx, next_l_idx);
+                mesh.add_triangle(curr_r_idx, next_r_idx, next_l_idx);
+
+                curr_l_idx = next_l_idx;
+                curr_r_idx = next_r_idx;
+                prev_left = left;
+                prev_right = right;
+                continue;
+            }
+        }
+
+        let in_left = p + n_in * r;
+        let in_right = p - n_in * r;
+        let in_l_idx = mesh.vertices.len() as u32;
+        mesh.colored_vertex(in_left, col);
+        let in_r_idx = mesh.vertices.len() as u32;
+        mesh.colored_vertex(in_right, col);
+
+        mesh.add_triangle(curr_l_idx, curr_r_idx, in_l_idx);
+        mesh.add_triangle(curr_r_idx, in_r_idx, in_l_idx);
+
+        let out_left = p + n_out * r;
+        let out_right = p - n_out * r;
+        let out_l_idx = mesh.vertices.len() as u32;
+        mesh.colored_vertex(out_left, col);
+        let out_r_idx = mesh.vertices.len() as u32;
+        mesh.colored_vertex(out_right, col);
+
+        let center_idx = mesh.vertices.len() as u32;
+        mesh.colored_vertex(p, col);
+
+        // Tutup sisi cekung tanpa tumpang tindih alpha pada lapisan neon semi-transparan
+        if cross >= 0.0 {
+            mesh.add_triangle(center_idx, in_l_idx, out_l_idx);
+        } else {
+            mesh.add_triangle(center_idx, in_r_idx, out_r_idx);
+        }
+
+        let (start_norm, end_norm) = if cross >= 0.0 {
+            (-n_in, -n_out)
+        } else {
+            (n_in, n_out)
+        };
+        add_round_join_fan_colored(
+            &mut mesh, center_idx, p, r, start_norm, end_norm, cross, col,
+        );
+
+        curr_l_idx = out_l_idx;
+        curr_r_idx = out_r_idx;
+        prev_left = out_left;
+        prev_right = out_right;
     }
 
-    for i in 0..(pts.len() - 1) as u32 {
-        let l1 = base_idx + i * 2;
-        let r1 = l1 + 1;
-        let l2 = l1 + 2;
-        let r2 = l1 + 3;
+    // Titik akhir pita
+    let last_idx = m - 1;
+    let end_arc = *arc_lengths.last().unwrap_or(&0.0);
+    let c_end = color_at(end_arc);
+    let t_last = seg_dirs[last_idx - 1];
+    let n_last = seg_norms[last_idx - 1];
 
-        mesh.add_triangle(l1, r1, l2);
-        mesh.add_triangle(r1, r2, l2);
-    }
+    let end_l_idx = mesh.vertices.len() as u32;
+    mesh.colored_vertex(pts[last_idx] + n_last * r, c_end);
+    let end_r_idx = mesh.vertices.len() as u32;
+    mesh.colored_vertex(pts[last_idx] - n_last * r, c_end);
+
+    mesh.add_triangle(curr_l_idx, curr_r_idx, end_l_idx);
+    mesh.add_triangle(curr_r_idx, end_r_idx, end_l_idx);
 
     // Round cap di akhir garis (menghadap ke arah depan garis)
-    let last_idx = pts.len() - 1;
-    let end_dir = (pts[last_idx] - pts[last_idx - 1]).normalized();
-    let end_arc = *arc_lengths.last().unwrap_or(&0.0);
-    add_semicircle_cap(&mut mesh, pts[last_idx], r, end_dir, color_at(end_arc), 8);
+    add_semicircle_cap(&mut mesh, pts[last_idx], r, t_last, c_end, 14);
 
     mesh
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_round_join_fan_colored(
+    mesh: &mut Mesh,
+    center_idx: u32,
+    center: Pos2,
+    radius: f32,
+    start_norm: Vec2,
+    end_norm: Vec2,
+    cross: f32,
+    color: Color32,
+) {
+    if radius <= 1e-4 {
+        return;
+    }
+    let a0 = start_norm.y.atan2(start_norm.x);
+    let a1 = end_norm.y.atan2(end_norm.x);
+    let mut delta = a1 - a0;
+    while delta <= -std::f32::consts::PI {
+        delta += std::f32::consts::TAU;
+    }
+    while delta > std::f32::consts::PI {
+        delta -= std::f32::consts::TAU;
+    }
+    if delta.abs() > std::f32::consts::PI - 0.05 {
+        delta = if cross >= 0.0 {
+            std::f32::consts::PI
+        } else {
+            -std::f32::consts::PI
+        };
+    }
+
+    let steps = ((delta.abs() / 0.22).ceil() as usize).clamp(2, 14);
+    let start_idx = mesh.vertices.len() as u32;
+    for s in 0..=steps {
+        let t = s as f32 / steps as f32;
+        let angle = a0 + delta * t;
+        let pos = center + Vec2::new(angle.cos(), angle.sin()) * radius;
+        mesh.colored_vertex(pos, color);
+    }
+    for s in 0..steps as u32 {
+        mesh.add_triangle(center_idx, start_idx + s, start_idx + s + 1);
+    }
 }
 
 fn add_semicircle_cap(
