@@ -4529,3 +4529,252 @@ fn test_highlighter_active_preview_commit_undo_redo_zoom_and_zoom_window() {
     step_test_canvas(&ctx, &mut page, &mut state, vec![]);
     assert_eq!(state.highlighter_cache.len(), 1);
 }
+
+#[test]
+fn test_hold_to_snap_wavy_stroke_converts_to_line_with_undo_and_respects_smart_guides() {
+    let ctx = eframe::egui::Context::default();
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "hold-wavy-smart-guides-test".to_string();
+
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Pen,
+        auto_shape_enabled: true,
+        smart_guides: false,
+        zoom: 1.0,
+        ..Default::default()
+    };
+
+    let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    let to_screen = |x: f32, y: f32| origin + Vec2::new(x, y);
+
+    // 1. Gambar goresan acak bergelombang dari (40, 120) ke (240, 120)
+    let mut pts = Vec::new();
+    for i in 0..=20 {
+        let t = i as f32 / 20.0;
+        let x = 40.0 + t * 200.0;
+        let y = 120.0 - (t * std::f32::consts::TAU * 2.5).sin() * 35.0;
+        pts.push(to_screen(x, y));
+    }
+
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(pts[0]),
+            eframe::egui::Event::PointerButton {
+                pos: pts[0],
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+    for &pt in &pts[1..] {
+        step_test_canvas(
+            &ctx,
+            &mut page,
+            &mut state,
+            vec![eframe::egui::Event::PointerMoved(pt)],
+        );
+    }
+
+    // Simulasikan hold >500ms di ujung akhir -> konversi ke garis lurus antara titik awal dan akhir
+    state.last_stroke_move_time =
+        Some(std::time::Instant::now() - std::time::Duration::from_millis(650));
+    step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+
+    let rec = state
+        .recognized_draft_shape
+        .as_ref()
+        .expect("Wavy open stroke held at end must convert to straight Line");
+    assert_eq!(rec.kind, ShapeKind::Line);
+    assert!((rec.x - 40.0).abs() < 1e-2);
+    assert!((rec.y - 120.0).abs() < 1e-2);
+    assert!((rec.width - 200.0).abs() < 1e-2);
+    assert!(rec.height.abs() < 1e-1);
+
+    // 2. Saat smart_guides == false, geser ujung garis ke (140, 125) (~2.86 deg) -> TIDAK boleh snap ke 0 deg
+    let drag_target = to_screen(140.0, 125.0);
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(drag_target)],
+    );
+    let rec_free = state.recognized_draft_shape.as_ref().unwrap();
+    assert!(
+        (rec_free.width - 100.0).abs() < 1e-2 && (rec_free.height - 5.0).abs() < 1e-2,
+        "With smart_guides=false, line endpoint must follow cursor freely without 15-deg magnetic snap, got ({}, {})",
+        rec_free.width,
+        rec_free.height
+    );
+
+    // 3. Menahan Shift tetap mengunci sudut ke kelipatan 15 deg meskipun smart_guides == false
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(to_screen(142.0, 125.0))],
+    );
+    let _ = ctx.run(
+        eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                Pos2::ZERO,
+                Vec2::new(1000.0, 1000.0),
+            )),
+            events: vec![eframe::egui::Event::PointerMoved(drag_target)],
+            modifiers: eframe::egui::Modifiers::SHIFT,
+            ..Default::default()
+        },
+        |ctx| {
+            eframe::egui::CentralPanel::default()
+                .frame(eframe::egui::Frame::NONE)
+                .show(ctx, |ui| {
+                    let _ = render_page_canvas(ui, &mut page, &mut state);
+                });
+        },
+    );
+    let rec_shift = state.recognized_draft_shape.as_ref().unwrap();
+    assert!(
+        rec_shift.height.abs() < 1e-3,
+        "Shift-drag must still snap angle to 0 deg, got height={}",
+        rec_shift.height
+    );
+
+    // 4. Saat smart_guides == true (tanpa Shift), sudut ~2.86 deg kembali snap magnetik ke 0 deg
+    state.smart_guides = true;
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(drag_target)],
+    );
+    let rec_guided = state.recognized_draft_shape.as_ref().unwrap();
+    assert!(
+        rec_guided.height.abs() < 1e-3,
+        "With smart_guides=true, near-horizontal line must snap to 0 deg, got height={}",
+        rec_guided.height
+    );
+
+    // 5. Matikan kembali smart_guides, geser bebas ke (140, 125) dan lepaskan untuk commit
+    state.smart_guides = false;
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(drag_target)],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: drag_target,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    assert_eq!(page.objects.len(), 1);
+    let line_id = match &page.objects[0] {
+        DrawObject::Shape {
+            id,
+            shape_type,
+            x,
+            y,
+            width,
+            height,
+            ..
+        } => {
+            assert_eq!(*shape_type, ShapeKind::Line);
+            assert!((*x - 40.0).abs() < 1e-2);
+            assert!((*y - 120.0).abs() < 1e-2);
+            assert!((*width - 100.0).abs() < 1e-2);
+            assert!((*height - 5.0).abs() < 1e-2);
+            id.clone()
+        }
+        other => panic!("Expected committed Line shape, got {other:?}"),
+    };
+
+    // Undo #1 -> kembali ke goresan bergelombang asli; Undo #2 -> halaman kosong
+    state.undo(&mut page);
+    assert_eq!(page.objects.len(), 1);
+    assert!(matches!(page.objects[0], DrawObject::Stroke { .. }));
+    state.undo(&mut page);
+    assert!(page.objects.is_empty());
+
+    // Redo x2 -> kembali ke garis lurus yang telah di-commit
+    state.redo(&mut page);
+    state.redo(&mut page);
+    assert_eq!(page.objects.len(), 1);
+
+    // 6. Geser garis yang sudah di-commit di dekat objek lain saat smart_guides == false -> bebas tanpa snapping
+    page.objects.push(DrawObject::Shape {
+        id: "ref-rect".to_string(),
+        shape_type: ShapeKind::Rectangle,
+        x: 100.0,
+        y: 220.0,
+        width: 120.0,
+        height: 60.0,
+        color: ColorData {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+        stroke_width: 2.0,
+        fill: None,
+        rotation: 0.0,
+        corner_radius: 0.0,
+        label: None,
+        locked: false,
+        curve_points: Vec::new(),
+    });
+    state.current_tool = ActiveTool::Lasso;
+    state.selected_ids = vec![line_id];
+    let grab = to_screen(90.0, 122.5);
+    let drop_near_align = to_screen(147.0, 122.5); // geser +57 -> x menjadi 97.0 (dalam radius 8px dari x=100)
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(grab),
+            eframe::egui::Event::PointerButton {
+                pos: grab,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerMoved(drop_near_align)],
+    );
+    assert!(
+        state.active_alignment_guides.is_empty(),
+        "Alignment guides must stay empty when smart_guides=false"
+    );
+    if let DrawObject::Shape { x, .. } = &page.objects[0] {
+        assert!(
+            (*x - 97.0).abs() < 1e-2,
+            "Line must not snap to x=100.0 when smart_guides=false, got x={x}"
+        );
+    }
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![eframe::egui::Event::PointerButton {
+            pos: drop_near_align,
+            button: eframe::egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+}

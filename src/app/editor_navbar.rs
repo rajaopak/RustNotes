@@ -1196,13 +1196,19 @@ impl RustNotesApp {
                     // Fase G11: Snapping Options (Smart Guides & Snap to Grid)
                     ui.separator();
                     ui.horizontal(|ui| {
-                        ui.checkbox(
-                            &mut self.canvas_state.smart_guides,
-                            lang.tr(
-                                "🧲 Garis Pemandu Magnetik (Smart Guides)",
-                                "🧲 Smart Alignment Guides",
-                            ),
-                        );
+                        if ui
+                            .checkbox(
+                                &mut self.canvas_state.smart_guides,
+                                lang.tr(
+                                    "🧲 Garis Pemandu Magnetik (Smart Guides)",
+                                    "🧲 Smart Alignment Guides",
+                                ),
+                            )
+                            .changed()
+                            && !self.canvas_state.smart_guides
+                        {
+                            self.canvas_state.active_alignment_guides.clear();
+                        }
                     });
                     ui.horizontal(|ui| {
                         ui.checkbox(

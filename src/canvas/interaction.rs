@@ -11,8 +11,9 @@ use crate::geometry::{
     hit_test_connector_details, hit_test_connector_midpoint, hit_test_object,
     hit_test_transform_handles, insert_control_point_at, next_shape_rect, object_bounds,
     point_in_polygon, prune_all_invalid_connector_control_points, prune_collinear_control_points,
-    recognize_handwriting_from_strokes, recognize_shape, resolve_connector_endpoints, scale_object,
-    shape_connection_point, snap_point_to_grid, snap_value_to_grid, translate_object,
+    recognize_handwriting_from_strokes, recognize_shape_for_hold_to_snap,
+    resolve_connector_endpoints, scale_object, shape_connection_point, snap_point_to_grid,
+    snap_value_to_grid, translate_object,
 };
 use crate::model::{
     ColorData, ConnectionSite, ConnectorEnd, ConnectorRoute, ConnectorStyle, DrawObject,
@@ -1104,14 +1105,17 @@ fn handle_drag_moved(
                         let shift_held = ui.input(|i| i.modifiers.shift);
                         match recognized.kind {
                             ShapeKind::Line => {
-                                // Ujung bebas mengikuti kursor dengan 15-degree angle snapping
+                                // Ujung bebas mengikuti kursor; angle snapping 15° otomatis hanya aktif
+                                // saat Smart Alignment Guides menyala (atau saat pengguna menahan Shift).
                                 let mut dx = page_p.x - recognized.x;
                                 let mut dy = page_p.y - recognized.y;
                                 let angle = dy.atan2(dx);
                                 let snap_interval = 15.0_f32.to_radians();
                                 let snapped_angle = (angle / snap_interval).round() * snap_interval;
                                 let angle_diff = (angle - snapped_angle).abs();
-                                if shift_held || angle_diff < 5.0_f32.to_radians() {
+                                if shift_held
+                                    || (state.smart_guides && angle_diff < 5.0_f32.to_radians())
+                                {
                                     let len = (dx * dx + dy * dy).sqrt();
                                     dx = len * snapped_angle.cos();
                                     dy = len * snapped_angle.sin();
@@ -2113,7 +2117,7 @@ fn update_hold_to_snap(ui: &Ui, page: &Page, state: &mut CanvasState, now: Insta
     {
         let elapsed = now.saturating_duration_since(last_move);
         if elapsed >= std::time::Duration::from_millis(500) {
-            if let Some(recognized) = recognize_shape(pts) {
+            if let Some(recognized) = recognize_shape_for_hold_to_snap(pts) {
                 state.recognized_draft_shape = Some(recognized.clone());
                 state.snap_initial_shape = Some(recognized);
                 state.snap_flash_time = Some(Instant::now());

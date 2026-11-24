@@ -438,6 +438,9 @@ impl RustNotesApp {
             }) {
                 self.canvas_state.smart_guides = !self.canvas_state.smart_guides;
                 let active = self.canvas_state.smart_guides;
+                if !active {
+                    self.canvas_state.active_alignment_guides.clear();
+                }
                 self.toast_message = Some(if active {
                     "🧲 Smart Alignment Guides: AKTIF".to_string()
                 } else {
