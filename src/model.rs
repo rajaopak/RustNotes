@@ -1,5 +1,6 @@
-use eframe::egui::{Color32, Pos2};
+use eframe::egui::{self, Color32, Pos2};
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,6 +187,11 @@ impl From<Point2D> for Pos2 {
     }
 }
 
+pub const FONT_FAMILY_SERIF: &str = "Serif";
+pub const FONT_FAMILY_SANS_BOLD: &str = "SansSerifBold";
+pub const FONT_FAMILY_SERIF_BOLD: &str = "SerifBold";
+pub const FONT_FAMILY_MONO_BOLD: &str = "MonospaceBold";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum FontFamilyPreset {
     #[default]
@@ -211,9 +217,42 @@ impl FontFamilyPreset {
 
     pub fn to_egui_font_family(&self) -> egui::FontFamily {
         match self {
-            Self::SansSerif | Self::Serif => egui::FontFamily::Proportional,
+            Self::SansSerif => egui::FontFamily::Proportional,
+            Self::Serif => egui::FontFamily::Name(FONT_FAMILY_SERIF.into()),
             Self::Monospace => egui::FontFamily::Monospace,
         }
+    }
+
+    /// Mengembalikan `(FontFamily, needs_faux_bold)` dengan fallback aman apabila font kustom
+    /// belum terdaftar pada konteks egui (misalnya di lingkungan pengujian headless).
+    pub fn resolve_egui_font_family(
+        &self,
+        bold: bool,
+        has_family: impl Fn(&egui::FontFamily) -> bool,
+    ) -> (egui::FontFamily, bool) {
+        if bold {
+            let bold_fam = match self {
+                Self::SansSerif => egui::FontFamily::Name(FONT_FAMILY_SANS_BOLD.into()),
+                Self::Serif => egui::FontFamily::Name(FONT_FAMILY_SERIF_BOLD.into()),
+                Self::Monospace => egui::FontFamily::Name(FONT_FAMILY_MONO_BOLD.into()),
+            };
+            if has_family(&bold_fam) {
+                return (bold_fam, false);
+            }
+        }
+        let regular_fam = match self {
+            Self::SansSerif => egui::FontFamily::Proportional,
+            Self::Serif => {
+                let serif_fam = egui::FontFamily::Name(FONT_FAMILY_SERIF.into());
+                if has_family(&serif_fam) {
+                    serif_fam
+                } else {
+                    egui::FontFamily::Proportional
+                }
+            }
+            Self::Monospace => egui::FontFamily::Monospace,
+        };
+        (regular_fam, bold)
     }
 
     pub fn to_svg_font_family(&self) -> &'static str {
@@ -223,6 +262,112 @@ impl FontFamilyPreset {
             Self::Monospace => "monospace, 'Courier New', Courier",
         }
     }
+}
+
+/// Membangun dan men-cache definisi font aplikasi (Sans-Serif, Serif, Bold, dan Emoji Windows native).
+pub fn build_app_font_definitions() -> egui::FontDefinitions {
+    static CACHED_FONTS: OnceLock<egui::FontDefinitions> = OnceLock::new();
+    CACHED_FONTS
+        .get_or_init(|| {
+            let mut fonts = egui::FontDefinitions::default();
+            let base_prop = fonts
+                .families
+                .get(&egui::FontFamily::Proportional)
+                .cloned()
+                .unwrap_or_default();
+            let base_mono = fonts
+                .families
+                .get(&egui::FontFamily::Monospace)
+                .cloned()
+                .unwrap_or_default();
+
+            let mut emoji_key: Option<String> = None;
+            let emoji_path = std::path::Path::new("C:\\Windows\\Fonts\\seguiemj.ttf");
+            if emoji_path.exists()
+                && let Ok(font_bytes) = std::fs::read(emoji_path)
+            {
+                fonts.font_data.insert(
+                    "seguiemj".to_owned(),
+                    std::sync::Arc::new(egui::FontData::from_owned(font_bytes)),
+                );
+                emoji_key = Some("seguiemj".to_owned());
+                if let Some(prop) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                    prop.push("seguiemj".to_owned());
+                }
+                if let Some(mono) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+                    mono.push("seguiemj".to_owned());
+                }
+            }
+
+            let mut register_font =
+                |data_key: &str, candidates: &[&str], family_name: &str, fallback: &[String]| {
+                    for path_str in candidates {
+                        let path = std::path::Path::new(path_str);
+                        if path.exists()
+                            && let Ok(bytes) = std::fs::read(path)
+                        {
+                            fonts.font_data.insert(
+                                data_key.to_owned(),
+                                std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+                            );
+                            let mut list = vec![data_key.to_owned()];
+                            list.extend(fallback.iter().cloned());
+                            if let Some(ek) = &emoji_key {
+                                list.push(ek.clone());
+                            }
+                            fonts
+                                .families
+                                .insert(egui::FontFamily::Name(family_name.into()), list);
+                            return true;
+                        }
+                    }
+                    false
+                };
+
+            let has_serif = register_font(
+                "rustnotes_serif",
+                &[
+                    "C:\\Windows\\Fonts\\georgia.ttf",
+                    "C:\\Windows\\Fonts\\times.ttf",
+                ],
+                FONT_FAMILY_SERIF,
+                &base_prop,
+            );
+            register_font(
+                "rustnotes_sans_bold",
+                &[
+                    "C:\\Windows\\Fonts\\segoeuib.ttf",
+                    "C:\\Windows\\Fonts\\arialbd.ttf",
+                ],
+                FONT_FAMILY_SANS_BOLD,
+                &base_prop,
+            );
+            let serif_fallback = if has_serif {
+                let mut f = vec!["rustnotes_serif".to_owned()];
+                f.extend(base_prop.iter().cloned());
+                f
+            } else {
+                base_prop
+            };
+            register_font(
+                "rustnotes_serif_bold",
+                &[
+                    "C:\\Windows\\Fonts\\georgiab.ttf",
+                    "C:\\Windows\\Fonts\\timesbd.ttf",
+                ],
+                FONT_FAMILY_SERIF_BOLD,
+                &serif_fallback,
+            );
+            register_font(
+                "rustnotes_mono_bold",
+                &["C:\\Windows\\Fonts\\consolab.ttf"],
+                FONT_FAMILY_MONO_BOLD,
+                &base_mono,
+            );
+
+            fonts
+        })
+        .clone()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]

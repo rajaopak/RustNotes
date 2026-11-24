@@ -66,21 +66,5 @@ fn main() -> eframe::Result<()> {
 }
 
 fn setup_custom_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-    let emoji_path = std::path::Path::new("C:\\Windows\\Fonts\\seguiemj.ttf");
-    if emoji_path.exists()
-        && let Ok(font_bytes) = std::fs::read(emoji_path)
-    {
-        fonts.font_data.insert(
-            "seguiemj".to_owned(),
-            std::sync::Arc::new(egui::FontData::from_owned(font_bytes)),
-        );
-        if let Some(prop) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-            prop.push("seguiemj".to_owned());
-        }
-        if let Some(mono) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-            mono.push("seguiemj".to_owned());
-        }
-    }
-    ctx.set_fonts(fonts);
+    ctx.set_fonts(rustnotes::model::build_app_font_definitions());
 }
