@@ -1,5 +1,40 @@
 use super::state::CanvasState;
+use crate::model::LaserColorMode;
 use eframe::egui::{Color32, Mesh, Painter, Pos2, Vec2};
+
+const RAINBOW_WAVELENGTH_PX: f32 = 240.0;
+const RAINBOW_SPEED_DEG_PER_SEC: f32 = 160.0;
+
+/// Mengonversi HSV (`hue_deg` dalam derajat, `sat` & `val` dalam `0.0..=1.0`) menjadi RGB `(u8, u8, u8)`.
+pub fn hsv_to_rgb(hue_deg: f32, sat: f32, val: f32) -> (u8, u8, u8) {
+    let h = hue_deg.rem_euclid(360.0);
+    let s = sat.clamp(0.0, 1.0);
+    let v = val.clamp(0.0, 1.0);
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+    let (r1, g1, b1) = match h {
+        h if h < 60.0 => (c, x, 0.0),
+        h if h < 120.0 => (x, c, 0.0),
+        h if h < 180.0 => (0.0, c, x),
+        h if h < 240.0 => (0.0, x, c),
+        h if h < 300.0 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    (
+        ((r1 + m) * 255.0).round() as u8,
+        ((g1 + m) * 255.0).round() as u8,
+        ((b1 + m) * 255.0).round() as u8,
+    )
+}
+
+/// Menghitung warna pelangi neon sepanjang panjang busur goresan dan waktu animasi.
+pub fn rainbow_laser_color(arc_length_px: f32, time_secs: f32, alpha: u8) -> Color32 {
+    let hue =
+        (arc_length_px / RAINBOW_WAVELENGTH_PX) * 360.0 - time_secs * RAINBOW_SPEED_DEG_PER_SEC;
+    let (r, g, b) = hsv_to_rgb(hue, 0.95, 1.0);
+    Color32::from_rgba_unmultiplied(r, g, b, alpha)
+}
 
 pub fn smooth_laser_points(pts: &[Pos2]) -> Vec<Pos2> {
     if pts.len() <= 2 {
@@ -41,9 +76,17 @@ pub fn smooth_laser_points(pts: &[Pos2]) -> Vec<Pos2> {
     smoothed
 }
 
-/// Menghasilkan mesh pita segitiga (triangle strip) kontinu untuk layer laser.
-/// Mengeliminasi artifak segmen/kotak berulang (ladder rung) yang muncul jika memakai PathShape polyline.
+/// Menghasilkan mesh pita segitiga (triangle strip) kontinu untuk layer laser dengan warna tetap.
 pub fn tessellate_laser_layer(points: &[Pos2], width: f32, color: Color32) -> Mesh {
+    tessellate_laser_layer_colored(points, width, |_| color)
+}
+
+/// Menghasilkan mesh pita segitiga (triangle strip) kontinu untuk layer laser dengan warna per panjang busur.
+/// Mengeliminasi artifak segmen/kotak berulang (ladder rung) yang muncul jika memakai PathShape polyline.
+pub fn tessellate_laser_layer_colored<F>(points: &[Pos2], width: f32, color_at: F) -> Mesh
+where
+    F: Fn(f32) -> Color32,
+{
     let mut mesh = Mesh::default();
     if points.is_empty() || width <= 0.0 {
         return mesh;
@@ -74,12 +117,19 @@ pub fn tessellate_laser_layer(points: &[Pos2], width: f32, color: Color32) -> Me
 
     if filtered.len() < 2 {
         if let Some(&p) = filtered.first() {
-            add_round_cap(&mut mesh, p, r, color, 12);
+            add_round_cap(&mut mesh, p, r, color_at(0.0), 12);
         }
         return mesh;
     }
 
     let pts = &filtered;
+
+    let mut arc_lengths: Vec<f32> = Vec::with_capacity(pts.len());
+    arc_lengths.push(0.0);
+    for i in 1..pts.len() {
+        let prev = arc_lengths[i - 1];
+        arc_lengths.push(prev + (pts[i] - pts[i - 1]).length());
+    }
 
     // Hitung vektor normal rata-rata per titik
     let mut normals: Vec<Vec2> = Vec::with_capacity(pts.len());
@@ -102,7 +152,7 @@ pub fn tessellate_laser_layer(points: &[Pos2], width: f32, color: Color32) -> Me
 
     // Round cap di awal garis (menghadap ke arah belakang garis)
     let start_dir = (pts[0] - pts[1]).normalized();
-    add_semicircle_cap(&mut mesh, pts[0], r, start_dir, color, 8);
+    add_semicircle_cap(&mut mesh, pts[0], r, start_dir, color_at(0.0), 8);
 
     // Badan pita (ribbon): simpul kiri dan kanan menyambung halus tanpa tumpang tindih
     let base_idx = mesh.vertices.len() as u32;
@@ -111,9 +161,10 @@ pub fn tessellate_laser_layer(points: &[Pos2], width: f32, color: Color32) -> Me
         let n = normals[i];
         let left = p + n * r;
         let right = p - n * r;
+        let col = color_at(arc_lengths[i]);
 
-        mesh.colored_vertex(left, color);
-        mesh.colored_vertex(right, color);
+        mesh.colored_vertex(left, col);
+        mesh.colored_vertex(right, col);
     }
 
     for i in 0..(pts.len() - 1) as u32 {
@@ -129,7 +180,8 @@ pub fn tessellate_laser_layer(points: &[Pos2], width: f32, color: Color32) -> Me
     // Round cap di akhir garis (menghadap ke arah depan garis)
     let last_idx = pts.len() - 1;
     let end_dir = (pts[last_idx] - pts[last_idx - 1]).normalized();
-    add_semicircle_cap(&mut mesh, pts[last_idx], r, end_dir, color, 8);
+    let end_arc = *arc_lengths.last().unwrap_or(&0.0);
+    add_semicircle_cap(&mut mesh, pts[last_idx], r, end_dir, color_at(end_arc), 8);
 
     mesh
 }
@@ -180,8 +232,13 @@ fn add_round_cap(mesh: &mut Mesh, center: Pos2, radius: f32, color: Color32, seg
     }
 }
 
-/// Render Efek Laser Pointer (4-layer Neon Glow Ribbon)
-pub fn render_laser_trail(painter: &Painter, state: &CanvasState, laser_alpha: f32) {
+/// Render Efek Laser Pointer (4-layer Neon Glow Ribbon: mode Solid atau Rainbow)
+pub fn render_laser_trail(
+    painter: &Painter,
+    state: &CanvasState,
+    laser_alpha: f32,
+    time_secs: f32,
+) {
     if laser_alpha <= 0.0
         || (state.laser_strokes.is_empty() && state.current_laser_stroke.is_empty())
     {
@@ -198,29 +255,48 @@ pub fn render_laser_trail(painter: &Painter, state: &CanvasState, laser_alpha: f
         all_strokes_to_draw.push(state.current_laser_stroke.as_slice());
     }
 
-    let outer_col = Color32::from_rgba_unmultiplied(255, 30, 45, (40.0 * laser_alpha) as u8);
-    let halo_col = Color32::from_rgba_unmultiplied(255, 15, 35, (115.0 * laser_alpha) as u8);
-    let core_col = Color32::from_rgba_unmultiplied(255, 0, 20, (235.0 * laser_alpha) as u8);
+    let outer_a = (44.0 * laser_alpha) as u8;
+    let halo_a = (120.0 * laser_alpha) as u8;
+    let core_a = (238.0 * laser_alpha) as u8;
     let beam_col = Color32::from_rgba_unmultiplied(255, 255, 255, (250.0 * laser_alpha) as u8);
+
+    let (solid_r, solid_g, solid_b) = (
+        state.laser_color.r(),
+        state.laser_color.g(),
+        state.laser_color.b(),
+    );
+    let outer_solid = Color32::from_rgba_unmultiplied(solid_r, solid_g, solid_b, outer_a);
+    let halo_solid = Color32::from_rgba_unmultiplied(solid_r, solid_g, solid_b, halo_a);
+    let core_solid = Color32::from_rgba_unmultiplied(solid_r, solid_g, solid_b, core_a);
 
     for stroke in &all_strokes_to_draw {
         let smoothed = smooth_laser_points(stroke);
         if smoothed.len() > 1 {
-            // Layer 1: Outer Red Neon Aura / Ambient Glow
-            let glow_mesh = tessellate_laser_layer(&smoothed, 20.0, outer_col);
-            painter.add(glow_mesh);
-
-            // Layer 2: Mid Neon Halo
-            let halo_mesh = tessellate_laser_layer(&smoothed, 11.0, halo_col);
-            painter.add(halo_mesh);
-
-            // Layer 3: Solid Vibrant Red Core
-            let core_mesh = tessellate_laser_layer(&smoothed, 5.0, core_col);
-            painter.add(core_mesh);
+            match state.laser_color_mode {
+                LaserColorMode::Solid => {
+                    // Layer 1: Outer Neon Aura / Ambient Glow
+                    painter.add(tessellate_laser_layer(&smoothed, 20.0, outer_solid));
+                    // Layer 2: Mid Neon Halo
+                    painter.add(tessellate_laser_layer(&smoothed, 11.0, halo_solid));
+                    // Layer 3: Solid Vibrant Core
+                    painter.add(tessellate_laser_layer(&smoothed, 5.0, core_solid));
+                }
+                LaserColorMode::Rainbow => {
+                    // Layer 1..3: Rainbow Spectrum Aura, Halo & Core
+                    painter.add(tessellate_laser_layer_colored(&smoothed, 20.0, |arc| {
+                        rainbow_laser_color(arc, time_secs, outer_a)
+                    }));
+                    painter.add(tessellate_laser_layer_colored(&smoothed, 11.0, |arc| {
+                        rainbow_laser_color(arc, time_secs, halo_a)
+                    }));
+                    painter.add(tessellate_laser_layer_colored(&smoothed, 5.0, |arc| {
+                        rainbow_laser_color(arc, time_secs, core_a)
+                    }));
+                }
+            }
 
             // Layer 4: Hotspot White Laser Beam Center
-            let beam_mesh = tessellate_laser_layer(&smoothed, 2.2, beam_col);
-            painter.add(beam_mesh);
+            painter.add(tessellate_laser_layer(&smoothed, 2.2, beam_col));
         }
     }
 
@@ -228,15 +304,27 @@ pub fn render_laser_trail(painter: &Painter, state: &CanvasState, laser_alpha: f
     if state.laser_is_drawing
         && let Some(last_p) = state.current_laser_stroke.last()
     {
+        let (hr, hg, hb) = match state.laser_color_mode {
+            LaserColorMode::Solid => (solid_r, solid_g, solid_b),
+            LaserColorMode::Rainbow => {
+                let total_arc: f32 = state
+                    .current_laser_stroke
+                    .windows(2)
+                    .map(|w| (w[1] - w[0]).length())
+                    .sum();
+                let c = rainbow_laser_color(total_arc, time_secs, 255);
+                (c.r(), c.g(), c.b())
+            }
+        };
         painter.circle_filled(
             *last_p,
             11.0,
-            Color32::from_rgba_unmultiplied(255, 40, 50, (90.0 * laser_alpha) as u8),
+            Color32::from_rgba_unmultiplied(hr, hg, hb, (90.0 * laser_alpha) as u8),
         );
         painter.circle_filled(
             *last_p,
             5.5,
-            Color32::from_rgba_unmultiplied(255, 10, 30, (230.0 * laser_alpha) as u8),
+            Color32::from_rgba_unmultiplied(hr, hg, hb, (230.0 * laser_alpha) as u8),
         );
         painter.circle_filled(
             *last_p,

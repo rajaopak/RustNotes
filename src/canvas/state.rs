@@ -56,6 +56,8 @@ pub struct CanvasState {
     pub laser_last_active: Instant,
     pub laser_is_drawing: bool,
     pub laser_points: Vec<LaserTrailPoint>,
+    pub laser_color: Color32,
+    pub laser_color_mode: crate::model::LaserColorMode,
 
     // Performance optimizations: Mesh caching, Highlighter Layer caching & Spatial Index
     pub mesh_cache: HashMap<(String, u32), Mesh>,
@@ -182,6 +184,8 @@ impl Default for CanvasState {
             laser_last_active: Instant::now(),
             laser_is_drawing: false,
             laser_points: Vec::new(),
+            laser_color: crate::model::default_laser_color().to_color32(),
+            laser_color_mode: crate::model::LaserColorMode::Solid,
             mesh_cache: HashMap::new(),
             highlighter_cache: HighlighterLayerCache::new(),
             spatial_grid: SpatialGrid::new(100.0),

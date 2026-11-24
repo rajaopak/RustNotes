@@ -1306,6 +1306,23 @@ fn default_pressure_multiplier() -> f32 {
 }
 
 /// Fase 8.3, 8.4, 8.5, 8.7, 8.8: Pengaturan pengguna yang disimpan di `%APPDATA%\RustNotes\settings.json`.
+/// Mode warna untuk alat Penunjuk Laser (Solid kustom vs Rainbow spektrum animasi).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LaserColorMode {
+    #[default]
+    Solid,
+    Rainbow,
+}
+
+pub fn default_laser_color() -> ColorData {
+    ColorData {
+        r: 255,
+        g: 0,
+        b: 35,
+        a: 255,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
     #[serde(default)]
@@ -1338,6 +1355,12 @@ pub struct AppSettings {
     pub highlighter_opacity: f32,
     #[serde(default = "default_false")]
     pub highlighter_pressure_enabled: bool,
+    /// Warna utama Penunjuk Laser saat mode Solid aktif.
+    #[serde(default = "default_laser_color")]
+    pub laser_color: ColorData,
+    /// Mode warna Penunjuk Laser (Solid atau Rainbow).
+    #[serde(default)]
+    pub laser_color_mode: LaserColorMode,
 }
 
 fn default_false() -> bool {
@@ -1635,6 +1658,8 @@ impl Default for AppSettings {
             pressure_multiplier: 1.0,
             highlighter_opacity: HIGHLIGHTER_OPACITY_F32,
             highlighter_pressure_enabled: false,
+            laser_color: default_laser_color(),
+            laser_color_mode: LaserColorMode::Solid,
         }
     }
 }
@@ -2412,5 +2437,30 @@ mod tests {
             decoded.get(ShortcutAction::ToolHand),
             KeyBinding::plain("Space")
         );
+    }
+
+    #[test]
+    fn test_laser_settings_roundtrip_and_legacy_defaults() {
+        let custom = ColorData {
+            r: 0,
+            g: 212,
+            b: 255,
+            a: 255,
+        };
+        let settings = AppSettings {
+            laser_color: custom.clone(),
+            laser_color_mode: LaserColorMode::Rainbow,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&settings).expect("serialize settings");
+        let decoded: AppSettings = serde_json::from_str(&json).expect("deserialize settings");
+        assert_eq!(decoded.laser_color, custom);
+        assert_eq!(decoded.laser_color_mode, LaserColorMode::Rainbow);
+
+        // Legacy settings JSON without laser fields falls back cleanly to defaults
+        let legacy: AppSettings =
+            serde_json::from_str("{}").expect("deserialize legacy empty json");
+        assert_eq!(legacy.laser_color, default_laser_color());
+        assert_eq!(legacy.laser_color_mode, LaserColorMode::Solid);
     }
 }

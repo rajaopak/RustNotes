@@ -163,7 +163,8 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
     render_alignment_guides(&painter, &state.active_alignment_guides, page_to_screen);
 
     // 7. Render Glowing Laser Trail (Multi-stroke Neon Laser)
-    render_laser_trail(&painter, state, laser_alpha);
+    let laser_time_secs = ui.input(|i| i.time) as f32;
+    render_laser_trail(&painter, state, laser_alpha, laser_time_secs);
 
     // 8. Fase 8.3: Render Indikator Kotak Target Zoom Window pada Kanvas Utama
     render_zoom_target_indicator(&painter, state, page_to_screen);
