@@ -6428,3 +6428,318 @@ fn test_all_draw_objects_resize_audit_no_errors() {
         );
     }
 }
+
+#[test]
+fn test_text_alignment_left_center_right_stays_inside_box_never_offside_left() {
+    use super::primitives::draw_non_stroke_object;
+
+    let ctx = eframe::egui::Context::default();
+    ctx.set_fonts(crate::model::build_app_font_definitions());
+
+    for rot in [0.0_f32, 0.45_f32] {
+        let mut left_min_xs = std::collections::HashMap::new();
+        let mut row1_ranges = std::collections::HashMap::new();
+        let mut row2_ranges = std::collections::HashMap::new();
+
+        for align in [TextAlign::Left, TextAlign::Center, TextAlign::Right] {
+            let txt = DrawObject::Text {
+                id: format!("align-{align:?}"),
+                x: 200.0,
+                y: 150.0,
+                text: "Wide Header Line\nHi".to_string(),
+                font_size: 20.0,
+                color: ColorData::from(Color32::BLACK),
+                rotation: rot,
+                font_family: FontFamilyPreset::SansSerif,
+                bold: false,
+                italic: false,
+                alignment: align,
+            };
+            let out = ctx.run(
+                eframe::egui::RawInput {
+                    screen_rect: Some(eframe::egui::Rect::from_min_size(
+                        Pos2::ZERO,
+                        Vec2::new(800.0, 600.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    eframe::egui::CentralPanel::default()
+                        .frame(eframe::egui::Frame::NONE)
+                        .show(ctx, |ui| {
+                            draw_non_stroke_object(
+                                ui.painter(),
+                                &txt,
+                                std::slice::from_ref(&txt),
+                                |p| p,
+                                1.0,
+                                |_| None,
+                            );
+                        });
+                },
+            );
+
+            fn find_text_shape(
+                shape: &eframe::egui::Shape,
+            ) -> Option<eframe::egui::epaint::TextShape> {
+                match shape {
+                    eframe::egui::Shape::Text(ts) => Some(ts.clone()),
+                    eframe::egui::Shape::Vec(v) => v.iter().find_map(find_text_shape),
+                    _ => None,
+                }
+            }
+
+            let ts = out
+                .shapes
+                .iter()
+                .find_map(|c| find_text_shape(&c.shape))
+                .expect("Must emit TextShape");
+
+            if rot.abs() < 1e-4 {
+                let min_x = ts.pos.x + ts.galley.rect.min.x;
+                assert!(
+                    min_x >= 199.5,
+                    "Alignment {align:?} must stay >= x=200 (never offside left!), got min_x={min_x}"
+                );
+                left_min_xs.insert(format!("{align:?}"), min_x);
+
+                assert_eq!(ts.galley.rows.len(), 2);
+                let r0 = ts.galley.rows[0].rect;
+                let r1 = ts.galley.rows[1].rect;
+                row1_ranges.insert(
+                    format!("{align:?}"),
+                    (ts.pos.x + r0.min.x, ts.pos.x + r0.max.x),
+                );
+                row2_ranges.insert(
+                    format!("{align:?}"),
+                    (ts.pos.x + r1.min.x, ts.pos.x + r1.max.x),
+                );
+            } else {
+                // Terrotasi: pos utama berada di sepanjang vektor tepi atas kotak (dx = cos*offset, dy = sin*offset)
+                assert!(ts.pos.x.is_finite() && ts.pos.y.is_finite());
+                if align != TextAlign::Left {
+                    assert!(
+                        ts.pos.x > 200.0 && ts.pos.y > 150.0,
+                        "Rotated {align:?} anchor must shift forward along rotated top edge, got {:?}",
+                        ts.pos
+                    );
+                }
+            }
+        }
+
+        if rot.abs() < 1e-4 {
+            let l_x = left_min_xs["Left"];
+            let c_x = left_min_xs["Center"];
+            let r_x = left_min_xs["Right"];
+            assert!(
+                c_x >= l_x && r_x >= c_x,
+                "Expected Left <= Center <= Right box position: L={l_x}, C={c_x}, R={r_x}"
+            );
+
+            // Multi-line alignment checks inside the box:
+            let (c1_min, c1_max) = row1_ranges["Center"];
+            let (c2_min, c2_max) = row2_ranges["Center"];
+            let c1_mid = (c1_min + c1_max) * 0.5;
+            let c2_mid = (c2_min + c2_max) * 0.5;
+            assert!(
+                (c1_mid - c2_mid).abs() < 1.5 && c2_min >= 199.5,
+                "Centered line 2 must align around line 1's center ({c1_mid} vs {c2_mid}) without going offside left"
+            );
+
+            let (_r1_min, r1_max) = row1_ranges["Right"];
+            let (r2_min, r2_max) = row2_ranges["Right"];
+            assert!(
+                (r1_max - r2_max).abs() < 1.5 && r2_min >= 199.5,
+                "Right-aligned line 2 must match line 1's right edge ({r1_max} vs {r2_max}) without going offside left"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_text_initialization_has_no_border_no_gizmo_and_no_placeholder_hint() {
+    let ctx = eframe::egui::Context::default();
+    ctx.set_fonts(crate::model::build_app_font_definitions());
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "text-init-clean".to_string();
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Text,
+        zoom: 1.0,
+        ..Default::default()
+    };
+
+    let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    let click_pos = origin + Vec2::new(220.0, 180.0);
+
+    // Klik kanvas dengan tool Text untuk menginisialisasi objek teks baru
+    step_test_canvas(
+        &ctx,
+        &mut page,
+        &mut state,
+        vec![
+            eframe::egui::Event::PointerMoved(click_pos),
+            eframe::egui::Event::PointerButton {
+                pos: click_pos,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+            eframe::egui::Event::PointerButton {
+                pos: click_pos,
+                button: eframe::egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+
+    assert_eq!(page.objects.len(), 1);
+    assert!(state.editing_text_id.is_some());
+
+    // Render frame berikutnya dalam kondisi aktif menginisialisasi/mengetik teks kosong
+    let out = ctx.run(
+        eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                Pos2::ZERO,
+                Vec2::new(1200.0, 1200.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            eframe::egui::CentralPanel::default()
+                .frame(eframe::egui::Frame::NONE)
+                .show(ctx, |ui| {
+                    let _ = render_page_canvas(ui, &mut page, &mut state);
+                });
+        },
+    );
+
+    let accent = Color32::from_rgb(0, 114, 206);
+    fn check_shape_clean(shape: &eframe::egui::Shape, accent: Color32, page_origin: Pos2) {
+        match shape {
+            eframe::egui::Shape::Rect(r) => {
+                // Pastikan tidak ada stroke kotak border biru editor di area kanvas (floating toolbar di atas y<100 tetap diperbolehkan)
+                if r.rect.min.y >= page_origin.y + 40.0 {
+                    assert_ne!(
+                        r.stroke.color, accent,
+                        "Inline text initialization must not render blue border rect, found {:?}",
+                        r
+                    );
+                    assert!(
+                        !(r.stroke.color.b() > 180
+                            && r.stroke.color.r() < 40
+                            && r.stroke.width > 0.0),
+                        "Inline text initialization must not render any blue border stroke"
+                    );
+                }
+            }
+            eframe::egui::Shape::LineSegment { stroke, points } => {
+                if points[0].y >= page_origin.y + 40.0 {
+                    assert_ne!(
+                        stroke.color, accent,
+                        "Gizmo selection box border must stay hidden while editing newly initialized text"
+                    );
+                }
+            }
+            eframe::egui::Shape::Text(ts) => {
+                let txt = ts.galley.job.text.as_str();
+                assert!(
+                    !txt.contains("Ketik teks"),
+                    "Placeholder 'Ketik teks di sini...' must be removed, found '{txt}'"
+                );
+            }
+            eframe::egui::Shape::Vec(v) => {
+                for s in v {
+                    check_shape_clean(s, accent, page_origin);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for clipped in &out.shapes {
+        check_shape_clean(&clipped.shape, accent, origin);
+    }
+}
+
+#[test]
+fn test_all_text_settings_font_bold_italic_color_size_alignment_work_end_to_end() {
+    use super::primitives::draw_non_stroke_object;
+
+    let defs = crate::model::build_app_font_definitions();
+    let has_fam = |f: &eframe::egui::FontFamily| defs.families.contains_key(f);
+
+    let (serif_reg, faux_reg) = FontFamilyPreset::Serif.resolve_egui_font_family(false, has_fam);
+    assert!(!faux_reg);
+    let (sans_reg, _) = FontFamilyPreset::SansSerif.resolve_egui_font_family(false, has_fam);
+    assert_ne!(
+        serif_reg, sans_reg,
+        "Serif font family must differ from SansSerif when system fonts are registered"
+    );
+
+    let (serif_bold, _) = FontFamilyPreset::Serif.resolve_egui_font_family(true, has_fam);
+    assert_ne!(serif_bold, serif_reg);
+
+    // Fallback aman bila Context::default() tidak memuat custom fonts
+    let (fallback_fam, fallback_faux) =
+        FontFamilyPreset::Serif.resolve_egui_font_family(true, |_| false);
+    assert_eq!(fallback_fam, eframe::egui::FontFamily::Proportional);
+    assert!(fallback_faux);
+
+    // Uji render kanvas penuh untuk Serif + Bold + Italic + Center + Custom Color + 32pt
+    let ctx = eframe::egui::Context::default();
+    ctx.set_fonts(defs);
+    let custom_col = Color32::from_rgb(180, 40, 220);
+    let txt = DrawObject::Text {
+        id: "t-styled".into(),
+        x: 100.0,
+        y: 100.0,
+        text: "Styled Serif Text".into(),
+        font_size: 32.0,
+        color: ColorData::from(custom_col),
+        rotation: 0.0,
+        font_family: FontFamilyPreset::Serif,
+        bold: true,
+        italic: true,
+        alignment: TextAlign::Center,
+    };
+
+    let out = ctx.run(
+        eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                Pos2::ZERO,
+                Vec2::new(600.0, 400.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            eframe::egui::CentralPanel::default()
+                .frame(eframe::egui::Frame::NONE)
+                .show(ctx, |ui| {
+                    draw_non_stroke_object(
+                        ui.painter(),
+                        &txt,
+                        std::slice::from_ref(&txt),
+                        |p| p,
+                        1.0,
+                        |_| None,
+                    );
+                });
+        },
+    );
+
+    fn find_ts(shape: &eframe::egui::Shape) -> Option<eframe::egui::epaint::TextShape> {
+        match shape {
+            eframe::egui::Shape::Text(ts) => Some(ts.clone()),
+            eframe::egui::Shape::Vec(v) => v.iter().find_map(find_ts),
+            _ => None,
+        }
+    }
+    let ts = out.shapes.iter().find_map(|c| find_ts(&c.shape)).unwrap();
+    let fmt = &ts.galley.job.sections[0].format;
+    assert_eq!(fmt.font_id.size, 32.0);
+    assert_eq!(fmt.font_id.family, serif_bold);
+    assert!(fmt.italics);
+    assert_eq!(fmt.color, custom_col);
+    assert_eq!(ts.galley.job.halign, eframe::egui::Align::Center);
+}

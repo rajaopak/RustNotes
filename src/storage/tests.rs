@@ -1355,3 +1355,70 @@ fn test_highlighter_png_and_svg_rounded_caps_and_non_stacking_consistency() {
     assert!(svg.contains("stroke=\"rgb(255,235,59)\""));
     assert!(svg.contains("stroke=\"rgb(0,200,255)\""));
 }
+
+#[test]
+fn test_export_svg_and_png_text_alignment_not_offside_left() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut page = Page::new(PageTemplate::Blank);
+    page.objects.push(DrawObject::Text {
+        id: "svg-png-center".to_string(),
+        x: 120.0,
+        y: 80.0,
+        text: "Centered Text".to_string(),
+        font_size: 20.0,
+        color: ColorData {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+        rotation: 0.0,
+        font_family: FontFamilyPreset::Serif,
+        bold: true,
+        italic: true,
+        alignment: TextAlign::Center,
+    });
+    page.objects.push(DrawObject::Text {
+        id: "svg-png-right".to_string(),
+        x: 120.0,
+        y: 160.0,
+        text: "Right Text".to_string(),
+        font_size: 20.0,
+        color: ColorData {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        },
+        rotation: 0.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Right,
+    });
+
+    let svg = export_page_to_svg(&page);
+    assert!(
+        !svg.contains("<text x=\"120.0\" y=\"97.0\""),
+        "Centered SVG text anchor must shift into box middle (not x=120.0 left edge), got:\n{svg}"
+    );
+    assert!(svg.contains("text-anchor=\"middle\""));
+    assert!(svg.contains("text-anchor=\"end\""));
+
+    let img = super::export_png::render_page_to_rgba_image(tmp.path(), "nb_align", &page)
+        .expect("render PNG");
+    // Pada skala 2x, x=120 berada di pixel 240. Tidak boleh ada piksel teks gelap offside ke kiri (< 236).
+    let mut min_dark_x = u32::MAX;
+    for y in 0..img.height() {
+        for x in 0..img.width() {
+            let p = img.get_pixel(x, y);
+            if p[0] < 100 && p[1] < 100 && p[2] < 100 {
+                min_dark_x = min_dark_x.min(x);
+            }
+        }
+    }
+    assert!(
+        min_dark_x >= 236 && min_dark_x < img.width(),
+        "PNG exported Center/Right text must stay inside [x=120..], found offside dark pixel at x={min_dark_x}"
+    );
+}
