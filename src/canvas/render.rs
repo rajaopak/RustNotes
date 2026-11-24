@@ -168,6 +168,9 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
     // 8. Fase 8.3: Render Indikator Kotak Target Zoom Window pada Kanvas Utama
     render_zoom_target_indicator(&painter, state, page_to_screen);
 
+    // 8b. Render Pointer Lingkaran Penghapus Akurat Piksel saat Alat Eraser Aktif
+    render_eraser_cursor(ui, &response, page, state, rect, screen_clip_rect);
+
     handle_post_render_pointer_interaction(
         ui,
         &response,
@@ -655,4 +658,82 @@ fn render_canvas_context_menu(
             }
         }
     });
+}
+
+/// Merender indikator kursor penghapus berbentuk lingkaran berpusat di `center` dengan radius piksel
+/// layar yang cocok 1:1 terhadap area hit-test penghapus (`eraser_screen_radius`).
+pub(super) fn draw_eraser_cursor_indicator(
+    painter: &egui::Painter,
+    center: Pos2,
+    screen_radius: f32,
+    is_erasing: bool,
+) {
+    let r = screen_radius.max(1.5);
+    let fill = if is_erasing {
+        Color32::from_rgba_unmultiplied(220, 60, 60, 40)
+    } else {
+        Color32::from_rgba_unmultiplied(255, 255, 255, 42)
+    };
+    let ring_color = if is_erasing {
+        Color32::from_rgba_unmultiplied(210, 45, 45, 235)
+    } else {
+        Color32::from_rgba_unmultiplied(35, 38, 45, 220)
+    };
+    let halo_color = Color32::from_rgba_unmultiplied(255, 255, 255, 210);
+
+    painter.circle_filled(center, r, fill);
+    painter.circle_stroke(center, r + 1.0, Stroke::new(1.0_f32, halo_color));
+    painter.circle_stroke(center, r, Stroke::new(1.25_f32, ring_color));
+    if r >= 6.0 {
+        painter.circle_filled(center, 1.1, ring_color);
+    }
+}
+
+/// Menampilkan kursor lingkaran penghapus di kanvas halaman saat alat `ActiveTool::Eraser` aktif.
+fn render_eraser_cursor(
+    ui: &Ui,
+    response: &Response,
+    page: &Page,
+    state: &CanvasState,
+    rect: Rect,
+    screen_clip_rect: Rect,
+) {
+    if state.current_tool != ActiveTool::Eraser
+        || state.is_dragging_selection
+        || state.resize_corner.is_some()
+    {
+        return;
+    }
+
+    if state.pointer_gesture_active && state.active_stroke_page_id.as_deref() != Some(&page.id) {
+        return;
+    }
+
+    let is_active_erase_page =
+        state.pointer_gesture_active && state.active_stroke_page_id.as_deref() == Some(&page.id);
+    if !response.hovered() && !is_active_erase_page {
+        return;
+    }
+
+    let Some(cursor_pos) = response.hover_pos().or_else(|| {
+        is_active_erase_page
+            .then(|| response.interact_pointer_pos())
+            .flatten()
+    }) else {
+        return;
+    };
+
+    if !is_active_erase_page && !rect.contains(cursor_pos) {
+        return;
+    }
+
+    let screen_radius = state.eraser_screen_radius();
+    let cursor_painter = ui.painter().with_clip_rect(screen_clip_rect);
+    draw_eraser_cursor_indicator(
+        &cursor_painter,
+        cursor_pos,
+        screen_radius,
+        is_active_erase_page,
+    );
+    ui.ctx().set_cursor_icon(egui::CursorIcon::None);
 }

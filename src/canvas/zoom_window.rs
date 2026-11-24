@@ -165,7 +165,8 @@ pub fn render_zoom_window_canvas(
                     state.eraser_undo_pushed = false;
                     state.last_whole_erase_pos = None;
                     state.last_erase_sample_pos = Some(page_p);
-                    if state.erase_at(page, page_p, 12.0 / scale * state.zoom) {
+                    let erase_radius = state.eraser_page_radius_for_scale(scale);
+                    if state.erase_at(page, page_p, erase_radius) {
                         modified = true;
                     }
                 }
@@ -209,7 +210,7 @@ pub fn render_zoom_window_canvas(
             let start_ref = press_origin.or(pointer_pos);
             let sample_count = batch.events.len().max(1);
             let dt_per_sample = frame_dt / (sample_count as f32);
-            let erase_r = 12.0 / scale * state.zoom;
+            let erase_r = state.eraser_page_radius_for_scale(scale);
 
             for (idx, ev) in batch.events.iter().enumerate() {
                 if ev.phase == PointerSamplePhase::Cancel {
@@ -409,6 +410,24 @@ pub fn render_zoom_window_canvas(
             page_to_zw,
         );
         painter.add(mesh);
+    }
+
+    if state.current_tool == ActiveTool::Eraser {
+        let is_erasing = response.dragged_by(PointerButton::Primary)
+            || response.drag_started_by(PointerButton::Primary);
+        if (response.hovered() || is_erasing)
+            && let Some(cursor_pos) = response.hover_pos().or(pointer_pos)
+            && (is_erasing || zw_rect.contains(cursor_pos))
+        {
+            let screen_radius = state.eraser_screen_radius_for_scale(scale);
+            super::render::draw_eraser_cursor_indicator(
+                &painter,
+                cursor_pos,
+                screen_radius,
+                is_erasing,
+            );
+            ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+        }
     }
 
     painter.rect_stroke(
