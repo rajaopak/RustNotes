@@ -1,7 +1,10 @@
 use super::state::RustNotesApp;
 use super::types::ViewMode;
-use crate::canvas::{ActiveTool, EraserMode};
-use crate::model::{ShapeKind, ThemeMode};
+use crate::canvas::{
+    ActiveTool, EraserMode, hsv_to_rgb, rainbow_laser_color, tessellate_laser_layer,
+    tessellate_laser_layer_colored,
+};
+use crate::model::{LaserColorMode, ShapeKind, ThemeMode};
 use crate::storage::{
     app_storage_dir, export_notebook_to_pdf, export_page_to_png, export_page_to_svg_file,
 };
@@ -9,6 +12,25 @@ use eframe::egui::{
     self, Align, Button, Color32, FontId, Layout, Pos2, Rect, RichText, Sense, Stroke, StrokeKind,
     Vec2,
 };
+
+/// Menggambar ikon lingkaran pelangi (12 segmen spektrum HSV) untuk tombol/indikator mode Rainbow.
+fn paint_rainbow_circle(painter: &egui::Painter, center: Pos2, radius: f32, stroke: Stroke) {
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(center, Color32::WHITE);
+    const SEGMENTS: usize = 12;
+    for i in 0..=SEGMENTS {
+        let frac = i as f32 / SEGMENTS as f32;
+        let angle = frac * std::f32::consts::TAU;
+        let (r, g, b) = hsv_to_rgb(frac * 360.0, 0.95, 1.0);
+        let pos = center + Vec2::new(angle.cos(), angle.sin()) * radius;
+        mesh.colored_vertex(pos, Color32::from_rgb(r, g, b));
+    }
+    for i in 0..SEGMENTS as u32 {
+        mesh.add_triangle(0, 1 + i, 2 + i);
+    }
+    painter.add(mesh);
+    painter.circle_stroke(center, radius, stroke);
+}
 
 /// Menggambar ikon penghapus (eraser) vektor dengan proporsi seimbang dan detail dua-bagian (rubber & sleeve).
 fn paint_eraser_glyph(painter: &egui::Painter, rect: Rect, color: Color32) {
@@ -593,6 +615,11 @@ impl RustNotesApp {
                 .anchor(egui::Align2::CENTER_TOP, [0.0, 56.0])
                 .show(ctx, |ui| {
                     ui.set_width(360.0);
+
+                    if self.canvas_state.current_tool == ActiveTool::Laser {
+                        self.render_laser_tool_settings(ui, ctx);
+                        ui.separator();
+                    }
 
                     // Ketebalan Goresan (Stroke Width Presets + Slider)
                     ui.label(
@@ -1587,19 +1614,49 @@ impl RustNotesApp {
         };
         ui.painter().rect_filled(sw_rect, 14.0, pill_bg);
         let dot_center = Pos2::new(sw_rect.left() + 14.0, sw_rect.center().y);
-        ui.painter().circle(
-            dot_center,
-            7.0,
-            self.canvas_state.stroke_color,
-            Stroke::new(1.5_f32, Color32::WHITE),
-        );
-        ui.painter().text(
-            Pos2::new(sw_rect.left() + 26.0, sw_rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            format!("{:.1}px ▾", self.canvas_state.stroke_width),
-            FontId::proportional(11.5),
-            Color32::WHITE,
-        );
+        if self.canvas_state.current_tool == ActiveTool::Laser {
+            if self.canvas_state.laser_color_mode == LaserColorMode::Rainbow {
+                paint_rainbow_circle(
+                    ui.painter(),
+                    dot_center,
+                    7.0,
+                    Stroke::new(1.5_f32, Color32::WHITE),
+                );
+            } else {
+                ui.painter().circle(
+                    dot_center,
+                    7.0,
+                    self.canvas_state.laser_color,
+                    Stroke::new(1.5_f32, Color32::WHITE),
+                );
+            }
+            let pill_label = if self.canvas_state.laser_color_mode == LaserColorMode::Rainbow {
+                "RGB ▾"
+            } else {
+                "Laser ▾"
+            };
+            ui.painter().text(
+                Pos2::new(sw_rect.left() + 26.0, sw_rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                pill_label,
+                FontId::proportional(11.5),
+                Color32::WHITE,
+            );
+        } else {
+            ui.painter().circle(
+                dot_center,
+                7.0,
+                self.canvas_state.stroke_color,
+                Stroke::new(1.5_f32, Color32::WHITE),
+            );
+            ui.painter().text(
+                Pos2::new(sw_rect.left() + 26.0, sw_rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                format!("{:.1}px ▾", self.canvas_state.stroke_width),
+                FontId::proportional(11.5),
+                Color32::WHITE,
+            );
+        }
         if sw_resp
             .on_hover_text(lang.tr(
                 "Pengaturan Ketebalan Pena, Warna & Opsi Alat",
@@ -1611,6 +1668,158 @@ impl RustNotesApp {
             self.show_more_menu_popup = false;
             self.show_doc_title_popup = false;
         }
+    }
+
+    /// Merender pengaturan khusus Penunjuk Laser (mode Solid/Rainbow, pratinjau langsung, preset & picker warna).
+    fn render_laser_tool_settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let lang = self.settings.language;
+        ui.label(
+            RichText::new(lang.tr(
+                "✨ Warna Penunjuk Laser (Laser Pointer):",
+                "✨ Laser Pointer Color:",
+            ))
+            .strong()
+            .size(12.0),
+        );
+
+        ui.horizontal(|ui| {
+            let modes = [
+                (
+                    LaserColorMode::Solid,
+                    lang.tr("● Warna Solid", "● Solid Color"),
+                ),
+                (
+                    LaserColorMode::Rainbow,
+                    lang.tr("🌈 Rainbow (Pelangi)", "🌈 Rainbow"),
+                ),
+            ];
+            for (mode, label) in modes {
+                let is_sel = self.canvas_state.laser_color_mode == mode;
+                if ui.selectable_label(is_sel, label).clicked() {
+                    self.settings.laser_color_mode = mode;
+                    self.canvas_state.laser_color_mode = mode;
+                    self.persist_settings();
+                }
+            }
+        });
+
+        // Pratinjau efek neon laser langsung pada strip gelap
+        let (preview_rect, _) =
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 28.0), Sense::hover());
+        let p = ui.painter_at(preview_rect);
+        p.rect_filled(preview_rect, 6.0, Color32::from_rgb(20, 22, 28));
+        p.rect_stroke(
+            preview_rect,
+            6.0,
+            Stroke::new(1.0_f32, Color32::from_rgb(55, 60, 72)),
+            StrokeKind::Inside,
+        );
+        let pad_x = 18.0;
+        let x0 = preview_rect.left() + pad_x;
+        let x1 = (preview_rect.right() - pad_x).max(x0 + 20.0);
+        let cy = preview_rect.center().y;
+        let preview_pts: Vec<Pos2> = (0..=16)
+            .map(|i| {
+                let t = i as f32 / 16.0;
+                let x = x0 + (x1 - x0) * t;
+                let y = cy + (t * std::f32::consts::TAU).sin() * 5.0;
+                Pos2::new(x, y)
+            })
+            .collect();
+        let time_secs = ctx.input(|i| i.time) as f32;
+        match self.canvas_state.laser_color_mode {
+            LaserColorMode::Solid => {
+                let c = self.canvas_state.laser_color;
+                let outer = Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 44);
+                let halo = Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 120);
+                let core = Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 238);
+                p.add(tessellate_laser_layer(&preview_pts, 14.0, outer));
+                p.add(tessellate_laser_layer(&preview_pts, 8.0, halo));
+                p.add(tessellate_laser_layer(&preview_pts, 4.0, core));
+            }
+            LaserColorMode::Rainbow => {
+                p.add(tessellate_laser_layer_colored(&preview_pts, 14.0, |arc| {
+                    rainbow_laser_color(arc, time_secs, 44)
+                }));
+                p.add(tessellate_laser_layer_colored(&preview_pts, 8.0, |arc| {
+                    rainbow_laser_color(arc, time_secs, 120)
+                }));
+                p.add(tessellate_laser_layer_colored(&preview_pts, 4.0, |arc| {
+                    rainbow_laser_color(arc, time_secs, 238)
+                }));
+                ctx.request_repaint();
+            }
+        }
+        p.add(tessellate_laser_layer(
+            &preview_pts,
+            1.8,
+            Color32::from_rgba_unmultiplied(255, 255, 255, 250),
+        ));
+
+        ui.add_space(4.0);
+        let neon_presets: [(Color32, &str); 8] = [
+            (Color32::from_rgb(255, 0, 35), "Neon Red"),
+            (Color32::from_rgb(0, 212, 255), "Electric Cyan"),
+            (Color32::from_rgb(24, 232, 90), "Neon Green"),
+            (Color32::from_rgb(255, 213, 0), "Solar Yellow"),
+            (Color32::from_rgb(176, 66, 255), "Neon Purple"),
+            (Color32::from_rgb(255, 46, 184), "Hot Pink"),
+            (Color32::from_rgb(255, 106, 0), "Vivid Orange"),
+            (Color32::from_rgb(41, 121, 255), "Royal Blue"),
+        ];
+
+        ui.horizontal_wrapped(|ui| {
+            for (preset_col, preset_name) in neon_presets {
+                let (rect, resp) = ui.allocate_exact_size(Vec2::new(24.0, 24.0), Sense::click());
+                let is_sel = self.canvas_state.laser_color_mode == LaserColorMode::Solid
+                    && self.canvas_state.laser_color == preset_col;
+                let stroke = if is_sel {
+                    Stroke::new(2.5_f32, Color32::from_rgb(76, 147, 236))
+                } else {
+                    Stroke::new(1.0_f32, Color32::from_rgb(100, 100, 100))
+                };
+                ui.painter_at(rect)
+                    .rect(rect, 12.0, preset_col, stroke, StrokeKind::Outside);
+                if resp.on_hover_text(preset_name).clicked() {
+                    self.canvas_state.laser_color = preset_col;
+                    self.canvas_state.laser_color_mode = LaserColorMode::Solid;
+                    self.settings.laser_color = preset_col.into();
+                    self.settings.laser_color_mode = LaserColorMode::Solid;
+                    self.persist_settings();
+                }
+            }
+
+            // Swatch cepat untuk mode Rainbow
+            let (rb_rect, rb_resp) = ui.allocate_exact_size(Vec2::new(24.0, 24.0), Sense::click());
+            let is_rb = self.canvas_state.laser_color_mode == LaserColorMode::Rainbow;
+            let rb_stroke = if is_rb {
+                Stroke::new(2.5_f32, Color32::from_rgb(76, 147, 236))
+            } else {
+                Stroke::new(1.0_f32, Color32::from_rgb(100, 100, 100))
+            };
+            paint_rainbow_circle(&ui.painter_at(rb_rect), rb_rect.center(), 10.5, rb_stroke);
+            if rb_resp
+                .on_hover_text(lang.tr("Mode Rainbow (Pelangi)", "Rainbow Spectrum Mode"))
+                .clicked()
+            {
+                self.canvas_state.laser_color_mode = LaserColorMode::Rainbow;
+                self.settings.laser_color_mode = LaserColorMode::Rainbow;
+                self.persist_settings();
+            }
+
+            let mut custom_laser = self.canvas_state.laser_color;
+            if ui
+                .color_edit_button_srgba(&mut custom_laser)
+                .on_hover_text(lang.tr("Pilih warna laser kustom", "Pick custom laser color"))
+                .changed()
+            {
+                self.canvas_state.laser_color = custom_laser;
+                self.canvas_state.laser_color_mode = LaserColorMode::Solid;
+                self.settings.laser_color = custom_laser.into();
+                self.settings.laser_color_mode = LaserColorMode::Solid;
+                self.persist_settings();
+            }
+        });
     }
 }
 
@@ -1701,5 +1910,54 @@ mod tests {
 
         let rz_tip = app.action_hover_text(ShortcutAction::ResetZoom, "Reset", "Reset");
         assert!(rz_tip.contains("(Ctrl + 1)") && !rz_tip.contains("(Ctrl + 0)"));
+    }
+
+    #[test]
+    fn test_laser_navbar_and_popup_render_for_solid_and_rainbow_modes() {
+        let mut app = RustNotesApp::default();
+        let nb = crate::model::Notebook::new(
+            "Laser Test Notebook",
+            crate::model::PageTemplate::Blank,
+            Color32::WHITE,
+        );
+        app.active_notebook_id = Some(nb.id.clone());
+        app.library.notebooks = vec![nb];
+        app.canvas_state.current_tool = ActiveTool::Laser;
+        app.show_tool_popup = true;
+
+        // Solid custom color mode
+        let cyan = Color32::from_rgb(0, 212, 255);
+        app.settings.laser_color = cyan.into();
+        app.settings.laser_color_mode = LaserColorMode::Solid;
+        app.canvas_state.laser_color = cyan;
+        app.canvas_state.laser_color_mode = LaserColorMode::Solid;
+
+        let ctx = egui::Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, 800.0))),
+                ..Default::default()
+            },
+            |ctx| {
+                assert!(app.render_editor_navbar(ctx, 0));
+            },
+        );
+        assert_eq!(app.canvas_state.laser_color, cyan);
+        assert_eq!(app.canvas_state.laser_color_mode, LaserColorMode::Solid);
+
+        // Rainbow mode
+        app.settings.laser_color_mode = LaserColorMode::Rainbow;
+        app.canvas_state.laser_color_mode = LaserColorMode::Rainbow;
+        let out_rb = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, 800.0))),
+                ..Default::default()
+            },
+            |ctx| {
+                assert!(app.render_editor_navbar(ctx, 0));
+            },
+        );
+        assert!(!out_rb.shapes.is_empty());
+        assert_eq!(app.canvas_state.laser_color_mode, LaserColorMode::Rainbow);
     }
 }

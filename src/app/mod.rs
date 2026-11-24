@@ -40,6 +40,8 @@ impl eframe::App for RustNotesApp {
         self.canvas_state.pressure_multiplier = self.settings.pressure_multiplier;
         self.canvas_state.highlighter_opacity = self.settings.highlighter_opacity;
         self.canvas_state.highlighter_pressure_enabled = self.settings.highlighter_pressure_enabled;
+        self.canvas_state.laser_color = self.settings.laser_color.to_color32();
+        self.canvas_state.laser_color_mode = self.settings.laser_color_mode;
         if self.canvas_state.shortcuts != self.settings.shortcuts {
             self.canvas_state.shortcuts = self.settings.shortcuts.clone();
         }
