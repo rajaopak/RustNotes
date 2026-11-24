@@ -5190,3 +5190,149 @@ fn test_eraser_circular_cursor_renders_matching_screen_radius_on_hover() {
         "Pen tool must not draw eraser circular cursor"
     );
 }
+
+fn collect_mesh_vertex_colors(shape: &eframe::egui::Shape, out: &mut Vec<eframe::egui::Color32>) {
+    match shape {
+        eframe::egui::Shape::Mesh(mesh) => {
+            for v in &mesh.vertices {
+                out.push(v.color);
+            }
+        }
+        eframe::egui::Shape::Vec(children) => {
+            for child in children {
+                collect_mesh_vertex_colors(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn test_laser_solid_custom_color_renders_selected_color() {
+    use super::laser::render_laser_trail;
+    use crate::model::LaserColorMode;
+
+    let cyan = Color32::from_rgb(0, 212, 255);
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Laser,
+        laser_color: cyan,
+        laser_color_mode: LaserColorMode::Solid,
+        laser_strokes: vec![vec![
+            Pos2::new(20.0, 40.0),
+            Pos2::new(120.0, 40.0),
+            Pos2::new(220.0, 40.0),
+        ]],
+        ..Default::default()
+    };
+
+    let ctx = eframe::egui::Context::default();
+    let out = ctx.run(
+        eframe::egui::RawInput {
+            screen_rect: Some(eframe::egui::Rect::from_min_size(
+                Pos2::ZERO,
+                Vec2::new(400.0, 200.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            eframe::egui::CentralPanel::default().show(ctx, |ui| {
+                render_laser_trail(ui.painter(), &state, 1.0, 0.0);
+            });
+        },
+    );
+
+    let mut colors = Vec::new();
+    for clipped in &out.shapes {
+        collect_mesh_vertex_colors(&clipped.shape, &mut colors);
+    }
+    // Core neon vertices carry exact selected cyan Color32 (premultiplied by alpha=238), not default red
+    let expected_core = Color32::from_rgba_unmultiplied(0, 212, 255, 238);
+    let default_red_core = Color32::from_rgba_unmultiplied(255, 0, 35, 238);
+    assert!(
+        colors.contains(&expected_core),
+        "Expected solid custom cyan core vertices ({expected_core:?})"
+    );
+    assert!(
+        !colors.contains(&default_red_core),
+        "Default red must not appear when custom cyan laser color is selected"
+    );
+    // White beam center vertices still present
+    let expected_beam = Color32::from_rgba_unmultiplied(255, 255, 255, 250);
+    assert!(colors.contains(&expected_beam));
+
+    state.laser_strokes.clear();
+}
+
+#[test]
+fn test_laser_rainbow_mode_produces_multi_hue_gradient_and_animates_over_time() {
+    use super::laser::{
+        hsv_to_rgb, rainbow_laser_color, render_laser_trail, tessellate_laser_layer_colored,
+    };
+    use crate::model::LaserColorMode;
+
+    // 1. Primary HSV checks
+    assert_eq!(hsv_to_rgb(0.0, 1.0, 1.0), (255, 0, 0));
+    assert_eq!(hsv_to_rgb(120.0, 1.0, 1.0), (0, 255, 0));
+    assert_eq!(hsv_to_rgb(240.0, 1.0, 1.0), (0, 0, 255));
+
+    // 2. Per-arc tessellation emits distinct hues along 300px stroke
+    let pts = vec![
+        Pos2::new(10.0, 50.0),
+        Pos2::new(90.0, 50.0),
+        Pos2::new(170.0, 50.0),
+        Pos2::new(250.0, 50.0),
+        Pos2::new(310.0, 50.0),
+    ];
+    let mesh = tessellate_laser_layer_colored(&pts, 8.0, |arc| rainbow_laser_color(arc, 0.0, 255));
+    let distinct_colors: std::collections::HashSet<(u8, u8, u8)> = mesh
+        .vertices
+        .iter()
+        .map(|v| (v.color.r(), v.color.g(), v.color.b()))
+        .collect();
+    assert!(
+        distinct_colors.len() >= 4,
+        "Rainbow tessellation must produce multiple distinct hues along stroke, got {distinct_colors:?}"
+    );
+
+    // 3. Full render_laser_trail in Rainbow mode animates hues across time_secs
+    let state = CanvasState {
+        current_tool: ActiveTool::Laser,
+        laser_color_mode: LaserColorMode::Rainbow,
+        laser_strokes: vec![pts],
+        ..Default::default()
+    };
+
+    let render_at_time = |time_secs: f32| -> Vec<(u8, u8, u8)> {
+        let ctx = eframe::egui::Context::default();
+        let out = ctx.run(
+            eframe::egui::RawInput {
+                screen_rect: Some(eframe::egui::Rect::from_min_size(
+                    Pos2::ZERO,
+                    Vec2::new(400.0, 200.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                eframe::egui::CentralPanel::default().show(ctx, |ui| {
+                    render_laser_trail(ui.painter(), &state, 1.0, time_secs);
+                });
+            },
+        );
+        let mut cols = Vec::new();
+        for clipped in &out.shapes {
+            collect_mesh_vertex_colors(&clipped.shape, &mut cols);
+        }
+        cols.into_iter()
+            .filter(|c| !(c.r() == 255 && c.g() == 255 && c.b() == 255))
+            .map(|c| (c.r(), c.g(), c.b()))
+            .collect()
+    };
+
+    let colors_t0 = render_at_time(0.0);
+    let colors_t1 = render_at_time(0.75);
+    assert!(!colors_t0.is_empty());
+    assert_ne!(
+        colors_t0, colors_t1,
+        "Advancing animation time must shift rainbow laser colors"
+    );
+}
