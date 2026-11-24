@@ -6303,3 +6303,85 @@ fn test_smooth_stroke_points_relaxes_1px_mouse_staircase_without_overshoot() {
         "1px diagonal mouse staircase (raw zigzag ~0.707px) must relax smoothly, got zigzag={zigzag_span}"
     );
 }
+
+#[test]
+fn test_tessellate_stroke_styled_aa_emits_transparent_outer_skirt_without_spikes() {
+    let curved: Vec<StrokePoint> = (0..=40)
+        .map(|i| {
+            let t = i as f32 / 40.0;
+            let a = t * std::f32::consts::PI * 1.4;
+            StrokePoint::new(100.0 + a.cos() * 45.0, 100.0 + a.sin() * 45.0, 1.0)
+        })
+        .collect();
+
+    for (label, width) in [("28px", 28.0_f32), ("2.5px", 2.5_f32)] {
+        let mesh = tessellate_stroke_styled_aa(
+            &curved,
+            width,
+            Color32::from_rgb(25, 27, 32),
+            false,
+            StrokeStyle::Solid,
+            1.15,
+            |p| p,
+        );
+        assert_mesh_valid_and_finite(&mesh, label);
+
+        let has_transparent_skirt = mesh
+            .vertices
+            .iter()
+            .any(|v| v.color == Color32::TRANSPARENT);
+        let has_opaque_core = mesh
+            .vertices
+            .iter()
+            .any(|v| v.color == Color32::from_rgb(25, 27, 32));
+        assert!(
+            has_transparent_skirt && has_opaque_core,
+            "{label} AA mesh must include both solid core and transparent outer skirt"
+        );
+
+        let r = width * 0.5;
+        let max_dist = mesh
+            .vertices
+            .iter()
+            .map(|v| {
+                curved
+                    .windows(2)
+                    .map(|w| point_to_segment_dist(v.pos, w[0].to_pos2(), w[1].to_pos2()))
+                    .fold(f32::INFINITY, f32::min)
+            })
+            .fold(0.0_f32, f32::max);
+        assert!(
+            max_dist <= r + 0.75,
+            "{label} AA mesh must stay within radius + feather skirt ({} max), got {max_dist}",
+            r + 0.75
+        );
+
+        // Pastikan seluruh segitiga AA (dengan vertex alpha == 0) digambar sebelum segitiga inti penuh
+        let last_aa_tri = mesh
+            .indices
+            .chunks_exact(3)
+            .enumerate()
+            .filter(|(_, tri)| {
+                tri.iter()
+                    .any(|&idx| mesh.vertices[idx as usize].color.a() == 0)
+            })
+            .map(|(t_idx, _)| t_idx)
+            .max()
+            .unwrap();
+        let first_core_tri = mesh
+            .indices
+            .chunks_exact(3)
+            .enumerate()
+            .filter(|(_, tri)| {
+                tri.iter()
+                    .all(|&idx| mesh.vertices[idx as usize].color.a() == 255)
+            })
+            .map(|(t_idx, _)| t_idx)
+            .min()
+            .unwrap();
+        assert!(
+            last_aa_tri < first_core_tri,
+            "{label}: outer AA skirt must draw before opaque solid core so core overwrites inner seams"
+        );
+    }
+}

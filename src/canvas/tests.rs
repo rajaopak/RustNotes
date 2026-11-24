@@ -5399,3 +5399,110 @@ fn test_laser_sharp_turn_round_join_has_no_spikes_or_pinch() {
         );
     }
 }
+
+#[test]
+fn test_laser_neon_beam_has_continuous_radial_fade_to_transparent_and_white_core() {
+    use super::laser::{rainbow_laser_color, tessellate_laser_neon_beam};
+
+    let curve = vec![
+        Pos2::new(20.0, 40.0),
+        Pos2::new(90.0, 30.0),
+        Pos2::new(150.0, 75.0),
+        Pos2::new(80.0, 95.0),
+    ];
+
+    let solid_mesh = tessellate_laser_neon_beam(&curve, 1.0, 1.0, |_| (255, 0, 35));
+    let rainbow_mesh = tessellate_laser_neon_beam(&curve, 1.0, 1.0, |arc| {
+        let c = rainbow_laser_color(arc, 0.3, 255);
+        (c.r(), c.g(), c.b())
+    });
+
+    for (label, mesh) in [("solid", &solid_mesh), ("rainbow", &rainbow_mesh)] {
+        assert!(!mesh.vertices.is_empty(), "{label} neon mesh non-empty");
+        assert!(!mesh.indices.is_empty(), "{label} neon indices non-empty");
+        assert!(
+            mesh.vertices
+                .iter()
+                .any(|v| v.color == Color32::TRANSPARENT),
+            "{label} neon mesh must fade smoothly to Color32::TRANSPARENT at outer edge"
+        );
+        assert!(
+            mesh.vertices
+                .iter()
+                .any(|v| v.color == Color32::from_rgba_unmultiplied(255, 255, 255, 250)),
+            "{label} neon mesh must preserve white hotspot core"
+        );
+        let distinct_alphas: std::collections::HashSet<u8> =
+            mesh.vertices.iter().map(|v| v.color.a()).collect();
+        assert!(
+            distinct_alphas.len() >= 5,
+            "{label} neon beam must have smooth multi-stop radial alpha falloff, got {distinct_alphas:?}"
+        );
+    }
+}
+
+#[test]
+fn test_autoshape_line_always_renders_rounded_caps_even_at_thin_width() {
+    use super::primitives::draw_shape_primitive;
+    use eframe::egui::Stroke;
+
+    let ctx = eframe::egui::Context::default();
+    for width in [1.5_f32, 2.5_f32, 3.0_f32] {
+        let out = ctx.run(
+            eframe::egui::RawInput {
+                screen_rect: Some(eframe::egui::Rect::from_min_size(
+                    Pos2::ZERO,
+                    Vec2::new(400.0, 200.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                eframe::egui::CentralPanel::default()
+                    .frame(eframe::egui::Frame::NONE)
+                    .show(ctx, |ui| {
+                        draw_shape_primitive(
+                            ui.painter(),
+                            ShapeKind::Line,
+                            50.0,
+                            80.0,
+                            200.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                            &[],
+                            Color32::TRANSPARENT,
+                            Stroke::new(width, Color32::BLACK),
+                            |p| p,
+                        );
+                    });
+            },
+        );
+
+        let mut meshes = Vec::new();
+        for clipped in &out.shapes {
+            if let eframe::egui::Shape::Mesh(m) = &clipped.shape {
+                meshes.push(m);
+            }
+        }
+        assert!(
+            !meshes.is_empty(),
+            "Line of width {width} must tessellate into rounded-cap Mesh instead of squared LineSegment"
+        );
+        let mesh = meshes[0];
+        let min_x = mesh
+            .vertices
+            .iter()
+            .map(|v| v.pos.x)
+            .fold(f32::INFINITY, f32::min);
+        let max_x = mesh
+            .vertices
+            .iter()
+            .map(|v| v.pos.x)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let expected_r = width * 0.5;
+        assert!(
+            min_x < 50.0 - expected_r * 0.8 && max_x > 250.0 + expected_r * 0.8,
+            "Horizontal Line (50..250, width={width}) must extend past endpoints with rounded caps, got [{min_x}, {max_x}]"
+        );
+    }
+}
