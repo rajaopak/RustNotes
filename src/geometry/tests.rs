@@ -6800,3 +6800,90 @@ fn test_latex_pgfplots_axis_function_and_data_graph_layout_and_svg() {
     let svg = layout.to_svg(0.0, 0.0, &dummy_color(), 0.0);
     assert!(svg.contains("<polyline") && svg.contains("Grafik Fungsi"));
 }
+
+#[test]
+fn test_latex_3d_surface_plot_with_document_preamble_layout_and_svg() {
+    // Uji persis kode dokumen LaTeX 3D PGFPlots dari user
+    let user_3d_code = r"\documentclass{article}
+\usepackage{pgfplots}
+\begin{document}
+\begin{tikzpicture}
+  \begin{axis}[domain=-1:1,y domain=-1:1]
+    \addplot3[surf] {x*y*exp(x+2*y-9*x^2-9*y^2)};
+  \end{axis}
+\end{tikzpicture}
+\end{document}";
+
+    // Pastikan evaluator 2-variabel menghitung fungsi dengan akurat
+    let val = super::math::expr::eval_math_expr_2d("x*y*exp(x+2*y-9*x^2-9*y^2)", 0.1, 0.15)
+        .expect("2D expression evaluation must succeed");
+    let expected = 0.1 * 0.15 * (0.1_f64 + 0.3 - 9.0 * 0.01 - 9.0 * 0.0225).exp();
+    assert!((val - expected).abs() < 1e-9);
+
+    let layout = MathLayout::compute_from_str_checked(user_3d_code, 22.0)
+        .expect("Full document 3D surface plot must parse cleanly");
+    assert!(layout.width > 120.0 && layout.height > 100.0);
+
+    let filled_polys = layout
+        .items
+        .iter()
+        .filter(|it| matches!(it, MathLayoutItem::Polygon { fill: Some(_), .. }))
+        .count();
+    assert!(
+        filled_polys >= 100,
+        "3D surface plot must emit depth-sorted surface polygons, got {filled_polys}"
+    );
+    let svg = layout.to_svg(0.0, 0.0, &dummy_color(), 0.0);
+    assert!(svg.contains("<polygon") && svg.contains("<line"));
+
+    // Pastikan \addplot3[mesh] juga didukung dan preambul dengan perintah asing tetap ditolak
+    let mesh_code =
+        r"\begin{axis}[domain=-1:1, y domain=-1:1]\addplot3[mesh] {x^2 - y^2};\end{axis}";
+    assert!(MathLayout::compute_from_str_checked(mesh_code, 20.0).is_ok());
+
+    let bad_preamble = r"\documentclass{article}
+\evilUnknownMacro{123}
+\begin{document}
+\begin{tikzpicture}\draw (0,0)--(1,1);\end{tikzpicture}
+\end{document}";
+    assert!(parse_latex_math(bad_preamble).is_err());
+}
+
+#[test]
+fn test_latex_data_graph_and_3d_graph_linear_scaling() {
+    let data_graph = r"\begin{axis}[title={Data}, grid=major, ybar]
+\addplot[teal] coordinates {(1, 3) (2, 7) (3, 5) (4, 9)};
+\end{axis}";
+    let fn_graph = r"\begin{axis}[domain=-2:2]\addplot[blue]{x^2};\end{axis}";
+    let surface_3d =
+        r"\begin{axis}[domain=-1:1, y domain=-1:1]\addplot3[surf] {x*y*exp(-x^2-y^2)};\end{axis}";
+
+    for code in [data_graph, fn_graph, surface_3d] {
+        let base = MathLayout::compute_scaled(code, 22.0, 1.0);
+        let small = MathLayout::compute_scaled(code, 22.0, 0.35);
+        let large = MathLayout::compute_scaled(code, 22.0, 2.5);
+
+        assert!(
+            (small.width - base.width * 0.35).abs() < 0.05
+                && (small.height - base.height * 0.35).abs() < 0.05,
+            "Small scale must shrink linearly: base=({}, {}), small=({}, {})",
+            base.width,
+            base.height,
+            small.width,
+            small.height
+        );
+        assert!(
+            (large.width - base.width * 2.5).abs() < 0.05
+                && (large.height - base.height * 2.5).abs() < 0.05,
+            "Large scale must grow linearly: base=({}, {}), large=({}, {})",
+            base.width,
+            base.height,
+            large.width,
+            large.height
+        );
+
+        let (ew_s, eh_s) = equation_approx_size(code, 22.0, 0.35);
+        let (ew_l, eh_l) = equation_approx_size(code, 22.0, 2.5);
+        assert!(ew_l > ew_s * 6.0 && eh_l > eh_s * 6.0);
+    }
+}

@@ -1487,3 +1487,64 @@ fn test_export_png_and_svg_latex_graph_geometry_and_table() {
         "Rendered PNG of LaTeX graph, geometry & table must contain rich visible pixels, got {non_white}"
     );
 }
+
+#[test]
+fn test_export_png_and_svg_latex_3d_graph_and_scaled_data_graph() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut page = Page::new(PageTemplate::Blank);
+    let col = ColorData {
+        r: 25,
+        g: 28,
+        b: 35,
+        a: 255,
+    };
+
+    page.objects.push(DrawObject::Equation {
+        id: "eq-3d".into(),
+        latex: r"\documentclass{article}
+\usepackage{pgfplots}
+\begin{document}
+\begin{tikzpicture}
+  \begin{axis}[domain=-1:1,y domain=-1:1]
+    \addplot3[surf] {x*y*exp(x+2*y-9*x^2-9*y^2)};
+  \end{axis}
+\end{tikzpicture}
+\end{document}"
+            .into(),
+        x: 30.0,
+        y: 30.0,
+        font_size: 20.0,
+        scale: 1.0,
+        color: col.clone(),
+        rotation: 0.0,
+        locked: false,
+    });
+    page.objects.push(DrawObject::Equation {
+        id: "eq-bar-scaled".into(),
+        latex: r"\begin{axis}[title={Data Scaled}, grid=major, ybar]
+\addplot[teal] coordinates {(1, 3) (2, 7) (3, 5)};
+\end{axis}"
+            .into(),
+        x: 30.0,
+        y: 400.0,
+        font_size: 16.0,
+        scale: 1.8,
+        color: col,
+        rotation: 0.0,
+        locked: false,
+    });
+
+    let svg = export_page_to_svg(&page);
+    assert!(svg.contains("<polygon") && svg.contains("Data Scaled"));
+
+    let img = super::export_png::render_page_to_rgba_image(tmp.path(), "nb_latex_3d_scaled", &page)
+        .expect("PNG render of 3D LaTeX graph and scaled data graph must succeed");
+    let non_white = img
+        .pixels()
+        .filter(|p| p[0] < 245 || p[1] < 245 || p[2] < 245)
+        .count();
+    assert!(
+        non_white > 1200,
+        "Rendered PNG of 3D surface and scaled bar graph must emit rich pixels, got {non_white}"
+    );
+}

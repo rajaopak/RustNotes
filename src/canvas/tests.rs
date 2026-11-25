@@ -6753,6 +6753,10 @@ fn test_equation_modal_preview_renders_graph_geometry_and_table() {
             "\\begin{axis}[title={Parabola}, grid=major, axis lines=middle]\n\\addplot[blue, domain=-2:2]{x^2};\n\\end{axis}",
         ),
         (
+            "graph3d",
+            "\\documentclass{article}\n\\usepackage{pgfplots}\n\\begin{document}\n\\begin{tikzpicture}\n  \\begin{axis}[domain=-1:1,y domain=-1:1]\n    \\addplot3[surf] {x*y*exp(x+2*y-9*x^2-9*y^2)};\n  \\end{axis}\n\\end{tikzpicture}\n\\end{document}",
+        ),
+        (
             "geometry",
             "\\begin{tikzpicture}\n\\filldraw[fill=blue!20, draw=blue] (0,0) -- (3,0) -- (1.5,2) -- cycle;\n\\draw[red] (1.5,1) circle (0.5);\n\\end{tikzpicture}",
         ),
@@ -6792,4 +6796,357 @@ fn test_equation_modal_preview_renders_graph_geometry_and_table() {
             "Preview modal for {label} must emit shapes cleanly"
         );
     }
+}
+
+#[test]
+fn test_continuous_vertical_lasso_drag_does_not_teleport_object_across_pages() {
+    let ctx = egui::Context::default();
+    let mut page1 = Page::new(PageTemplate::Blank);
+    page1.id = "cv-lasso-p1".into();
+    page1.width = 500.0;
+    page1.height = 350.0;
+    page1.objects.push(DrawObject::Stroke {
+        id: "st-p1".into(),
+        points: vec![
+            StrokePoint::new(100.0, 100.0, 1.0),
+            StrokePoint::new(180.0, 140.0, 1.0),
+        ],
+        color: ColorData::from(Color32::BLACK),
+        width: 3.0,
+        is_highlighter: false,
+        style: StrokeStyle::Solid,
+    });
+
+    let mut page2 = Page::new(PageTemplate::Blank);
+    page2.id = "cv-lasso-p2".into();
+    page2.width = 500.0;
+    page2.height = 350.0;
+    page2.objects.push(DrawObject::Text {
+        id: "txt-p2".into(),
+        x: 120.0,
+        y: 80.0,
+        text: "Catatan Halaman 2".into(),
+        font_size: 20.0,
+        color: ColorData::from(Color32::BLACK),
+        rotation: 0.0,
+        font_family: FontFamilyPreset::SansSerif,
+        bold: false,
+        italic: false,
+        alignment: TextAlign::Left,
+    });
+
+    // 1. Pilih & seret objek di Halaman 1 sementara Halaman 2 ikut terlihat dalam scroll viewport
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Lasso,
+        zoom: 1.0,
+        selected_ids: vec!["st-p1".into()],
+        ..Default::default()
+    };
+    let (orig1, orig2, _) =
+        step_two_pages_vertical(&ctx, &mut page1, &mut page2, &mut state, vec![]);
+    let p1_grab = orig1 + Vec2::new(140.0, 120.0);
+    let p1_mid = p1_grab + Vec2::new(20.0, 12.0);
+    let p1_end = p1_grab + Vec2::new(35.0, 24.0);
+
+    step_two_pages_vertical(
+        &ctx,
+        &mut page1,
+        &mut page2,
+        &mut state,
+        vec![
+            egui::Event::PointerMoved(p1_grab),
+            egui::Event::PointerButton {
+                pos: p1_grab,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+    step_two_pages_vertical(
+        &ctx,
+        &mut page1,
+        &mut page2,
+        &mut state,
+        vec![egui::Event::PointerMoved(p1_mid)],
+    );
+    step_two_pages_vertical(
+        &ctx,
+        &mut page1,
+        &mut page2,
+        &mut state,
+        vec![egui::Event::PointerMoved(p1_end)],
+    );
+    step_two_pages_vertical(
+        &ctx,
+        &mut page1,
+        &mut page2,
+        &mut state,
+        vec![egui::Event::PointerButton {
+            pos: p1_end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    if let DrawObject::Stroke { points, .. } = &page1.objects[0] {
+        assert!(
+            (points[0].x - 135.0).abs() < 6.0 && (points[0].y - 124.0).abs() < 6.0,
+            "Page 1 object must move cleanly by drag delta (~35, ~24) without teleporting off-page; got ({}, {})",
+            points[0].x,
+            points[0].y
+        );
+    }
+    assert!(state.active_stroke_page_id.is_none());
+
+    // 2. Pilih & seret objek di Halaman 2 sementara Halaman 1 ikut terlihat di atasnya
+    state.selected_ids = vec!["txt-p2".into()];
+    let p2_grab = orig2 + Vec2::new(145.0, 90.0);
+    let p2_end = p2_grab + Vec2::new(40.0, 30.0);
+    step_two_pages_vertical(
+        &ctx,
+        &mut page1,
+        &mut page2,
+        &mut state,
+        vec![
+            egui::Event::PointerMoved(p2_grab),
+            egui::Event::PointerButton {
+                pos: p2_grab,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+        ],
+    );
+    step_two_pages_vertical(
+        &ctx,
+        &mut page1,
+        &mut page2,
+        &mut state,
+        vec![egui::Event::PointerMoved(p2_end)],
+    );
+    step_two_pages_vertical(
+        &ctx,
+        &mut page1,
+        &mut page2,
+        &mut state,
+        vec![egui::Event::PointerButton {
+            pos: p2_end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+
+    if let DrawObject::Text { x, y, .. } = &page2.objects[0] {
+        assert!(
+            (*x - 160.0).abs() < 6.0 && (*y - 110.0).abs() < 6.0,
+            "Page 2 object must move cleanly by drag delta (~40, ~30) without teleporting off-page; got ({x}, {y})"
+        );
+    }
+}
+
+#[test]
+fn test_equation_modal_insert_switches_to_lasso_and_allows_move_and_resize() {
+    fn find_text_rect(shape: &egui::Shape, needle: &str) -> Option<egui::Rect> {
+        match shape {
+            egui::Shape::Text(ts) => {
+                if ts.galley.text().contains(needle) {
+                    Some(ts.visual_bounding_rect())
+                } else {
+                    None
+                }
+            }
+            egui::Shape::Vec(v) => v.iter().find_map(|s| find_text_rect(s, needle)),
+            _ => None,
+        }
+    }
+
+    let ctx = egui::Context::default();
+    let mut page = Page::new(PageTemplate::Blank);
+    page.id = "eq-init-transform".into();
+    let mut state = CanvasState {
+        current_tool: ActiveTool::Equation,
+        show_equation_dialog: true,
+        equation_target_page_id: Some(page.id.clone()),
+        equation_insert_pos: Pos2::new(80.0, 90.0),
+        equation_font_size: 20.0,
+        equation_latex_buffer: "\\begin{axis}[title={Data}, grid=major, ybar]\n\\addplot[teal] coordinates {(1, 3) (2, 7) (3, 5)};\n\\end{axis}".into(),
+        ..Default::default()
+    };
+
+    let screen = egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, 900.0));
+    let mut out1 = egui::FullOutput::default();
+    for _ in 0..2 {
+        out1 = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            },
+            |ctx| {
+                super::widgets::render_equation_modal_dialog(ctx, &mut state, &mut page);
+            },
+        );
+    }
+    let btn_center = out1
+        .shapes
+        .iter()
+        .find_map(|cs| find_text_rect(&cs.shape, "Sisipkan ke Halaman"))
+        .expect("Sisipkan button must be visible")
+        .center();
+
+    // Klik tombol "Sisipkan ke Halaman"
+    let _ = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(screen),
+            events: vec![
+                egui::Event::PointerMoved(btn_center),
+                egui::Event::PointerButton {
+                    pos: btn_center,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+            ..Default::default()
+        },
+        |ctx| {
+            super::widgets::render_equation_modal_dialog(ctx, &mut state, &mut page);
+        },
+    );
+    let _ = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(screen),
+            events: vec![egui::Event::PointerButton {
+                pos: btn_center,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+            ..Default::default()
+        },
+        |ctx| {
+            super::widgets::render_equation_modal_dialog(ctx, &mut state, &mut page);
+        },
+    );
+
+    assert!(!state.show_equation_dialog);
+    assert_eq!(
+        state.current_tool,
+        ActiveTool::Lasso,
+        "Inserting LaTeX must switch active tool to Lasso so user can immediately move or resize"
+    );
+    assert_eq!(page.objects.len(), 1);
+    assert_eq!(state.selected_ids.len(), 1);
+
+    let drag_canvas = |page: &mut Page, state: &mut CanvasState, from: Pos2, to: Pos2| {
+        step_test_canvas(
+            &ctx,
+            page,
+            state,
+            vec![
+                egui::Event::PointerMoved(from),
+                egui::Event::PointerButton {
+                    pos: from,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        step_test_canvas(&ctx, page, state, vec![egui::Event::PointerMoved(to)]);
+        step_test_canvas(
+            &ctx,
+            page,
+            state,
+            vec![egui::Event::PointerButton {
+                pos: to,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+    };
+
+    // 1. Geser grafik data langsung setelah inisialisasi
+    let origin = step_test_canvas(&ctx, &mut page, &mut state, vec![]);
+    let frame1 = super::gizmo::SelectionData::compute(&page, &state)
+        .frame
+        .unwrap();
+    let grab_center = origin + frame1.pivot.to_vec2();
+    drag_canvas(
+        &mut page,
+        &mut state,
+        grab_center,
+        grab_center + Vec2::new(45.0, 35.0),
+    );
+
+    let moved_x = match &page.objects[0] {
+        DrawObject::Equation { x, .. } => *x,
+        _ => unreachable!(),
+    };
+    assert!(
+        (moved_x - 125.0).abs() < 6.0,
+        "Newly initialized LaTeX data graph must be immediately draggable, got x={moved_x}"
+    );
+
+    // 2. Perbesar grafik data dengan menyeret handle SE keluar
+    let frame2 = super::gizmo::SelectionData::compute(&page, &state)
+        .frame
+        .unwrap();
+    let (base_w, base_h) = match &page.objects[0] {
+        DrawObject::Equation {
+            latex,
+            font_size,
+            scale,
+            ..
+        } => crate::geometry::equation_approx_size(latex, *font_size, *scale),
+        _ => unreachable!(),
+    };
+    let se2 = origin + frame2.corners[2].to_vec2();
+    let nw2 = origin + frame2.corners[0].to_vec2();
+    drag_canvas(&mut page, &mut state, se2, nw2 + (se2 - nw2) * 1.75);
+
+    let (big_scale, big_w, big_h) = match &page.objects[0] {
+        DrawObject::Equation {
+            latex,
+            font_size,
+            scale,
+            ..
+        } => {
+            let (w, h) = crate::geometry::equation_approx_size(latex, *font_size, *scale);
+            (*scale, w, h)
+        }
+        _ => unreachable!(),
+    };
+    assert!(
+        big_scale > 1.5 && big_w > base_w * 1.5 && big_h > base_h * 1.5,
+        "Data graph must physically grow when scaled up: scale={big_scale}, w={big_w} vs base_w={base_w}"
+    );
+
+    // 3. Perkecil grafik data dengan menyeret handle SE ke dalam
+    let frame3 = super::gizmo::SelectionData::compute(&page, &state)
+        .frame
+        .unwrap();
+    let se3 = origin + frame3.corners[2].to_vec2();
+    let nw3 = origin + frame3.corners[0].to_vec2();
+    drag_canvas(&mut page, &mut state, se3, nw3 + (se3 - nw3) * 0.35);
+
+    let (small_scale, small_w, small_h) = match &page.objects[0] {
+        DrawObject::Equation {
+            latex,
+            font_size,
+            scale,
+            ..
+        } => {
+            let (w, h) = crate::geometry::equation_approx_size(latex, *font_size, *scale);
+            (*scale, w, h)
+        }
+        _ => unreachable!(),
+    };
+    assert!(
+        small_scale < 0.8 && small_w < base_w * 0.8 && small_h < base_h * 0.8,
+        "Data graph must physically shrink when scaled down: scale={small_scale}, w={small_w} vs base_w={base_w}"
+    );
 }
