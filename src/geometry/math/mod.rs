@@ -299,27 +299,177 @@ fn find_matching_end_env(input: &str, env_name: &str, body_start: usize) -> Opti
     None
 }
 
-fn unwrap_trivial_containers(input: &str) -> String {
+fn is_allowed_preamble_command(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        "documentclass"
+            | "usepackage"
+            | "RequirePackage"
+            | "pgfplotsset"
+            | "usetikzlibrary"
+            | "usepgfplotslibrary"
+            | "tikzset"
+            | "definecolor"
+            | "title"
+            | "author"
+            | "date"
+            | "pagestyle"
+            | "thispagestyle"
+            | "setlength"
+            | "newcommand"
+            | "renewcommand"
+            | "geometry"
+            | "graphicspath"
+    )
+}
+
+fn consume_preamble_directive(s: &str, cmd_backslash_pos: usize) -> Option<usize> {
+    let after_bs = s.get(cmd_backslash_pos + 1..)?;
+    let cmd_len: usize = after_bs
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .map(char::len_utf8)
+        .sum();
+    if cmd_len == 0 {
+        return None;
+    }
+    let cmd = &after_bs[..cmd_len];
+    if !is_allowed_preamble_command(cmd) {
+        return None;
+    }
+    let mut pos = cmd_backslash_pos + 1 + cmd_len;
+    if s[pos..].starts_with('*') {
+        pos += 1;
+    }
+    loop {
+        while pos < s.len() && s[pos..].chars().next().is_some_and(char::is_whitespace) {
+            pos += s[pos..].chars().next().unwrap().len_utf8();
+        }
+        if pos >= s.len() {
+            break;
+        }
+        if s[pos..].starts_with('[') {
+            if let Some((_, adv)) = extract_bracket_group(s, pos) {
+                pos += adv;
+                continue;
+            }
+            break;
+        }
+        if s[pos..].starts_with('{') {
+            if let Some((_, adv)) = extract_braced_group(s, pos) {
+                pos += adv;
+                continue;
+            }
+            break;
+        }
+        break;
+    }
+    Some(pos)
+}
+
+fn validate_preamble(preamble: &str) -> Result<(), MathParseError> {
+    let mut i = 0usize;
+    while i < preamble.len() {
+        let ch = preamble[i..].chars().next().unwrap();
+        if ch.is_whitespace() {
+            i += ch.len_utf8();
+            continue;
+        }
+        if ch == '\\' {
+            if let Some(next_i) = consume_preamble_directive(preamble, i) {
+                i = next_i;
+                continue;
+            }
+            let cmd: String = preamble[i + 1..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphabetic())
+                .collect();
+            return Err(MathParseError {
+                message: format!("Perintah LaTeX tidak didukung: '\\{cmd}'"),
+                position: i,
+            });
+        }
+        return Err(MathParseError {
+            message: "Teks tidak valid pada preambul sebelum \\begin{document}".into(),
+            position: i,
+        });
+    }
+    Ok(())
+}
+
+fn unwrap_trivial_containers(input: &str) -> Result<String, MathParseError> {
     let mut s = strip_latex_comments(input).trim().to_string();
-    for env in ["center", "table", "figure"] {
-        let prefix = format!(r"\begin{{{env}}}");
-        if s.starts_with(&prefix) {
-            let mut body_start = prefix.len();
-            if s[body_start..].trim_start().starts_with('[') {
-                let trim_l = s.len() - s[body_start..].trim_start().len();
-                if let Some((_, adv)) = extract_bracket_group(&s, trim_l) {
-                    body_start = trim_l + adv;
-                }
-            }
-            if let Some((end_start, end_after)) = find_matching_end_env(&s, env, body_start)
-                && s[end_after..].trim().is_empty()
-            {
-                s = s[body_start..end_start].trim().to_string();
-            }
+
+    if let Some(doc_start) = s.find(r"\begin{document}") {
+        validate_preamble(s[..doc_start].trim())?;
+        let mut body_start = doc_start + r"\begin{document}".len();
+        while body_start < s.len()
+            && s[body_start..]
+                .chars()
+                .next()
+                .is_some_and(char::is_whitespace)
+        {
+            body_start += s[body_start..].chars().next().unwrap().len_utf8();
+        }
+        let (end_start, end_after) =
+            find_matching_end_env(&s, "document", body_start).ok_or_else(|| MathParseError {
+                message: r"\begin{document} tidak memiliki \end{document}".into(),
+                position: doc_start,
+            })?;
+        let trailing = s[end_after..].trim();
+        if !trailing.is_empty() {
+            return Err(MathParseError {
+                message: "Konten tidak valid setelah \\end{document}".into(),
+                position: end_after,
+            });
+        }
+        s = s[body_start..end_start].trim().to_string();
+    }
+
+    // Kupas direktif konfigurasi/preambul opsional yang berada sebelum konten utama (baik di luar maupun awal document)
+    let mut cursor = 0usize;
+    while cursor < s.len() {
+        let trimmed_off = s.len() - s[cursor..].trim_start().len();
+        cursor = trimmed_off;
+        if s[cursor..].starts_with('\\')
+            && let Some(next_c) = consume_preamble_directive(&s, cursor)
+        {
+            cursor = next_c;
+        } else {
+            break;
         }
     }
-    s = s.replace(r"\centering", "");
-    s.trim().to_string()
+    if cursor > 0 {
+        s = s[cursor..].trim().to_string();
+    }
+
+    loop {
+        let mut unwrapped = false;
+        for env in ["center", "table", "figure"] {
+            let prefix = format!(r"\begin{{{env}}}");
+            if s.starts_with(&prefix) {
+                let mut body_start = prefix.len();
+                if s[body_start..].trim_start().starts_with('[') {
+                    let trim_l = s.len() - s[body_start..].trim_start().len();
+                    if let Some((_, adv)) = extract_bracket_group(&s, trim_l) {
+                        body_start = trim_l + adv;
+                    }
+                }
+                if let Some((end_start, end_after)) = find_matching_end_env(&s, env, body_start)
+                    && s[end_after..].trim().is_empty()
+                {
+                    s = s[body_start..end_start].trim().to_string();
+                    unwrapped = true;
+                    break;
+                }
+            }
+        }
+        if !unwrapped {
+            break;
+        }
+    }
+    s = s.replace(r"\centering", "").replace(r"\maketitle", "");
+    Ok(s.trim().to_string())
 }
 
 fn parse_env_block(env_name: &str, rest: &str) -> Result<(MathNode, usize), MathParseError> {
@@ -401,7 +551,7 @@ fn parse_env_block(env_name: &str, rest: &str) -> Result<(MathNode, usize), Math
 
 /// Parser untuk mengubah input LaTeX (rumus matematika, tabel/matriks, grafik, maupun geometri) menjadi AST `MathNode`.
 pub fn parse_latex_math(input: &str) -> Result<Vec<MathNode>, MathParseError> {
-    let cleaned = unwrap_trivial_containers(input);
+    let cleaned = unwrap_trivial_containers(input)?;
     if !cleaned.contains(r"\begin{") {
         return parse_inline_math_segment(&cleaned);
     }
@@ -1016,6 +1166,85 @@ impl MathLayout {
         Self::compute(&nodes, font_size)
     }
 
+    /// Menghitung tata letak 2D pada ukuran font dasar lalu menskalakan seluruh geometri secara linier eksak.
+    pub fn compute_scaled(latex: &str, font_size: f32, scale: f32) -> Self {
+        let mut layout = Self::compute_from_str(latex, font_size);
+        layout.scale_uniform(scale);
+        layout
+    }
+
+    /// Menskalakan seluruh dimensi dan primitif item tata letak secara proporsional seragam terhadap `(0, 0)`.
+    pub fn scale_uniform(&mut self, scale: f32) {
+        let s = if scale.is_finite() && scale > 1e-4 {
+            scale
+        } else {
+            1.0
+        };
+        if (s - 1.0).abs() < 1e-6 {
+            return;
+        }
+        self.width *= s;
+        self.height *= s;
+        self.ascent *= s;
+        self.descent *= s;
+        for item in &mut self.items {
+            match item {
+                MathLayoutItem::Glyph { font_size, pos, .. }
+                | MathLayoutItem::ColoredGlyph { font_size, pos, .. } => {
+                    *font_size *= s;
+                    pos.x *= s;
+                    pos.y *= s;
+                }
+                MathLayoutItem::Line {
+                    start,
+                    end,
+                    stroke_width,
+                }
+                | MathLayoutItem::StyledLine {
+                    start,
+                    end,
+                    stroke_width,
+                    ..
+                } => {
+                    start.x *= s;
+                    start.y *= s;
+                    end.x *= s;
+                    end.y *= s;
+                    *stroke_width *= s;
+                }
+                MathLayoutItem::Polyline {
+                    points,
+                    stroke_width,
+                    ..
+                }
+                | MathLayoutItem::Polygon {
+                    points,
+                    stroke_width,
+                    ..
+                } => {
+                    for p in points {
+                        p.x *= s;
+                        p.y *= s;
+                    }
+                    *stroke_width *= s;
+                }
+                MathLayoutItem::Ellipse {
+                    center,
+                    rx,
+                    ry,
+                    stroke_width,
+                    ..
+                } => {
+                    center.x *= s;
+                    center.y *= s;
+                    *rx *= s;
+                    *ry *= s;
+                    *stroke_width *= s;
+                }
+            }
+        }
+    }
+
     /// Menghitung tata letak 2D langsung dari string LaTeX dengan validasi syntax penuh
     pub fn compute_from_str_checked(latex: &str, font_size: f32) -> Result<Self, MathParseError> {
         let nodes = parse_latex_math(latex)?;
@@ -1341,7 +1570,7 @@ impl MathLayout {
                     is_italic,
                     pos: gpos,
                 } => {
-                    let scaled_font = (*font_size * zoom).clamp(4.0, 160.0);
+                    let scaled_font = (*font_size * zoom).clamp(2.0, 400.0);
                     let font_id = egui::FontId::new(scaled_font, egui::FontFamily::Proportional);
                     let final_pos = to_screen(*gpos);
                     let mut job = egui::text::LayoutJob::default();
@@ -1371,7 +1600,7 @@ impl MathLayout {
                     color: item_col,
                 } => {
                     let eff_col = item_col.unwrap_or(color);
-                    let scaled_font = (*font_size * zoom).clamp(4.0, 160.0);
+                    let scaled_font = (*font_size * zoom).clamp(2.0, 400.0);
                     let (fam, needs_faux_bold) = painter.fonts(|fonts| {
                         let reg = fonts.families();
                         crate::model::FontFamilyPreset::SansSerif
@@ -1484,13 +1713,13 @@ impl MathLayout {
                         ));
                     }
                     if let Some(sc) = stroke_color {
-                        let stroke = Stroke::new((*stroke_width * zoom).max(0.8), *sc);
+                        let stroke = Stroke::new((*stroke_width * zoom).max(0.4), *sc);
                         for i in 0..screen_pts.len() {
                             let j = (i + 1) % screen_pts.len();
                             painter.line_segment([screen_pts[i], screen_pts[j]], stroke);
                         }
                     } else if fill.is_none() {
-                        let stroke = Stroke::new((*stroke_width * zoom).max(0.8), color);
+                        let stroke = Stroke::new((*stroke_width * zoom).max(0.4), color);
                         for i in 0..screen_pts.len() {
                             let j = (i + 1) % screen_pts.len();
                             painter.line_segment([screen_pts[i], screen_pts[j]], stroke);

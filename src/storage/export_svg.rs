@@ -788,8 +788,8 @@ pub fn export_page_to_svg(page: &Page) -> String {
                 rotation,
                 ..
             } => {
-                let eff_font = *font_size * *scale;
-                let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+                let layout =
+                    crate::geometry::math::MathLayout::compute_scaled(latex, *font_size, *scale);
                 out.push_str(&layout.to_svg(*x, *y, color, *rotation));
             }
         }

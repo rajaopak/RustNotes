@@ -921,8 +921,8 @@ pub fn render_page_to_rgba_image(
                 rotation,
                 ..
             } => {
-                let eff_font = *font_size * *eq_scale;
-                let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+                let layout =
+                    crate::geometry::math::MathLayout::compute_scaled(latex, *font_size, *eq_scale);
                 let col = [color.r, color.g, color.b, color.a];
                 let center_x = (*x + layout.width * 0.5) * scale;
                 let center_y = (*y + layout.height * 0.5) * scale;

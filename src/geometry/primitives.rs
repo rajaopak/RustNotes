@@ -80,9 +80,17 @@ pub fn text_approx_size(text: &str, font_size: f32) -> (f32, f32) {
 }
 
 pub fn equation_approx_size(latex: &str, font_size: f32, scale: f32) -> (f32, f32) {
-    let eff_font = font_size * scale;
-    let layout = super::math::MathLayout::compute_from_str(latex, eff_font);
-    (layout.width.max(20.0), layout.height.max(eff_font))
+    let eff_scale = if scale.is_finite() && scale > 1e-4 {
+        scale
+    } else {
+        1.0
+    };
+    let eff_font = font_size * eff_scale;
+    let layout = super::math::MathLayout::compute_scaled(latex, font_size, eff_scale);
+    (
+        layout.width.max(20.0 * eff_scale),
+        layout.height.max(eff_font.max(4.0)),
+    )
 }
 
 pub fn object_bounds(obj: &DrawObject) -> Rect {

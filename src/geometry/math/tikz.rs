@@ -1,10 +1,81 @@
-use super::expr::{eval_const_expr, eval_math_expr};
+use super::expr::{eval_const_expr, eval_math_expr, eval_math_expr_2d};
 use super::{
     MathLayoutItem, MathLineDash, MathParseError, extract_braced_group, extract_bracket_group,
     strip_latex_comments,
 };
 use eframe::egui::{Color32, Pos2};
 use std::collections::HashMap;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ColormapKind {
+    #[default]
+    PgfpStandard,
+    Viridis,
+    Hot,
+    Cool,
+    Bluered,
+}
+
+fn parse_colormap_name(s: &str) -> Option<ColormapKind> {
+    let low = s.trim().to_ascii_lowercase();
+    let name = low.strip_prefix("colormap/").unwrap_or(&low).trim();
+    match name {
+        "viridis" => Some(ColormapKind::Viridis),
+        "hot" => Some(ColormapKind::Hot),
+        "cool" => Some(ColormapKind::Cool),
+        "bluered" => Some(ColormapKind::Bluered),
+        "jet" | "pgfpstandard" | "standard" => Some(ColormapKind::PgfpStandard),
+        _ => None,
+    }
+}
+
+fn sample_colormap(kind: ColormapKind, t_raw: f32) -> Color32 {
+    let t = t_raw.clamp(0.0, 1.0);
+    let stops: &[(f32, [u8; 3])] = match kind {
+        ColormapKind::PgfpStandard => &[
+            (0.00, [42, 72, 184]),
+            (0.28, [32, 168, 208]),
+            (0.54, [78, 194, 108]),
+            (0.78, [242, 202, 52]),
+            (1.00, [222, 54, 42]),
+        ],
+        ColormapKind::Viridis => &[
+            (0.00, [68, 1, 84]),
+            (0.25, [59, 82, 139]),
+            (0.50, [33, 145, 140]),
+            (0.75, [94, 201, 98]),
+            (1.00, [253, 231, 37]),
+        ],
+        ColormapKind::Hot => &[
+            (0.00, [35, 15, 25]),
+            (0.35, [190, 35, 30]),
+            (0.70, [242, 145, 28]),
+            (1.00, [252, 240, 120]),
+        ],
+        ColormapKind::Cool => &[
+            (0.00, [40, 210, 235]),
+            (0.50, [135, 120, 235]),
+            (1.00, [235, 55, 210]),
+        ],
+        ColormapKind::Bluered => &[
+            (0.00, [36, 92, 214]),
+            (0.50, [225, 228, 238]),
+            (1.00, [218, 48, 56]),
+        ],
+    };
+    for w in stops.windows(2) {
+        let (t0, c0) = w[0];
+        let (t1, c1) = w[1];
+        if t <= t1 {
+            let u = ((t - t0) / (t1 - t0).max(1e-6)).clamp(0.0, 1.0);
+            let lerp =
+                |a: u8, b: u8| -> u8 { ((a as f32) + ((b as f32) - (a as f32)) * u).round() as u8 };
+            return Color32::from_rgb(lerp(c0[0], c1[0]), lerp(c0[1], c1[1]), lerp(c0[2], c1[2]));
+        }
+    }
+    let last = stops.last().unwrap().1;
+    Color32::from_rgb(last[0], last[1], last[2])
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DiagramSpec {
@@ -68,8 +139,14 @@ pub struct TikzStyle {
     pub only_marks: bool,
     pub ybar: bool,
     pub domain: Option<(f64, f64)>,
+    pub y_domain: Option<(f64, f64)>,
     pub samples: Option<usize>,
+    pub samples_y: Option<usize>,
     pub step: Option<f64>,
+    pub surf: bool,
+    pub mesh: bool,
+    pub shader_flat: bool,
+    pub colormap: Option<ColormapKind>,
 }
 
 impl Default for TikzStyle {
@@ -91,8 +168,14 @@ impl Default for TikzStyle {
             only_marks: false,
             ybar: false,
             domain: None,
+            y_domain: None,
             samples: None,
+            samples_y: None,
             step: None,
+            surf: false,
+            mesh: false,
+            shader_flat: false,
+            colormap: None,
         }
     }
 }
@@ -163,6 +246,9 @@ pub struct TikzPicture {
 pub enum AddPlotSource {
     Expression(String),
     Coordinates(Vec<(f64, f64)>),
+    Surface3D(String),
+    Parametric3D(String, String, String),
+    Coordinates3D(Vec<(f64, f64, f64)>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -171,19 +257,37 @@ pub struct AddPlotSpec {
     pub source: AddPlotSource,
 }
 
+impl AddPlotSpec {
+    pub fn is_3d(&self) -> bool {
+        matches!(
+            self.source,
+            AddPlotSource::Surface3D(_)
+                | AddPlotSource::Parametric3D(..)
+                | AddPlotSource::Coordinates3D(_)
+        )
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AxisPlot {
     pub title: Option<String>,
     pub xlabel: Option<String>,
     pub ylabel: Option<String>,
+    pub zlabel: Option<String>,
     pub xmin: Option<f64>,
     pub xmax: Option<f64>,
     pub ymin: Option<f64>,
     pub ymax: Option<f64>,
+    pub zmin: Option<f64>,
+    pub zmax: Option<f64>,
     pub grid: bool,
     pub axis_lines: AxisLinesMode,
     pub domain: (f64, f64),
+    pub y_domain: Option<(f64, f64)>,
     pub samples: usize,
+    pub samples_y: Option<usize>,
+    pub view: Option<(f64, f64)>,
+    pub colormap: ColormapKind,
     pub ybar: bool,
     pub plots: Vec<AddPlotSpec>,
     pub legend_entries: Vec<String>,
@@ -376,10 +480,26 @@ fn parse_tikz_style(opts_str: &str, default_draw: bool, default_fill: bool) -> T
                         st.domain = Some((a, b));
                     }
                 }
+                "y domain" | "domain y" => {
+                    if let Some((a_s, b_s)) = v.split_once(':')
+                        && let (Some(a), Some(b)) = (eval_const_expr(a_s), eval_const_expr(b_s))
+                        && b > a
+                    {
+                        st.y_domain = Some((a, b));
+                    }
+                }
                 "samples" => {
                     if let Ok(n) = v.parse::<usize>() {
-                        st.samples = Some(n.clamp(8, 400));
+                        st.samples = Some(n.clamp(6, 400));
                     }
+                }
+                "samples y" => {
+                    if let Ok(n) = v.parse::<usize>() {
+                        st.samples_y = Some(n.clamp(6, 64));
+                    }
+                }
+                "shader" => {
+                    st.shader_flat = v.eq_ignore_ascii_case("flat");
                 }
                 "step" => {
                     if let Some(sv) = parse_length_num(v)
@@ -388,11 +508,17 @@ fn parse_tikz_style(opts_str: &str, default_draw: bool, default_fill: bool) -> T
                         st.step = Some(sv);
                     }
                 }
-                _ => {}
+                _ => {
+                    if let Some(cm) = parse_colormap_name(&k) {
+                        st.colormap = Some(cm);
+                    }
+                }
             }
         } else {
             let low = opt.to_ascii_lowercase();
             match low.as_str() {
+                "surf" => st.surf = true,
+                "mesh" => st.mesh = true,
                 "draw" => st.draw_disabled = false,
                 "fill" => {
                     if st.fill_color.is_none() {
@@ -429,7 +555,9 @@ fn parse_tikz_style(opts_str: &str, default_draw: bool, default_fill: bool) -> T
                 "only marks" => st.only_marks = true,
                 "ybar" => st.ybar = true,
                 _ => {
-                    if let Some(col) = parse_tikz_color(opt) {
+                    if let Some(cm) = parse_colormap_name(&low) {
+                        st.colormap = Some(cm);
+                    } else if let Some(col) = parse_tikz_color(opt) {
                         saw_bare_color = Some(col);
                     }
                 }
@@ -1019,6 +1147,54 @@ fn parse_coordinate_pairs(raw: &str) -> Result<Vec<(f64, f64)>, MathParseError> 
     Ok(pts)
 }
 
+fn parse_coordinate_triplets(raw: &str) -> Result<Vec<(f64, f64, f64)>, MathParseError> {
+    let mut pts = Vec::new();
+    let mut i = 0;
+    while i < raw.len() {
+        i = skip_ws(raw, i);
+        if i >= raw.len() {
+            break;
+        }
+        if raw[i..].starts_with('(')
+            && let Some((inner, adv)) = extract_paren_group(raw, i)
+        {
+            let parts: Vec<&str> = inner.split(',').collect();
+            if parts.len() >= 3
+                && let (Some(x), Some(y), Some(z)) = (
+                    eval_const_expr(parts[0].trim()),
+                    eval_const_expr(parts[1].trim()),
+                    eval_const_expr(parts[2].trim()),
+                )
+            {
+                pts.push((x, y, z));
+            }
+            i += adv;
+            continue;
+        }
+        let ch = raw[i..].chars().next().unwrap();
+        i += ch.len_utf8();
+    }
+    Ok(pts)
+}
+
+fn parse_view_angles(raw: &str) -> Option<(f64, f64)> {
+    let normalized = raw
+        .replace("}{", ",")
+        .replace(['{', '}', ';'], " ")
+        .trim()
+        .to_string();
+    let nums: Vec<f64> = normalized
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|s| !s.is_empty())
+        .filter_map(eval_const_expr)
+        .collect();
+    if nums.len() >= 2 {
+        Some((nums[0], nums[1]))
+    } else {
+        None
+    }
+}
+
 fn parse_tikz_statements(stmts_raw: Vec<String>) -> Result<Vec<TikzStmt>, MathParseError> {
     let mut stmts = Vec::new();
     for s_raw in stmts_raw {
@@ -1087,14 +1263,21 @@ pub fn parse_axis_env(opts: Option<&str>, body: &str) -> Result<AxisPlot, MathPa
         title: None,
         xlabel: None,
         ylabel: None,
+        zlabel: None,
         xmin: None,
         xmax: None,
         ymin: None,
         ymax: None,
+        zmin: None,
+        zmax: None,
         grid: false,
         axis_lines: AxisLinesMode::Box,
         domain: (-5.0, 5.0),
+        y_domain: None,
         samples: 80,
+        samples_y: None,
+        view: None,
+        colormap: ColormapKind::default(),
         ybar: false,
         plots: Vec::new(),
         legend_entries: Vec::new(),
@@ -1111,10 +1294,13 @@ pub fn parse_axis_env(opts: Option<&str>, body: &str) -> Result<AxisPlot, MathPa
                     "title" => plot.title = Some(v.to_string()),
                     "xlabel" => plot.xlabel = Some(v.to_string()),
                     "ylabel" => plot.ylabel = Some(v.to_string()),
+                    "zlabel" => plot.zlabel = Some(v.to_string()),
                     "xmin" => plot.xmin = eval_const_expr(v),
                     "xmax" => plot.xmax = eval_const_expr(v),
                     "ymin" => plot.ymin = eval_const_expr(v),
                     "ymax" => plot.ymax = eval_const_expr(v),
+                    "zmin" => plot.zmin = eval_const_expr(v),
+                    "zmax" => plot.zmax = eval_const_expr(v),
                     "grid" => plot.grid = !v.eq_ignore_ascii_case("none"),
                     "axis lines" => {
                         plot.axis_lines = match v.to_ascii_lowercase().as_str() {
@@ -1131,15 +1317,44 @@ pub fn parse_axis_env(opts: Option<&str>, body: &str) -> Result<AxisPlot, MathPa
                             plot.domain = (a, b);
                         }
                     }
-                    "samples" => {
-                        if let Ok(n) = v.parse::<usize>() {
-                            plot.samples = n.clamp(8, 400);
+                    "y domain" | "domain y" => {
+                        if let Some((a_s, b_s)) = v.split_once(':')
+                            && let (Some(a), Some(b)) = (eval_const_expr(a_s), eval_const_expr(b_s))
+                            && b > a
+                        {
+                            plot.y_domain = Some((a, b));
                         }
                     }
-                    _ => {}
+                    "samples" => {
+                        if let Ok(n) = v.parse::<usize>() {
+                            plot.samples = n.clamp(6, 400);
+                        }
+                    }
+                    "samples y" => {
+                        if let Ok(n) = v.parse::<usize>() {
+                            plot.samples_y = Some(n.clamp(6, 64));
+                        }
+                    }
+                    "view" => {
+                        if let Some(angles) = parse_view_angles(v_raw) {
+                            plot.view = Some(angles);
+                        }
+                    }
+                    "colormap" | "colormap name" => {
+                        if let Some(cm) = parse_colormap_name(v) {
+                            plot.colormap = cm;
+                        }
+                    }
+                    _ => {
+                        if let Some(cm) = parse_colormap_name(&k) {
+                            plot.colormap = cm;
+                        }
+                    }
                 }
             } else if trimmed.eq_ignore_ascii_case("ybar") {
                 plot.ybar = true;
+            } else if let Some(cm) = parse_colormap_name(trimmed) {
+                plot.colormap = cm;
             }
         }
     }
@@ -1154,8 +1369,13 @@ pub fn parse_axis_env(opts: Option<&str>, body: &str) -> Result<AxisPlot, MathPa
 
     for raw_stmt in split_semicolon_stmts(&clean) {
         let s = raw_stmt.trim();
-        if s.starts_with(r"\addplot") {
-            let mut i = r"\addplot".len();
+        let is_addplot3 = s.starts_with(r"\addplot3");
+        if is_addplot3 || s.starts_with(r"\addplot") {
+            let mut i = if is_addplot3 {
+                r"\addplot3".len()
+            } else {
+                r"\addplot".len()
+            };
             if s[i..].starts_with('+') {
                 i += 1;
             }
@@ -1193,7 +1413,53 @@ pub fn parse_axis_env(opts: Option<&str>, body: &str) -> Result<AxisPlot, MathPa
                 let offset = s.len() - after_kw.len();
                 i = skip_ws(s, offset);
             }
-            if i < s.len() && s[i..].starts_with("coordinates") {
+
+            if is_addplot3 {
+                if i < s.len() && s[i..].starts_with("coordinates") {
+                    i = skip_ws(s, i + "coordinates".len());
+                    if let Some((coords_str, _)) = extract_braced_group(s, i) {
+                        let pts = parse_coordinate_triplets(&coords_str)?;
+                        plot.plots.push(AddPlotSpec {
+                            style,
+                            source: AddPlotSource::Coordinates3D(pts),
+                        });
+                    }
+                } else if i < s.len() && s[i..].starts_with('(') {
+                    if let Some((tuple_str, _)) = extract_paren_group(s, i) {
+                        let parts = split_top_level_commas(&tuple_str);
+                        if parts.len() >= 3 {
+                            plot.plots.push(AddPlotSpec {
+                                style,
+                                source: AddPlotSource::Parametric3D(
+                                    strip_outer_braces(parts[0].trim()).to_string(),
+                                    strip_outer_braces(parts[1].trim()).to_string(),
+                                    strip_outer_braces(parts[2].trim()).to_string(),
+                                ),
+                            });
+                        }
+                    }
+                } else {
+                    if !style.surf && !style.mesh && !style.only_marks {
+                        style.surf = true;
+                    }
+                    if i < s.len() && s[i..].starts_with('{') {
+                        if let Some((expr_str, _)) = extract_braced_group(s, i) {
+                            plot.plots.push(AddPlotSpec {
+                                style,
+                                source: AddPlotSource::Surface3D(expr_str),
+                            });
+                        }
+                    } else {
+                        let expr_str = s[i..].trim().to_string();
+                        if !expr_str.is_empty() {
+                            plot.plots.push(AddPlotSpec {
+                                style,
+                                source: AddPlotSource::Surface3D(expr_str),
+                            });
+                        }
+                    }
+                }
+            } else if i < s.len() && s[i..].starts_with("coordinates") {
                 i = skip_ws(s, i + "coordinates".len());
                 if let Some((coords_str, _)) = extract_braced_group(s, i) {
                     let pts = parse_coordinate_pairs(&coords_str)?;
@@ -1398,8 +1664,8 @@ fn format_tick(v: f64) -> String {
 }
 
 fn layout_tikzpicture(pic: &TikzPicture, font_size: f32) -> Vec<MathLayoutItem> {
-    let unit_px = 42.0 * pic.scale * (font_size / 20.0).clamp(0.5, 2.5);
-    let label_fs = (font_size * 0.78).clamp(9.0, 28.0);
+    let unit_px = 42.0 * pic.scale * (font_size / 20.0).clamp(0.2, 6.0);
+    let label_fs = (font_size * 0.78).clamp(6.0, 72.0);
     let mut named_pts: HashMap<String, Pos2> = HashMap::new();
     let mut node_radii: HashMap<String, f32> = HashMap::new();
 
@@ -1820,13 +2086,585 @@ fn layout_tikzpicture(pic: &TikzPicture, font_size: f32) -> Vec<MathLayoutItem> 
     items
 }
 
+fn layout_axis_plot_3d(ax: &AxisPlot, font_size: f32) -> Vec<MathLayoutItem> {
+    let box_scale = (font_size * 11.2).clamp(90.0, 900.0);
+    let label_fs = (font_size * 0.72).clamp(6.0, 64.0);
+    let tick_fs = (font_size * 0.56).clamp(5.0, 48.0);
+
+    let (az_deg, el_deg) = ax.view.unwrap_or((-37.5, 30.0));
+    let az = (az_deg as f32).to_radians();
+    let el = (el_deg as f32).to_radians();
+
+    // Basis ortonormal kamera 3D tangan-kanan (vektor Z mengarah ke atas)
+    let eye = (az.sin() * el.cos(), -az.cos() * el.cos(), el.sin());
+    let right = (az.cos(), az.sin(), 0.0_f32);
+    let up = (-az.sin() * el.sin(), az.cos() * el.sin(), el.cos());
+
+    struct SurfaceGrid<'a> {
+        spec: &'a AddPlotSpec,
+        nx: usize,
+        ny: usize,
+        pts: Vec<Option<(f64, f64, f64)>>,
+    }
+
+    type Series3D<'a> = (&'a AddPlotSpec, Vec<(f64, f64, f64)>);
+    let mut grids: Vec<SurfaceGrid<'_>> = Vec::new();
+    let mut param_curves: Vec<Series3D<'_>> = Vec::new();
+    let mut scatter_pts: Vec<Series3D<'_>> = Vec::new();
+
+    let mut data_xmin = f64::INFINITY;
+    let mut data_xmax = f64::NEG_INFINITY;
+    let mut data_ymin = f64::INFINITY;
+    let mut data_ymax = f64::NEG_INFINITY;
+    let mut data_zmin = f64::INFINITY;
+    let mut data_zmax = f64::NEG_INFINITY;
+
+    let mut include_pt = |x: f64, y: f64, z: f64| {
+        data_xmin = data_xmin.min(x);
+        data_xmax = data_xmax.max(x);
+        data_ymin = data_ymin.min(y);
+        data_ymax = data_ymax.max(y);
+        data_zmin = data_zmin.min(z);
+        data_zmax = data_zmax.max(z);
+    };
+
+    for pspec in &ax.plots {
+        match &pspec.source {
+            AddPlotSource::Surface3D(expr) => {
+                let (dx0, dx1) = pspec.style.domain.unwrap_or(ax.domain);
+                let dx0 = ax.xmin.unwrap_or(dx0);
+                let dx1 = ax.xmax.unwrap_or(dx1);
+                let (dy0, dy1) = pspec.style.y_domain.or(ax.y_domain).unwrap_or((dx0, dx1));
+                let dy0 = ax.ymin.unwrap_or(dy0);
+                let dy1 = ax.ymax.unwrap_or(dy1);
+
+                let default_samples = if ax.samples == 80 && pspec.style.samples.is_none() {
+                    24
+                } else {
+                    pspec.style.samples.unwrap_or(ax.samples)
+                };
+                let nx = default_samples.clamp(6, 32);
+                let ny = pspec
+                    .style
+                    .samples_y
+                    .or(ax.samples_y)
+                    .unwrap_or(nx)
+                    .clamp(6, 32);
+
+                let mut pts = Vec::with_capacity(nx * ny);
+                for iy in 0..ny {
+                    let ty = iy as f64 / ((ny - 1) as f64);
+                    let yv = dy0 + (dy1 - dy0) * ty;
+                    for ix in 0..nx {
+                        let tx = ix as f64 / ((nx - 1) as f64);
+                        let xv = dx0 + (dx1 - dx0) * tx;
+                        if let Some(zv) = eval_math_expr_2d(expr, xv, yv)
+                            && zv.abs() < 1e6
+                        {
+                            include_pt(xv, yv, zv);
+                            pts.push(Some((xv, yv, zv)));
+                        } else {
+                            pts.push(None);
+                        }
+                    }
+                }
+                grids.push(SurfaceGrid {
+                    spec: pspec,
+                    nx,
+                    ny,
+                    pts,
+                });
+            }
+            AddPlotSource::Parametric3D(fx, fy, fz) => {
+                let (d0, d1) = pspec.style.domain.unwrap_or(ax.domain);
+                let n = pspec.style.samples.unwrap_or(80).clamp(12, 240);
+                let mut pts = Vec::with_capacity(n);
+                for k in 0..n {
+                    let tv = d0 + (d1 - d0) * (k as f64 / ((n - 1) as f64));
+                    if let (Some(xv), Some(yv), Some(zv)) = (
+                        eval_math_expr(fx, tv),
+                        eval_math_expr(fy, tv),
+                        eval_math_expr(fz, tv),
+                    ) {
+                        include_pt(xv, yv, zv);
+                        pts.push((xv, yv, zv));
+                    }
+                }
+                param_curves.push((pspec, pts));
+            }
+            AddPlotSource::Coordinates3D(pts) => {
+                let mut valid = Vec::with_capacity(pts.len());
+                for &(xv, yv, zv) in pts {
+                    if xv.is_finite() && yv.is_finite() && zv.is_finite() {
+                        include_pt(xv, yv, zv);
+                        valid.push((xv, yv, zv));
+                    }
+                }
+                scatter_pts.push((pspec, valid));
+            }
+            _ => {}
+        }
+    }
+
+    let mut xmin = ax.xmin.unwrap_or_else(|| {
+        if data_xmin.is_finite() {
+            data_xmin
+        } else {
+            ax.domain.0
+        }
+    });
+    let mut xmax = ax.xmax.unwrap_or_else(|| {
+        if data_xmax.is_finite() {
+            data_xmax
+        } else {
+            ax.domain.1
+        }
+    });
+    if (xmax - xmin).abs() < 1e-6 {
+        xmin -= 1.0;
+        xmax += 1.0;
+    }
+
+    let (yd0, yd1) = ax.y_domain.unwrap_or(ax.domain);
+    let mut ymin = ax.ymin.unwrap_or_else(|| {
+        if data_ymin.is_finite() {
+            data_ymin
+        } else {
+            yd0
+        }
+    });
+    let mut ymax = ax.ymax.unwrap_or_else(|| {
+        if data_ymax.is_finite() {
+            data_ymax
+        } else {
+            yd1
+        }
+    });
+    if (ymax - ymin).abs() < 1e-6 {
+        ymin -= 1.0;
+        ymax += 1.0;
+    }
+
+    let mut zmin = ax.zmin.unwrap_or_else(|| {
+        if data_zmin.is_finite() {
+            data_zmin
+        } else {
+            -1.0
+        }
+    });
+    let mut zmax = ax.zmax.unwrap_or_else(|| {
+        if data_zmax.is_finite() {
+            data_zmax
+        } else {
+            1.0
+        }
+    });
+    if (zmax - zmin).abs() < 1e-9 {
+        zmin -= 0.5;
+        zmax += 0.5;
+    } else if ax.zmin.is_none() || ax.zmax.is_none() {
+        let zpad = (zmax - zmin) * 0.06;
+        if ax.zmin.is_none() {
+            zmin -= zpad;
+        }
+        if ax.zmax.is_none() {
+            zmax += zpad;
+        }
+    }
+
+    let to_norm = |x: f64, y: f64, z: f64| -> (f32, f32, f32) {
+        let nx = (((x - xmin) / (xmax - xmin).max(1e-9)) - 0.5) as f32;
+        let ny = (((y - ymin) / (ymax - ymin).max(1e-9)) - 0.5) as f32;
+        let nz = (((z - zmin) / (zmax - zmin).max(1e-9)) - 0.5) as f32;
+        (nx, ny, nz)
+    };
+    let proj_norm = |nx: f32, ny: f32, nz: f32| -> (Pos2, f32) {
+        let sx = (nx * right.0 + ny * right.1) * box_scale;
+        let sy = -(nx * up.0 + ny * up.1 + nz * up.2) * box_scale;
+        let depth = nx * eye.0 + ny * eye.1 + nz * eye.2;
+        (Pos2::new(sx, sy), depth)
+    };
+    let proj_data = |x: f64, y: f64, z: f64| -> (Pos2, f32, (f32, f32, f32)) {
+        let n = to_norm(x, y, z);
+        let (p, d) = proj_norm(n.0, n.1, n.2);
+        (p, d, n)
+    };
+
+    let mut items = Vec::new();
+
+    // Tentukan sudut terjauh dari kamera sebagai pertemuan 3 bidang belakang kotak 3D
+    let bx = if eye.0 >= 0.0 { -0.5_f32 } else { 0.5_f32 };
+    let by = if eye.1 >= 0.0 { -0.5_f32 } else { 0.5_f32 };
+    let bz = if eye.2 >= 0.0 { -0.5_f32 } else { 0.5_f32 };
+    let fx = -bx;
+    let fy = -by;
+    let fz = -bz;
+
+    let wall_fill = Some(Color32::from_rgba_unmultiplied(244, 247, 252, 170));
+    let wall_stroke = Some(Color32::from_rgb(175, 182, 194));
+    let wall_faces = [
+        [(bx, by, bz), (fx, by, bz), (fx, fy, bz), (bx, fy, bz)],
+        [(bx, by, bz), (fx, by, bz), (fx, by, fz), (bx, by, fz)],
+        [(bx, by, bz), (bx, fy, bz), (bx, fy, fz), (bx, by, fz)],
+    ];
+    for face in wall_faces {
+        items.push(MathLayoutItem::Polygon {
+            points: face
+                .into_iter()
+                .map(|(x, y, z)| proj_norm(x, y, z).0)
+                .collect(),
+            fill: wall_fill,
+            stroke_color: wall_stroke,
+            stroke_width: 0.9,
+        });
+    }
+
+    // Garis kisi tipis pada lantai & dinding belakang kotak 3D
+    let x_ticks = compute_nice_ticks(xmin, xmax, 4);
+    let y_ticks = compute_nice_ticks(ymin, ymax, 4);
+    let z_ticks = compute_nice_ticks(zmin, zmax, 4);
+    let grid_col = Some(Color32::from_rgba_unmultiplied(150, 158, 172, 130));
+    let emit_grid_seg =
+        |items: &mut Vec<MathLayoutItem>, p0: (f32, f32, f32), p1: (f32, f32, f32)| {
+            items.push(MathLayoutItem::StyledLine {
+                start: proj_norm(p0.0, p0.1, p0.2).0,
+                end: proj_norm(p1.0, p1.1, p1.2).0,
+                stroke_width: 0.65,
+                color: grid_col,
+                dash: MathLineDash::Dotted,
+                arrow_start: false,
+                arrow_end: false,
+            });
+        };
+    for &xt in &x_ticks {
+        let nx = (((xt - xmin) / (xmax - xmin).max(1e-9)) - 0.5) as f32;
+        if (-0.501..=0.501).contains(&nx) {
+            emit_grid_seg(&mut items, (nx, by, bz), (nx, fy, bz));
+            emit_grid_seg(&mut items, (nx, by, bz), (nx, by, fz));
+        }
+    }
+    for &yt in &y_ticks {
+        let ny = (((yt - ymin) / (ymax - ymin).max(1e-9)) - 0.5) as f32;
+        if (-0.501..=0.501).contains(&ny) {
+            emit_grid_seg(&mut items, (bx, ny, bz), (fx, ny, bz));
+            emit_grid_seg(&mut items, (bx, ny, bz), (bx, ny, fz));
+        }
+    }
+    for &zt in &z_ticks {
+        let nz = (((zt - zmin) / (zmax - zmin).max(1e-9)) - 0.5) as f32;
+        if (-0.501..=0.501).contains(&nz) {
+            emit_grid_seg(&mut items, (bx, by, nz), (fx, by, nz));
+            emit_grid_seg(&mut items, (bx, by, nz), (bx, fy, nz));
+        }
+    }
+
+    // Render permukaan 3D memakai Painter's Algorithm (urut belakang -> depan) + pencahayaan lembut
+    struct Quad3D {
+        depth: f32,
+        poly: [Pos2; 4],
+        fill: Option<Color32>,
+        stroke_color: Option<Color32>,
+        stroke_width: f32,
+    }
+    let mut quads: Vec<Quad3D> = Vec::new();
+    let light_dir = (0.35_f32, -0.55_f32, 0.76_f32);
+
+    for g in &grids {
+        let cm = g.spec.style.colormap.unwrap_or(ax.colormap);
+        let z_span = (zmax - zmin).max(1e-9);
+        let wireframe_only = g.spec.style.mesh && !g.spec.style.surf;
+        let edge_sw = (font_size * 0.032).clamp(0.4, 1.4);
+
+        for iy in 0..g.ny.saturating_sub(1) {
+            for ix in 0..g.nx.saturating_sub(1) {
+                let Some(p00) = g.pts[iy * g.nx + ix] else {
+                    continue;
+                };
+                let Some(p10) = g.pts[iy * g.nx + ix + 1] else {
+                    continue;
+                };
+                let Some(p11) = g.pts[(iy + 1) * g.nx + ix + 1] else {
+                    continue;
+                };
+                let Some(p01) = g.pts[(iy + 1) * g.nx + ix] else {
+                    continue;
+                };
+
+                let (s00, d00, n00) = proj_data(p00.0, p00.1, p00.2);
+                let (s10, d10, n10) = proj_data(p10.0, p10.1, p10.2);
+                let (s11, d11, _n11) = proj_data(p11.0, p11.1, p11.2);
+                let (s01, d01, n01) = proj_data(p01.0, p01.1, p01.2);
+
+                let avg_depth = (d00 + d10 + d11 + d01) * 0.25;
+                let avg_z = (p00.2 + p10.2 + p11.2 + p01.2) * 0.25;
+                let t_z = ((avg_z - zmin) / z_span) as f32;
+                let base_col = sample_colormap(cm, t_z);
+
+                if wireframe_only {
+                    quads.push(Quad3D {
+                        depth: avg_depth,
+                        poly: [s00, s10, s11, s01],
+                        fill: Some(Color32::from_rgba_unmultiplied(255, 255, 255, 215)),
+                        stroke_color: Some(base_col),
+                        stroke_width: (edge_sw * 1.35).max(0.6),
+                    });
+                } else {
+                    let e1 = (n10.0 - n00.0, n10.1 - n00.1, n10.2 - n00.2);
+                    let e2 = (n01.0 - n00.0, n01.1 - n00.1, n01.2 - n00.2);
+                    let cx = e1.1 * e2.2 - e1.2 * e2.1;
+                    let cy = e1.2 * e2.0 - e1.0 * e2.2;
+                    let cz = e1.0 * e2.1 - e1.1 * e2.0;
+                    let clen = (cx * cx + cy * cy + cz * cz).sqrt().max(1e-5);
+                    let mut nrm = (cx / clen, cy / clen, cz / clen);
+                    if nrm.0 * eye.0 + nrm.1 * eye.1 + nrm.2 * eye.2 < 0.0 {
+                        nrm = (-nrm.0, -nrm.1, -nrm.2);
+                    }
+                    let shade = (0.82
+                        + 0.24
+                            * (nrm.0 * light_dir.0 + nrm.1 * light_dir.1 + nrm.2 * light_dir.2)
+                                .max(0.0))
+                    .clamp(0.75, 1.06);
+                    let fill_col = Color32::from_rgb(
+                        ((base_col.r() as f32) * shade).clamp(0.0, 255.0) as u8,
+                        ((base_col.g() as f32) * shade).clamp(0.0, 255.0) as u8,
+                        ((base_col.b() as f32) * shade).clamp(0.0, 255.0) as u8,
+                    );
+                    let border_col = Color32::from_rgb(
+                        ((fill_col.r() as f32) * 0.72) as u8,
+                        ((fill_col.g() as f32) * 0.72) as u8,
+                        ((fill_col.b() as f32) * 0.72) as u8,
+                    );
+                    quads.push(Quad3D {
+                        depth: avg_depth,
+                        poly: [s00, s10, s11, s01],
+                        fill: Some(fill_col),
+                        stroke_color: Some(border_col),
+                        stroke_width: edge_sw,
+                    });
+                }
+            }
+        }
+    }
+
+    quads.sort_by(|a, b| a.depth.total_cmp(&b.depth));
+    for q in quads {
+        items.push(MathLayoutItem::Polygon {
+            points: q.poly.to_vec(),
+            fill: q.fill,
+            stroke_color: q.stroke_color,
+            stroke_width: q.stroke_width,
+        });
+    }
+
+    for (pspec, pts) in param_curves {
+        if pts.len() >= 2 {
+            let col = pspec
+                .style
+                .draw_color
+                .unwrap_or(Color32::from_rgb(24, 110, 214));
+            items.push(MathLayoutItem::Polyline {
+                points: pts
+                    .into_iter()
+                    .map(|(x, y, z)| proj_data(x, y, z).0)
+                    .collect(),
+                stroke_width: pspec.style.stroke_width,
+                color: Some(col),
+                dash: pspec.style.dash,
+                arrow_start: false,
+                arrow_end: false,
+            });
+        }
+    }
+
+    for (pspec, pts) in scatter_pts {
+        if pts.is_empty() {
+            continue;
+        }
+        let col = pspec
+            .style
+            .draw_color
+            .unwrap_or(Color32::from_rgb(24, 110, 214));
+        let projected: Vec<Pos2> = pts.iter().map(|&(x, y, z)| proj_data(x, y, z).0).collect();
+        if !pspec.style.only_marks && projected.len() >= 2 {
+            items.push(MathLayoutItem::Polyline {
+                points: projected.clone(),
+                stroke_width: pspec.style.stroke_width,
+                color: Some(col),
+                dash: pspec.style.dash,
+                arrow_start: false,
+                arrow_end: false,
+            });
+        }
+        if pspec.style.mark != PlotMark::None || pspec.style.only_marks {
+            let r = (font_size * 0.16).clamp(2.2, 7.0);
+            for pt in projected {
+                items.push(MathLayoutItem::Ellipse {
+                    center: pt,
+                    rx: r,
+                    ry: r,
+                    fill: Some(col),
+                    stroke_color: Some(Color32::WHITE),
+                    stroke_width: 0.9,
+                });
+            }
+        }
+    }
+
+    // Garis tepi depan sumbu X, Y, Z + tanda tick & label numerik
+    let axis_col = Some(Color32::from_rgb(40, 44, 52));
+    let axis_sw = (font_size * 0.065).clamp(0.9, 2.2);
+    let draw_axis_line =
+        |items: &mut Vec<MathLayoutItem>, a: (f32, f32, f32), b: (f32, f32, f32)| {
+            items.push(MathLayoutItem::StyledLine {
+                start: proj_norm(a.0, a.1, a.2).0,
+                end: proj_norm(b.0, b.1, b.2).0,
+                stroke_width: axis_sw,
+                color: axis_col,
+                dash: MathLineDash::Solid,
+                arrow_start: false,
+                arrow_end: false,
+            });
+        };
+
+    // Tentukan tepi sumbu Z paling kiri di layar agar label Z tidak menutupi grafik
+    let z_left_candidates = [(bx, fy), (fx, by)];
+    let (zx_edge, zy_edge) = if proj_norm(z_left_candidates[0].0, z_left_candidates[0].1, 0.0)
+        .0
+        .x
+        <= proj_norm(z_left_candidates[1].0, z_left_candidates[1].1, 0.0)
+            .0
+            .x
+    {
+        z_left_candidates[0]
+    } else {
+        z_left_candidates[1]
+    };
+
+    // Tepi depan bawah untuk sumbu X dan Y
+    draw_axis_line(&mut items, (-0.5, fy, bz), (0.5, fy, bz));
+    draw_axis_line(&mut items, (fx, -0.5, bz), (fx, 0.5, bz));
+    draw_axis_line(
+        &mut items,
+        (zx_edge, zy_edge, -0.5),
+        (zx_edge, zy_edge, 0.5),
+    );
+
+    let emit_3d_tick_label =
+        |items: &mut Vec<MathLayoutItem>, pos: Pos2, text: String, dx: f32, dy: f32| {
+            items.push(MathLayoutItem::ColoredGlyph {
+                text,
+                font_size: tick_fs,
+                is_italic: false,
+                is_bold: false,
+                pos: Pos2::new(pos.x + dx, pos.y + dy),
+                color: axis_col,
+            });
+        };
+
+    for &xt in &x_ticks {
+        let nx = (((xt - xmin) / (xmax - xmin).max(1e-9)) - 0.5) as f32;
+        if (-0.501..=0.501).contains(&nx) {
+            let p = proj_norm(nx, fy, bz).0;
+            let lbl = format_tick(xt);
+            let tw = lbl.chars().count() as f32 * tick_fs * 0.52;
+            emit_3d_tick_label(&mut items, p, lbl, -tw * 0.5, 4.0);
+        }
+    }
+    for &yt in &y_ticks {
+        let ny = (((yt - ymin) / (ymax - ymin).max(1e-9)) - 0.5) as f32;
+        if (-0.501..=0.501).contains(&ny) {
+            let p = proj_norm(fx, ny, bz).0;
+            emit_3d_tick_label(&mut items, p, format_tick(yt), 5.0, -tick_fs * 0.35);
+        }
+    }
+    for &zt in &z_ticks {
+        let nz = (((zt - zmin) / (zmax - zmin).max(1e-9)) - 0.5) as f32;
+        if (-0.501..=0.501).contains(&nz) {
+            let p = proj_norm(zx_edge, zy_edge, nz).0;
+            let lbl = format_tick(zt);
+            let tw = lbl.chars().count() as f32 * tick_fs * 0.54;
+            emit_3d_tick_label(&mut items, p, lbl, -tw - 6.0, -tick_fs * 0.5);
+        }
+    }
+
+    // Label sumbu X, Y, Z & Judul
+    let xl_text = ax
+        .xlabel
+        .as_deref()
+        .map(|s| clean_inline_label(s).0)
+        .unwrap_or_else(|| "x".into());
+    let x_mid = proj_norm(0.0, fy, bz).0;
+    items.push(MathLayoutItem::ColoredGlyph {
+        text: xl_text,
+        font_size: label_fs,
+        is_italic: true,
+        is_bold: false,
+        pos: Pos2::new(x_mid.x, x_mid.y + tick_fs + 8.0),
+        color: axis_col,
+    });
+
+    let yl_text = ax
+        .ylabel
+        .as_deref()
+        .map(|s| clean_inline_label(s).0)
+        .unwrap_or_else(|| "y".into());
+    let y_mid = proj_norm(fx, 0.0, bz).0;
+    items.push(MathLayoutItem::ColoredGlyph {
+        text: yl_text,
+        font_size: label_fs,
+        is_italic: true,
+        is_bold: false,
+        pos: Pos2::new(y_mid.x + tick_fs * 2.2, y_mid.y + tick_fs * 0.4),
+        color: axis_col,
+    });
+
+    let zl_text = ax
+        .zlabel
+        .as_deref()
+        .map(|s| clean_inline_label(s).0)
+        .unwrap_or_else(|| "z".into());
+    let z_mid = proj_norm(zx_edge, zy_edge, 0.0).0;
+    items.push(MathLayoutItem::ColoredGlyph {
+        text: zl_text,
+        font_size: label_fs,
+        is_italic: true,
+        is_bold: false,
+        pos: Pos2::new(z_mid.x - label_fs * 3.0, z_mid.y - label_fs * 0.5),
+        color: axis_col,
+    });
+
+    if let Some(title) = &ax.title {
+        let (clean_t, _) = clean_inline_label(title);
+        let top_p = proj_norm(0.0, 0.0, 0.5).0;
+        let tw = clean_t.chars().count() as f32 * font_size * 0.48;
+        items.push(MathLayoutItem::ColoredGlyph {
+            text: clean_t,
+            font_size: (font_size * 0.88).clamp(8.0, 48.0),
+            is_italic: false,
+            is_bold: true,
+            pos: Pos2::new(top_p.x - tw * 0.5, top_p.y - label_fs * 2.1),
+            color: axis_col,
+        });
+    }
+
+    items
+}
+
 fn layout_axis_plot(ax: &AxisPlot, font_size: f32) -> Vec<MathLayoutItem> {
-    let plot_w = (font_size * 15.0).clamp(220.0, 420.0);
-    let plot_h = (font_size * 10.5).clamp(150.0, 290.0);
-    let label_fs = (font_size * 0.72).clamp(9.0, 22.0);
-    let tick_fs = (font_size * 0.62).clamp(8.0, 18.0);
-    let margin_left = 44.0_f32;
-    let margin_top = if ax.title.is_some() { 28.0 } else { 12.0 };
+    if ax.plots.iter().any(AddPlotSpec::is_3d) {
+        return layout_axis_plot_3d(ax, font_size);
+    }
+
+    let plot_w = (font_size * 15.0).clamp(110.0, 1200.0);
+    let plot_h = (font_size * 10.5).clamp(78.0, 840.0);
+    let label_fs = (font_size * 0.72).clamp(6.0, 64.0);
+    let tick_fs = (font_size * 0.62).clamp(5.0, 52.0);
+    let margin_left = (font_size * 2.1).max(24.0);
+    let margin_top = if ax.title.is_some() {
+        (font_size * 1.4).max(16.0)
+    } else {
+        (font_size * 0.6).max(6.0)
+    };
     let plot_rect_min = Pos2::new(margin_left, margin_top);
     let plot_rect_max = Pos2::new(margin_left + plot_w, margin_top + plot_h);
 
@@ -1889,6 +2727,9 @@ fn layout_axis_plot(ax: &AxisPlot, font_size: f32) -> Vec<MathLayoutItem> {
                     runs.push(cur_run);
                 }
             }
+            AddPlotSource::Surface3D(_)
+            | AddPlotSource::Parametric3D(..)
+            | AddPlotSource::Coordinates3D(_) => {}
         }
         series_list.push(SampledSeries {
             spec: pspec,
@@ -2095,7 +2936,8 @@ fn layout_axis_plot(ax: &AxisPlot, font_size: f32) -> Vec<MathLayoutItem> {
             .unwrap_or(Color32::from_rgb(24, 110, 214));
         if s.spec.style.ybar {
             let zero_y = to_px(xmin, 0.0).y.clamp(plot_rect_min.y, plot_rect_max.y);
-            let bar_w = (plot_w / (s.raw_pts.len().max(1) as f32 * 2.0)).clamp(8.0, 32.0);
+            let bar_w = (plot_w / (s.raw_pts.len().max(1) as f32 * 2.0))
+                .clamp(4.0, (plot_w * 0.25).max(8.0));
             let fill_c = apply_fill_opacity(Some(series_col), 0.72);
             for &(xv, yv) in &s.raw_pts {
                 if xv < xmin || xv > xmax {

@@ -738,9 +738,9 @@ pub fn draw_non_stroke_object(
             rotation,
             ..
         } => {
-            let eff_font = *font_size * *scale;
             let screen_pos = page_to_screen(Pos2::new(*x, *y));
-            let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+            let layout =
+                crate::geometry::math::MathLayout::compute_scaled(latex, *font_size, *scale);
             layout.render(painter, screen_pos, zoom, *rotation, color.to_color32());
         }
     }

@@ -5,10 +5,15 @@ pub fn eval_const_expr(expr: &str) -> Option<f64> {
     eval_math_expr(expr, 0.0)
 }
 
-/// Mengevaluasi ekspresi matematika PGFPlots/LaTeX secara aman untuk nilai variabel `x` (atau `t`).
+/// Mengevaluasi ekspresi matematika PGFPlots/LaTeX secara aman untuk satu variabel `x` (atau `t`).
 /// Mendukung `+`, `-`, `*`, `/`, `^`, perkalian implisit (`2x`, `3(x+1)`), konstanta (`pi`, `e`),
 /// serta fungsi matematika standar dan konversi sudut PGFPlots (`sin(deg(x))` maupun `sin(x)`).
 pub fn eval_math_expr(expr: &str, x: f64) -> Option<f64> {
+    eval_math_expr_2d(expr, x, 0.0)
+}
+
+/// Mengevaluasi ekspresi matematika PGFPlots/LaTeX dua variabel `(x, y)` (digunakan untuk grafik 3D `\addplot3`).
+pub fn eval_math_expr_2d(expr: &str, x: f64, y: f64) -> Option<f64> {
     let normalized = preprocess_expr(expr);
     if normalized.is_empty() {
         return None;
@@ -21,6 +26,7 @@ pub fn eval_math_expr(expr: &str, x: f64) -> Option<f64> {
         tokens: &tokens,
         pos: 0,
         x,
+        y,
     };
     let val = parser.parse_add_sub(0)?;
     if parser.pos < parser.tokens.len() || !val.is_finite() {
@@ -69,6 +75,7 @@ fn preprocess_expr(raw: &str) -> String {
         .replace(r"\log", "log10")
         .replace(r"\exp", "exp")
         .replace(r"\x", "x")
+        .replace(r"\y", "y")
         .replace(r"\t", "t")
         .replace('{', "(")
         .replace('}', ")");
@@ -161,6 +168,7 @@ struct ExprParser<'a> {
     tokens: &'a [ExprTok],
     pos: usize,
     x: f64,
+    y: f64,
 }
 
 impl<'a> ExprParser<'a> {
@@ -312,9 +320,10 @@ impl<'a> ExprParser<'a> {
                 } else {
                     match name.as_str() {
                         "x" | "t" => Some(self.x),
+                        "y" => Some(self.y),
                         "pi" => Some(std::f64::consts::PI),
                         "e" => Some(std::f64::consts::E),
-                        // Tangani variabel berimpit seperti "ax" tidak valid; "xx" dll. tidak umum, tapi dukung konstanta & x/t
+                        // Tangani variabel berimpit seperti "ax" tidak valid; "xx" dll. tidak umum, tapi dukung konstanta & x/y/t
                         _ => None,
                     }
                 }

@@ -320,9 +320,14 @@ pub fn flip_object_horizontal(obj: &mut DrawObject, center_x: f32) {
             if *locked {
                 return;
             }
-            let eff_font = *font_size * *scale;
-            let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
-            let width = layout.width.max(20.0);
+            let eff_scale = if scale.is_finite() && *scale > 1e-4 {
+                *scale
+            } else {
+                1.0
+            };
+            let layout =
+                crate::geometry::math::MathLayout::compute_scaled(latex, *font_size, eff_scale);
+            let width = layout.width.max(20.0 * eff_scale);
             *x = 2.0 * center_x - (*x + width);
         }
         DrawObject::Connector {
@@ -410,8 +415,14 @@ pub fn flip_object_vertical(obj: &mut DrawObject, center_y: f32) {
             if *locked {
                 return;
             }
-            let eff_font = *font_size * *scale;
-            let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+            let eff_scale = if scale.is_finite() && *scale > 1e-4 {
+                *scale
+            } else {
+                1.0
+            };
+            let eff_font = *font_size * eff_scale;
+            let layout =
+                crate::geometry::math::MathLayout::compute_scaled(latex, *font_size, eff_scale);
             let height = layout.height.max(eff_font);
             *y = 2.0 * center_y - (*y + height);
         }
@@ -564,8 +575,8 @@ pub fn rotate_object(obj: &mut DrawObject, origin: Pos2, angle_rad: f32) {
             if *locked {
                 return;
             }
-            let eff_font = *font_size * *scale;
-            let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+            let layout =
+                crate::geometry::math::MathLayout::compute_scaled(latex, *font_size, *scale);
             let cx = *x + layout.width * 0.5;
             let cy = *y + layout.height * 0.5;
             let (ncx, ncy) = rotate_pt(cx, cy);
@@ -753,8 +764,8 @@ fn rotate_object_90_cw(obj: &mut DrawObject, old_h: f32) {
             scale,
             ..
         } => {
-            let eff_font = *font_size * *scale;
-            let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+            let layout =
+                crate::geometry::math::MathLayout::compute_scaled(latex, *font_size, *scale);
             let cx = *x + layout.width * 0.5;
             let cy = *y + layout.height * 0.5;
             let ncx = old_h - cy;
@@ -920,8 +931,8 @@ fn rotate_object_90_ccw(obj: &mut DrawObject, old_w: f32) {
             scale,
             ..
         } => {
-            let eff_font = *font_size * *scale;
-            let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+            let layout =
+                crate::geometry::math::MathLayout::compute_scaled(latex, *font_size, *scale);
             let cx = *x + layout.width * 0.5;
             let cy = *y + layout.height * 0.5;
             let ncx = cy;
@@ -1080,8 +1091,8 @@ fn rotate_object_180(obj: &mut DrawObject, old_w: f32, old_h: f32) {
             scale,
             ..
         } => {
-            let eff_font = *font_size * *scale;
-            let layout = crate::geometry::math::MathLayout::compute_from_str(latex, eff_font);
+            let layout =
+                crate::geometry::math::MathLayout::compute_scaled(latex, *font_size, *scale);
             let cx = *x + layout.width * 0.5;
             let cy = *y + layout.height * 0.5;
             let ncx = old_w - cx;
