@@ -943,6 +943,110 @@ pub fn render_page_to_rgba_image(
                     }
                 };
 
+                let to_rgba = |c: eframe::egui::Color32| [c.r(), c.g(), c.b(), c.a()];
+                let draw_arrow = |img_buf: &mut image::RgbaImage,
+                                  tip: eframe::egui::Pos2,
+                                  from: eframe::egui::Pos2,
+                                  r_s: f32,
+                                  rgba: [u8; 4]| {
+                    let dir = tip - from;
+                    let len = dir.length();
+                    if len <= 1e-3 {
+                        return;
+                    }
+                    let u = dir / len;
+                    let perp = eframe::egui::Vec2::new(-u.y, u.x);
+                    let h_len = (7.5 * scale).max(r_s * 6.0).clamp(6.0, 22.0);
+                    let half_w = h_len * 0.42;
+                    let base = tip - u * h_len;
+                    let v1 = base + perp * half_w;
+                    let v2 = base - perp * half_w;
+                    draw_capsule_segment(img_buf, tip, v1, (r_s * 0.85).max(0.8), rgba);
+                    draw_capsule_segment(img_buf, tip, v2, (r_s * 0.85).max(0.8), rgba);
+                    draw_capsule_segment(img_buf, v1, v2, (r_s * 0.85).max(0.8), rgba);
+                };
+                let draw_dashed =
+                    |img_buf: &mut image::RgbaImage,
+                     p1: eframe::egui::Pos2,
+                     p2: eframe::egui::Pos2,
+                     r_s: f32,
+                     rgba: [u8; 4],
+                     dash: crate::geometry::math::MathLineDash| {
+                        match dash {
+                            crate::geometry::math::MathLineDash::Solid => {
+                                draw_capsule_segment(img_buf, p1, p2, r_s, rgba);
+                            }
+                            crate::geometry::math::MathLineDash::Dashed
+                            | crate::geometry::math::MathLineDash::Dotted => {
+                                let d = p2 - p1;
+                                let len = d.length();
+                                if len <= 1e-3 {
+                                    return;
+                                }
+                                let (dl, gl) =
+                                    if dash == crate::geometry::math::MathLineDash::Dashed {
+                                        (5.0 * scale, 3.5 * scale)
+                                    } else {
+                                        (1.8 * scale, 3.2 * scale)
+                                    };
+                                let u = d / len;
+                                let mut dist = 0.0_f32;
+                                while dist < len {
+                                    let seg_end = (dist + dl).min(len);
+                                    draw_capsule_segment(
+                                        img_buf,
+                                        p1 + u * dist,
+                                        p1 + u * seg_end,
+                                        r_s,
+                                        rgba,
+                                    );
+                                    dist += dl + gl;
+                                }
+                            }
+                        }
+                    };
+                let fill_poly_px = |img_buf: &mut image::RgbaImage,
+                                    verts: &[eframe::egui::Pos2],
+                                    fill_rgba: [u8; 4]| {
+                    if verts.len() < 3 {
+                        return;
+                    }
+                    let min_x = verts
+                        .iter()
+                        .map(|p| p.x)
+                        .fold(f32::INFINITY, f32::min)
+                        .floor()
+                        .max(0.0) as i32;
+                    let max_x = verts
+                        .iter()
+                        .map(|p| p.x)
+                        .fold(f32::NEG_INFINITY, f32::max)
+                        .ceil()
+                        .min(width_px as f32 - 1.0) as i32;
+                    let min_y = verts
+                        .iter()
+                        .map(|p| p.y)
+                        .fold(f32::INFINITY, f32::min)
+                        .floor()
+                        .max(0.0) as i32;
+                    let max_y = verts
+                        .iter()
+                        .map(|p| p.y)
+                        .fold(f32::NEG_INFINITY, f32::max)
+                        .ceil()
+                        .min(height_px as f32 - 1.0) as i32;
+                    for py in min_y..=max_y {
+                        for px in min_x..=max_x {
+                            if crate::geometry::point_in_polygon(
+                                eframe::egui::Pos2::new(px as f32 + 0.5, py as f32 + 0.5),
+                                verts,
+                            ) {
+                                blend_pixel(img_buf, px, py, fill_rgba);
+                            }
+                        }
+                    }
+                };
+
                 for item in &layout.items {
                     match item {
                         crate::geometry::math::MathLayoutItem::Glyph {
@@ -971,6 +1075,40 @@ pub fn render_page_to_rgba_image(
                                 None,
                             );
                         }
+                        crate::geometry::math::MathLayoutItem::ColoredGlyph {
+                            text,
+                            font_size: g_font,
+                            is_italic,
+                            is_bold,
+                            pos: g_pos,
+                            color: item_col,
+                        } => {
+                            let eff_rgba = item_col.map(to_rgba).unwrap_or(col);
+                            let item_x = (*x + g_pos.x) * scale;
+                            let item_y = (*y + g_pos.y) * scale;
+                            let final_pos = rot_pt(eframe::egui::Pos2::new(item_x, item_y));
+                            let ff = if *is_italic {
+                                crate::model::FontFamilyPreset::Serif
+                            } else {
+                                crate::model::FontFamilyPreset::SansSerif
+                            };
+                            draw_egui_text(
+                                &mut img,
+                                &fonts,
+                                final_pos.x / scale,
+                                final_pos.y / scale,
+                                text,
+                                *g_font,
+                                eff_rgba,
+                                scale,
+                                *rotation,
+                                ff,
+                                *is_bold,
+                                *is_italic,
+                                crate::model::TextAlign::Left,
+                                None,
+                            );
+                        }
                         crate::geometry::math::MathLayoutItem::Line {
                             start,
                             end,
@@ -986,6 +1124,140 @@ pub fn render_page_to_rgba_image(
                             ));
                             let r_stroke = (*stroke_width * scale * 0.5).max(1.0);
                             draw_capsule_segment(&mut img, p1, p2, r_stroke, col);
+                        }
+                        crate::geometry::math::MathLayoutItem::StyledLine {
+                            start,
+                            end,
+                            stroke_width,
+                            color: item_col,
+                            dash,
+                            arrow_start,
+                            arrow_end,
+                        } => {
+                            let eff_rgba = item_col.map(to_rgba).unwrap_or(col);
+                            let p1 = rot_pt(eframe::egui::Pos2::new(
+                                (*x + start.x) * scale,
+                                (*y + start.y) * scale,
+                            ));
+                            let p2 = rot_pt(eframe::egui::Pos2::new(
+                                (*x + end.x) * scale,
+                                (*y + end.y) * scale,
+                            ));
+                            let r_s = (*stroke_width * scale * 0.5).max(0.8);
+                            draw_dashed(&mut img, p1, p2, r_s, eff_rgba, *dash);
+                            if *arrow_end {
+                                draw_arrow(&mut img, p2, p1, r_s, eff_rgba);
+                            }
+                            if *arrow_start {
+                                draw_arrow(&mut img, p1, p2, r_s, eff_rgba);
+                            }
+                        }
+                        crate::geometry::math::MathLayoutItem::Polyline {
+                            points,
+                            stroke_width,
+                            color: item_col,
+                            dash,
+                            arrow_start,
+                            arrow_end,
+                        } => {
+                            if points.len() < 2 {
+                                continue;
+                            }
+                            let eff_rgba = item_col.map(to_rgba).unwrap_or(col);
+                            let r_s = (*stroke_width * scale * 0.5).max(0.8);
+                            let spts: Vec<eframe::egui::Pos2> = points
+                                .iter()
+                                .map(|p| {
+                                    rot_pt(eframe::egui::Pos2::new(
+                                        (*x + p.x) * scale,
+                                        (*y + p.y) * scale,
+                                    ))
+                                })
+                                .collect();
+                            for w in spts.windows(2) {
+                                draw_dashed(&mut img, w[0], w[1], r_s, eff_rgba, *dash);
+                            }
+                            if *arrow_end {
+                                draw_arrow(
+                                    &mut img,
+                                    spts[spts.len() - 1],
+                                    spts[spts.len() - 2],
+                                    r_s,
+                                    eff_rgba,
+                                );
+                            }
+                            if *arrow_start {
+                                draw_arrow(&mut img, spts[0], spts[1], r_s, eff_rgba);
+                            }
+                        }
+                        crate::geometry::math::MathLayoutItem::Polygon {
+                            points,
+                            fill,
+                            stroke_color,
+                            stroke_width,
+                        } => {
+                            if points.len() < 3 {
+                                continue;
+                            }
+                            let spts: Vec<eframe::egui::Pos2> = points
+                                .iter()
+                                .map(|p| {
+                                    rot_pt(eframe::egui::Pos2::new(
+                                        (*x + p.x) * scale,
+                                        (*y + p.y) * scale,
+                                    ))
+                                })
+                                .collect();
+                            if let Some(fc) = fill {
+                                fill_poly_px(&mut img, &spts, to_rgba(*fc));
+                            }
+                            if stroke_color.is_some() || fill.is_none() {
+                                let eff_rgba = stroke_color.map(to_rgba).unwrap_or(col);
+                                let r_s = (*stroke_width * scale * 0.5).max(0.8);
+                                for i in 0..spts.len() {
+                                    draw_capsule_segment(
+                                        &mut img,
+                                        spts[i],
+                                        spts[(i + 1) % spts.len()],
+                                        r_s,
+                                        eff_rgba,
+                                    );
+                                }
+                            }
+                        }
+                        crate::geometry::math::MathLayoutItem::Ellipse {
+                            center: ec,
+                            rx,
+                            ry,
+                            fill,
+                            stroke_color,
+                            stroke_width,
+                        } => {
+                            let segs = 36;
+                            let mut spts = Vec::with_capacity(segs);
+                            for k in 0..segs {
+                                let a = (k as f32 / segs as f32) * std::f32::consts::TAU;
+                                spts.push(rot_pt(eframe::egui::Pos2::new(
+                                    (*x + ec.x + *rx * a.cos()) * scale,
+                                    (*y + ec.y + *ry * a.sin()) * scale,
+                                )));
+                            }
+                            if let Some(fc) = fill {
+                                fill_poly_px(&mut img, &spts, to_rgba(*fc));
+                            }
+                            if let Some(sc) = stroke_color {
+                                let r_s = (*stroke_width * scale * 0.5).max(0.8);
+                                let rgba = to_rgba(*sc);
+                                for i in 0..spts.len() {
+                                    draw_capsule_segment(
+                                        &mut img,
+                                        spts[i],
+                                        spts[(i + 1) % spts.len()],
+                                        r_s,
+                                        rgba,
+                                    );
+                                }
+                            }
                         }
                     }
                 }

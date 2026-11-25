@@ -1341,9 +1341,9 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
 
     let mut open = true;
     let title = if state.editing_equation_id.is_some() {
-        "📐 Edit Rumus Matematika (LaTeX)"
+        "📐 Edit LaTeX (Rumus, Tabel, Grafik, Geometri)"
     } else {
-        "📐 Sisipkan Rumus Matematika (LaTeX)"
+        "📐 Sisipkan LaTeX (Rumus, Tabel, Grafik, Geometri)"
     };
 
     let mut insert_action = false;
@@ -1360,8 +1360,8 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
     let is_valid = !is_empty && parse_result.is_ok();
 
     let screen_rect = ctx.screen_rect();
-    let max_w = (screen_rect.width() * 0.95).max(400.0);
-    let max_h = (screen_rect.height() * 0.90).max(350.0);
+    let max_w = (screen_rect.width() * 0.95).max(460.0);
+    let max_h = (screen_rect.height() * 0.92).max(400.0);
 
     egui::Window::new(title)
         .open(&mut open)
@@ -1369,9 +1369,9 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
         .resizable(true)
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(screen_rect.center())
-        .default_size(Vec2::new(520.0, 500.0))
-        .min_width(380.0)
-        .min_height(320.0)
+        .default_size(Vec2::new(660.0, 620.0))
+        .min_width(440.0)
+        .min_height(380.0)
         .max_width(max_w)
         .max_height(max_h)
         .constrain_to(screen_rect)
@@ -1448,19 +1448,62 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
                                 }
                             });
 
+                            ui.label(
+                                egui::RichText::new("Template Tabel, Grafik & Geometri:")
+                                    .size(12.0)
+                                    .strong(),
+                            );
+                            ui.horizontal_wrapped(|ui| {
+                                let templates: [(&str, &str); 7] = [
+                                    (
+                                        "📊 Grafik Fungsi",
+                                        "\\begin{axis}[title={$f(x) = x^2$}, xlabel={$x$}, ylabel={$y$}, xmin=-3, xmax=3, grid=major, axis lines=middle]\n\\addplot[blue, domain=-3:3]{x^2};\n\\addplot[red, dashed, domain=-3:3]{2*x + 1};\n\\legend{$x^2$, $2x+1$}\n\\end{axis}",
+                                    ),
+                                    (
+                                        "📈 Grafik Data",
+                                        "\\begin{axis}[title={Data Pengamatan}, xlabel={Waktu}, ylabel={Nilai}, grid=major, ybar]\n\\addplot[teal] coordinates {(1, 3) (2, 7) (3, 5) (4, 9)};\n\\end{axis}",
+                                    ),
+                                    (
+                                        "📐 Geometri Segitiga",
+                                        "\\begin{tikzpicture}\n\\filldraw[fill=blue!20, draw=blue, thick] (0,0) node[below left]{$A$} -- (4,0) node[below right]{$B$} -- (1.5,2.5) node[above]{$C$} -- cycle;\n\\draw[red, dashed] (1.5,2.5) -- (1.5,0) node[below]{$H$};\n\\end{tikzpicture}",
+                                    ),
+                                    (
+                                        "⭕ Geometri Lingkaran",
+                                        "\\begin{tikzpicture}\n\\draw[blue, thick] (0,0) circle (2);\n\\draw[red, ->, thick] (0,0) node[below left]{$O$} -- (1.41,1.41) node[midway, above left]{$r$};\n\\draw[green] (0.6,0) arc (0:45:0.6);\n\\end{tikzpicture}",
+                                    ),
+                                    (
+                                        "🕸 Graf Node-Edge",
+                                        "\\begin{tikzpicture}\n\\node[circle, draw=blue, fill=blue!15] (A) at (0,0) {A};\n\\node[circle, draw=blue, fill=blue!15] (B) at (3,1.2) {B};\n\\node[circle, draw=blue, fill=blue!15] (C) at (3,-1.2) {C};\n\\draw[->, thick] (A) -- node[above]{2} (B);\n\\draw[->, thick] (A) -- node[below]{5} (C);\n\\draw[->, dashed, red] (B) -- node[right]{3} (C);\n\\end{tikzpicture}",
+                                    ),
+                                    (
+                                        "📋 Tabel",
+                                        "\\begin{tabular}{|l|c|r|}\n\\hline\n\\textbf{Fungsi} & \\textbf{Turunan} & \\textbf{Nilai} \\\\\n\\hline\n$x^2$ & $2x$ & 4 \\\\\n$\\sin(x)$ & $\\cos(x)$ & 1 \\\\\n\\hline\n\\end{tabular}",
+                                    ),
+                                    (
+                                        "[M] Matriks",
+                                        "A = \\begin{pmatrix}\n1 & 2 \\\\\n3 & 4\n\\end{pmatrix}",
+                                    ),
+                                ];
+                                for (lbl, tpl) in templates {
+                                    if ui.button(lbl).clicked() {
+                                        state.equation_latex_buffer = tpl.to_string();
+                                    }
+                                }
+                            });
+
                             ui.separator();
 
                             ui.label("Kode LaTeX:");
                             let text_edit = egui::TextEdit::multiline(&mut state.equation_latex_buffer)
-                                .desired_rows(3)
+                                .desired_rows(6)
                                 .desired_width(f32::INFINITY)
                                 .font(egui::TextStyle::Monospace)
-                                .hint_text(r"Contoh: E = mc^2 atau \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}");
+                                .hint_text(r"Contoh rumus, \begin{tabular}, \begin{axis}, atau \begin{tikzpicture}");
                             ui.add(text_edit);
 
                             ui.separator();
 
-                            // Live Preview Box dengan batas tinggi dan scroll internal
+                            // Live Preview Box dengan batas tinggi dan auto-fit + scroll internal
                             ui.label(egui::RichText::new("Pratinjau Visual:").size(12.0).strong());
 
                             match &parse_result {
@@ -1487,7 +1530,6 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
                                         Color32::from_rgb(20, 20, 25)
                                     };
 
-                                    // Wadah pratinjau yang dibatasi tingginya dan mendukung scrolling horizontal/vertikal
                                     egui::Frame::group(ui.style())
                                         .fill(bg_col)
                                         .stroke(Stroke::new(1.0_f32, border_col))
@@ -1495,11 +1537,19 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
                                         .inner_margin(8.0)
                                         .show(ui, |ui| {
                                             egui::ScrollArea::both()
-                                                .max_height(180.0)
+                                                .max_height(280.0)
                                                 .auto_shrink([false, true])
                                                 .show(ui, |ui| {
-                                                    let box_w = (layout.width + 24.0).max(ui.available_width());
-                                                    let box_h = (layout.height + 16.0).max(50.0);
+                                                    let avail_w = ui.available_width().max(260.0);
+                                                    let preview_scale = if layout.width + 16.0 > avail_w {
+                                                        (avail_w / (layout.width + 16.0)).clamp(0.48, 1.0)
+                                                    } else {
+                                                        1.0
+                                                    };
+                                                    let drawn_w = layout.width * preview_scale;
+                                                    let drawn_h = layout.height * preview_scale;
+                                                    let box_w = (drawn_w + 24.0).max(avail_w);
+                                                    let box_h = (drawn_h + 16.0).max(60.0);
                                                     let (rect, _resp) = ui.allocate_exact_size(
                                                         Vec2::new(box_w, box_h),
                                                         egui::Sense::hover(),
@@ -1507,13 +1557,13 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
                                                     if ui.is_rect_visible(rect) {
                                                         let painter = ui.painter_at(rect);
                                                         let render_x = rect.min.x
-                                                            + (rect.width() - layout.width).max(0.0) * 0.5;
+                                                            + (rect.width() - drawn_w).max(0.0) * 0.5;
                                                         let render_y = rect.min.y
-                                                            + (rect.height() - layout.height).max(0.0) * 0.5;
+                                                            + (rect.height() - drawn_h).max(0.0) * 0.5;
                                                         layout.render(
                                                             &painter,
                                                             Pos2::new(render_x, render_y),
-                                                            1.0,
+                                                            preview_scale,
                                                             0.0,
                                                             text_col,
                                                         );
@@ -1524,7 +1574,7 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
                                 Ok(_) => {
                                     ui.label(
                                         egui::RichText::new(
-                                            "Ketik rumus LaTeX di atas untuk melihat pratinjau visual.",
+                                            "Ketik kode LaTeX atau pilih template di atas untuk melihat pratinjau visual.",
                                         )
                                         .italics()
                                         .color(Color32::GRAY),
@@ -1537,7 +1587,7 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
                                     );
                                     ui.label(
                                         egui::RichText::new(
-                                            "Catatan: Hanya rumus matematika murni (pecahan, akar, eksponen, greek, integral, dsb.) yang didukung. Makro TeX eksternal (TikZ/PGF) tidak didukung.",
+                                            "Catatan: Mendukung rumus matematika, tabel (tabular/array/pmatrix/cases), grafik fungsi & data (axis/addplot), serta geometri & graf (tikzpicture).",
                                         )
                                         .size(11.0)
                                         .color(Color32::GRAY),
@@ -1587,7 +1637,7 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
                 page.objects.push(new_obj);
                 state.selected_ids = vec![new_id];
             }
-            state.spatial_grid.rebuild(&page.objects);
+            state.rebuild_spatial_grid(&page.id, &page.objects);
         }
         state.show_equation_dialog = false;
         state.editing_equation_id = None;
