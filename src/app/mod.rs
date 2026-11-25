@@ -3,6 +3,7 @@ pub mod document_ops;
 pub mod editor_navbar;
 pub mod editor_sidebar;
 pub mod editor_view;
+pub mod floating_tool_bar;
 pub mod library_view;
 pub mod modals;
 pub mod shortcuts;

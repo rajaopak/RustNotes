@@ -13,7 +13,12 @@ use eframe::egui::{
 };
 
 /// Menggambar ikon lingkaran pelangi (12 segmen spektrum HSV) untuk tombol/indikator mode Rainbow.
-fn paint_rainbow_circle(painter: &egui::Painter, center: Pos2, radius: f32, stroke: Stroke) {
+pub(super) fn paint_rainbow_circle(
+    painter: &egui::Painter,
+    center: Pos2,
+    radius: f32,
+    stroke: Stroke,
+) {
     let mut mesh = egui::Mesh::default();
     mesh.colored_vertex(center, Color32::WHITE);
     const SEGMENTS: usize = 12;
@@ -74,9 +79,19 @@ fn paint_eraser_glyph(painter: &egui::Painter, rect: Rect, color: Color32) {
 }
 
 impl RustNotesApp {
-    /// Render navbar editor (bilah atas Goodnotes navy) beserta pop-up bawaannya.
-    /// Mengembalikan alse jika pengguna memilih kembali ke perpustakaan.
+    /// Render navbar editor (bilah atas Goodnotes navy) beserta pop-up bawaannya (digunakan terpadu maupun oleh test).
+    /// Mengembalikan `false` jika pengguna memilih kembali ke perpustakaan.
     pub fn render_editor_navbar(&mut self, ctx: &egui::Context, nb_idx: usize) -> bool {
+        if !self.render_editor_navbar_bar(ctx, nb_idx) {
+            return false;
+        }
+        self.render_navbar_popups(ctx, nb_idx);
+        true
+    }
+
+    /// Render bilah atas editor (`TopBottomPanel::top`) tanpa merender pop-up overlay agar z-order
+    /// pop-up dan Floating Quick Tool Bar tetap tertata bersih setelah `CentralPanel`.
+    pub(crate) fn render_editor_navbar_bar(&mut self, ctx: &egui::Context, nb_idx: usize) -> bool {
         let Some(nb) = self.library.notebooks.get(nb_idx) else {
             return false;
         };
@@ -250,6 +265,39 @@ impl RustNotesApp {
                         .clicked()
                     {
                         self.canvas_state.show_zoom_window = !self.canvas_state.show_zoom_window;
+                    }
+
+                    // Toggle Floating Quick Tool Bar (`🎛`)
+                    let fb_btn = Button::new(
+                        RichText::new("🎛").size(13.0).color(
+                            if self.settings.floating_tool_bar_visible {
+                                Color32::from_rgb(130, 195, 255)
+                            } else {
+                                Color32::WHITE
+                            },
+                        ),
+                    )
+                    .fill(if self.settings.floating_tool_bar_visible {
+                        Color32::from_rgb(54, 95, 145)
+                    } else {
+                        Color32::TRANSPARENT
+                    })
+                    .corner_radius(6.0)
+                    .min_size(Vec2::new(28.0, 28.0));
+                    if ui
+                        .add(fb_btn)
+                        .on_hover_text(lang.tr(
+                            "Tampilkan / Sembunyikan Floating Quick Tool Bar (4 sisi fleksibel)",
+                            "Toggle Flexible 4-Sided Floating Quick Tool Bar",
+                        ))
+                        .clicked()
+                    {
+                        self.settings.floating_tool_bar_visible =
+                            !self.settings.floating_tool_bar_visible;
+                        if !self.settings.floating_tool_bar_visible {
+                            self.floating_tool_bar_last_rect = None;
+                        }
+                        self.persist_settings();
                     }
 
                     // Bookmark Icon (`★`/`☆`)
@@ -543,11 +591,19 @@ impl RustNotesApp {
             return false;
         }
 
+        true
+    }
+
+    /// Render pop-up navbar (`Info Dokumen`, `Pengaturan Alat & Palet`, `More Menu`) pada lapisan atas
+    /// setelah kanvas dan Floating Quick Tool Bar agar tidak pernah tertutup floating bar.
+    pub(crate) fn render_navbar_popups(&mut self, ctx: &egui::Context, nb_idx: usize) {
+        let Some(nb) = self.library.notebooks.get(nb_idx) else {
+            return;
+        };
+        let notebook_id = nb.id.clone();
         self.render_doc_title_popup(ctx, nb_idx, &notebook_id);
         self.render_tool_popup(ctx, nb_idx, &notebook_id);
         self.render_more_menu_popup(ctx, nb_idx, &notebook_id);
-
-        true
     }
 
     fn render_doc_title_popup(&mut self, ctx: &egui::Context, nb_idx: usize, notebook_id: &str) {
@@ -608,10 +664,17 @@ impl RustNotesApp {
         // GOODNOTES POP-UP 2: Tool Settings Pop-up (Ketebalan, Warna, Bentuk, Eraser)
         // =====================================================================
         if self.show_tool_popup {
+            let top_y = if self.settings.floating_tool_bar_visible
+                && self.settings.floating_tool_bar_dock == crate::model::FloatingToolBarDock::Top
+            {
+                104.0
+            } else {
+                56.0
+            };
             egui::Window::new("🎨 Pengaturan Alat & Palet")
                 .collapsible(false)
                 .resizable(false)
-                .anchor(egui::Align2::CENTER_TOP, [0.0, 56.0])
+                .anchor(egui::Align2::CENTER_TOP, [0.0, top_y])
                 .show(ctx, |ui| {
                     ui.set_width(360.0);
 
@@ -961,11 +1024,18 @@ impl RustNotesApp {
         // =====================================================================
         if self.show_more_menu_popup {
             let page_count = self.library.notebooks[nb_idx].pages.len();
+            let right_x = if self.settings.floating_tool_bar_visible
+                && self.settings.floating_tool_bar_dock == crate::model::FloatingToolBarDock::Right
+            {
+                -80.0
+            } else {
+                -12.0
+            };
             egui::Window::new(format!("Page {}", self.current_page_index + 1))
                 .id(egui::Id::new("goodnotes_more_menu_popup"))
                 .collapsible(false)
                 .resizable(false)
-                .anchor(egui::Align2::RIGHT_TOP, [-12.0, 56.0])
+                .anchor(egui::Align2::RIGHT_TOP, [right_x, 56.0])
                 .frame(
                     egui::Frame::window(&ctx.style())
                         .fill(Color32::from_rgb(26, 26, 28))
@@ -1311,6 +1381,24 @@ impl RustNotesApp {
                         ui.label(RichText::new("🔍 Zoom Window").color(Color32::WHITE));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             ui.checkbox(&mut self.canvas_state.show_zoom_window, "");
+                        });
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(lang.tr("🎛 Floating Tool Bar", "🎛 Floating Tool Bar"))
+                                .color(Color32::WHITE),
+                        );
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui
+                                .checkbox(&mut self.settings.floating_tool_bar_visible, "")
+                                .changed()
+                            {
+                                if !self.settings.floating_tool_bar_visible {
+                                    self.floating_tool_bar_last_rect = None;
+                                }
+                                self.persist_settings();
+                            }
                         });
                     });
 

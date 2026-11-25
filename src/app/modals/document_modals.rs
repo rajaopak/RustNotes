@@ -12,10 +12,17 @@ impl RustNotesApp {
             self.show_in_doc_search = false;
             return;
         }
+        let right_x = if self.settings.floating_tool_bar_visible
+            && self.settings.floating_tool_bar_dock == crate::model::FloatingToolBarDock::Right
+        {
+            -80.0
+        } else {
+            -24.0
+        };
         egui::Window::new("🔍 Cari di Dokumen")
             .collapsible(false)
             .resizable(false)
-            .anchor(egui::Align2::RIGHT_TOP, [-24.0, 96.0])
+            .anchor(egui::Align2::RIGHT_TOP, [right_x, 96.0])
             .show(ctx, |ui| {
                 ui.set_width(280.0);
                 ui.horizontal(|ui| {

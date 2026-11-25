@@ -645,8 +645,8 @@ impl RustNotesApp {
             }
         }
 
-        // Navbar & Popups
-        if !self.render_editor_navbar(ctx, nb_idx) {
+        // Navbar (Bilah Atas)
+        if !self.render_editor_navbar_bar(ctx, nb_idx) {
             return;
         }
 
@@ -922,8 +922,10 @@ impl RustNotesApp {
             }
         });
 
-        // Authentic GoodNotes Floating Top-Left Capsule Over Canvas: `( ↩ | ↪ )` + `( ◀ 1/N ▶ )`
+        // Authentic GoodNotes Floating Top-Left Capsule Over Canvas & Flexible 4-Sided Floating Quick Tool Bar
         if canvas_top_rect.is_positive() {
+            self.render_floating_tool_bar(ctx, nb_idx, canvas_top_rect);
+
             let pill_pos = canvas_top_rect.left_top() + Vec2::new(12.0, 10.0);
             egui::Area::new(egui::Id::new("goodnotes_floating_undo_pill"))
                 .fixed_pos(pill_pos)
@@ -1166,7 +1168,8 @@ impl RustNotesApp {
                 });
         }
 
-        // Editor Modal Dialogs
+        // Navbar Popups & Editor Modal Dialogs (dirender paling akhir pada layer Middle agar selalu di atas floating bar)
+        self.render_navbar_popups(ctx, nb_idx);
         self.render_editor_modals(ctx, nb_idx);
     }
 
