@@ -1454,7 +1454,7 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
                                     .strong(),
                             );
                             ui.horizontal_wrapped(|ui| {
-                                let templates: [(&str, &str); 7] = [
+                                let templates: [(&str, &str); 8] = [
                                     (
                                         "📊 Grafik Fungsi",
                                         "\\begin{axis}[title={$f(x) = x^2$}, xlabel={$x$}, ylabel={$y$}, xmin=-3, xmax=3, grid=major, axis lines=middle]\n\\addplot[blue, domain=-3:3]{x^2};\n\\addplot[red, dashed, domain=-3:3]{2*x + 1};\n\\legend{$x^2$, $2x+1$}\n\\end{axis}",
@@ -1462,6 +1462,10 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
                                     (
                                         "📈 Grafik Data",
                                         "\\begin{axis}[title={Data Pengamatan}, xlabel={Waktu}, ylabel={Nilai}, grid=major, ybar]\n\\addplot[teal] coordinates {(1, 3) (2, 7) (3, 5) (4, 9)};\n\\end{axis}",
+                                    ),
+                                    (
+                                        "🧊 Grafik 3D",
+                                        "\\begin{tikzpicture}\n  \\begin{axis}[domain=-1:1, y domain=-1:1, xlabel={$x$}, ylabel={$y$}, zlabel={$z$}]\n    \\addplot3[surf] {x*y*exp(x+2*y-9*x^2-9*y^2)};\n  \\end{axis}\n\\end{tikzpicture}",
                                     ),
                                     (
                                         "📐 Geometri Segitiga",
@@ -1587,7 +1591,7 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
                                     );
                                     ui.label(
                                         egui::RichText::new(
-                                            "Catatan: Mendukung rumus matematika, tabel (tabular/array/pmatrix/cases), grafik fungsi & data (axis/addplot), serta geometri & graf (tikzpicture).",
+                                            "Catatan: Mendukung rumus matematika, tabel (tabular/array/pmatrix/cases), grafik 2D & 3D (axis/addplot/addplot3), geometri & graf (tikzpicture), maupun dokumen LaTeX lengkap (\\begin{document}).",
                                         )
                                         .size(11.0)
                                         .color(Color32::GRAY),
@@ -1602,6 +1606,7 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
     if !open || close_action {
         state.show_equation_dialog = false;
         state.editing_equation_id = None;
+        state.equation_target_page_id = None;
         state.equation_latex_buffer.clear();
     } else if insert_action {
         let clean_latex = state.equation_latex_buffer.trim().to_string();
@@ -1620,6 +1625,7 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
                         break;
                     }
                 }
+                state.selected_ids = vec![edit_id.clone()];
             } else {
                 let new_id = uuid::Uuid::new_v4().to_string();
                 let insert_pos = state.equation_insert_pos;
@@ -1637,10 +1643,13 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
                 page.objects.push(new_obj);
                 state.selected_ids = vec![new_id];
             }
+            // Alihkan ke alat Lasso agar objek LaTeX yang baru dibuat/disunting dapat langsung digeser dan di-resize
+            state.current_tool = crate::canvas::types::ActiveTool::Lasso;
             state.rebuild_spatial_grid(&page.id, &page.objects);
         }
         state.show_equation_dialog = false;
         state.editing_equation_id = None;
+        state.equation_target_page_id = None;
         state.equation_latex_buffer.clear();
     }
 }

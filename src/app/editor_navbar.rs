@@ -1569,17 +1569,22 @@ impl RustNotesApp {
             }
 
             if resp.clicked() {
-                if is_sel {
+                if tool_var == ActiveTool::Equation {
+                    self.canvas_state.current_tool = ActiveTool::Equation;
+                    self.canvas_state.show_equation_dialog = true;
+                    self.canvas_state.editing_equation_id = None;
+                    self.canvas_state.equation_latex_buffer.clear();
+                    self.canvas_state.equation_target_page_id = self.library.notebooks[nb_idx]
+                        .pages
+                        .get(self.current_page_index)
+                        .map(|p| p.id.clone());
+                    self.show_tool_popup = false;
+                } else if is_sel {
                     self.show_tool_popup = !self.show_tool_popup;
                     self.show_more_menu_popup = false;
                     self.show_doc_title_popup = false;
                 } else {
                     self.canvas_state.current_tool = tool_var;
-                    if tool_var == ActiveTool::Equation {
-                        self.canvas_state.show_equation_dialog = true;
-                        self.canvas_state.editing_equation_id = None;
-                        self.canvas_state.equation_latex_buffer.clear();
-                    }
                 }
             }
         }

@@ -152,6 +152,25 @@ fn hits_selection_or_diagram_handle(
     false
 }
 
+fn is_gesture_owned_by_page(state: &CanvasState, page: &Page) -> bool {
+    if !state.pointer_gesture_active {
+        return false;
+    }
+    if let Some(pid) = state.active_stroke_page_id.as_deref() {
+        return pid == page.id;
+    }
+    if let Some(pid) = state.selection_drag_page_id.as_deref() {
+        return pid == page.id;
+    }
+    if state.is_dragging_selection || state.resize_corner.is_some() {
+        return page
+            .objects
+            .iter()
+            .any(|o| state.selected_ids.iter().any(|id| id == o.id()));
+    }
+    state.laser_is_drawing
+}
+
 /// Menangani seluruh interaksi drag primer, sampling pointer berpresisi tinggi, dan hold-to-snap pada kanvas halaman.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_pointer_drag_interaction(
@@ -180,15 +199,14 @@ pub(crate) fn handle_pointer_drag_interaction(
         (press_orig, prim_down, mt, dt, b)
     });
 
-    let owns_active_gesture = state.pointer_gesture_active
-        && (state.active_stroke_page_id.as_deref() == Some(&page.id)
-            || state.laser_is_drawing
-            || state.is_dragging_selection
-            || state.resize_corner.is_some());
+    let owns_active_gesture = is_gesture_owned_by_page(state, page);
 
     // Tangani pembatalan pointer eksplisit (`TouchPhase::Cancel` pada sentuhan aktif,
     // atau `PointerGone` tanpa pelepasan normal) secara aman.
-    if batch.should_cancel() && (owns_active_gesture || response.is_pointer_button_down_on()) {
+    if batch.should_cancel()
+        && (owns_active_gesture
+            || (!state.pointer_gesture_active && response.is_pointer_button_down_on()))
+    {
         state.active_alignment_guides.clear();
         state.eraser_undo_pushed = false;
         state.last_whole_erase_pos = None;
@@ -279,13 +297,11 @@ pub(crate) fn handle_pointer_drag_interaction(
         }
     }
 
-    let is_active_on_this_page = state.pointer_gesture_active
-        && (state.active_stroke_page_id.as_deref() == Some(&page.id)
-            || state.laser_is_drawing
-            || state.is_dragging_selection
-            || state.resize_corner.is_some());
+    let is_active_on_this_page = is_gesture_owned_by_page(state, page);
 
-    if response.dragged_by(PointerButton::Primary) || is_active_on_this_page {
+    if is_active_on_this_page
+        || (!state.pointer_gesture_active && response.dragged_by(PointerButton::Primary))
+    {
         let start_ref = press_origin.or(pointer_pos);
         let sample_count = batch.events.len().max(1);
         let dt_per_sample = frame_dt / (sample_count as f32);
@@ -362,7 +378,12 @@ pub(crate) fn handle_pointer_drag_interaction(
             .events
             .iter()
             .any(|e| e.phase == PointerSamplePhase::Release);
-    if response.drag_stopped() || (is_active_on_this_page && (!primary_down || released_in_batch)) {
+    if (is_active_on_this_page && (response.drag_stopped() || !primary_down || released_in_batch))
+        || (state.pointer_gesture_active
+            && state.active_stroke_page_id.is_none()
+            && state.selection_drag_page_id.is_none()
+            && response.drag_stopped())
+    {
         let stop_pos = batch
             .events
             .iter()
@@ -402,6 +423,7 @@ fn handle_drag_started(
 
         // Handle rotasi (⟳) di ujung titik akhir garis (berputar terhadap titik awal)
         if (page_p - line_rot_handle).length() <= handle_dist {
+            state.selection_drag_page_id = Some(page.id.clone());
             state.resize_corner = Some(ResizeCorner::Rotation);
             state.drag_start_pos = Some(page_p);
             state.push_undo(&page.id, &page.objects);
@@ -409,6 +431,7 @@ fn handle_drag_started(
         }
         // Handle titik akhir garis (dapat berotasi & diatur terhadap titik awal sebagai pusat)
         if (page_p - line_end).length() <= handle_dist {
+            state.selection_drag_page_id = Some(page.id.clone());
             state.resize_corner = Some(ResizeCorner::LineEnd);
             state.drag_start_pos = Some(page_p);
             state.push_undo(&page.id, &page.objects);
@@ -416,6 +439,7 @@ fn handle_drag_started(
         }
         // Handle titik awal garis (pusat rotasi)
         if (page_p - line_start).length() <= handle_dist {
+            state.selection_drag_page_id = Some(page.id.clone());
             state.resize_corner = Some(ResizeCorner::LineStart);
             state.drag_start_pos = Some(page_p);
             state.push_undo(&page.id, &page.objects);
@@ -425,6 +449,7 @@ fn handle_drag_started(
         if state.current_tool == ActiveTool::Lasso
             && crate::geometry::point_to_segment_dist(page_p, line_start, line_end) <= handle_dist
         {
+            state.selection_drag_page_id = Some(page.id.clone());
             state.is_dragging_selection = true;
             state.drag_start_pos = Some(page_p);
             state.push_undo(&page.id, &page.objects);
@@ -465,6 +490,7 @@ fn handle_drag_started(
                         new_idx = insert_control_point_at(control_points, start_pt, end_pt, mid_pt);
                     }
                 }
+                state.selection_drag_page_id = Some(page.id.clone());
                 state.resize_corner = Some(ResizeCorner::ConnectorControl(new_idx));
                 state.drag_start_pos = Some(page_p);
                 return;
@@ -498,6 +524,7 @@ fn handle_drag_started(
                         ResizeCorner::ConnectorControl(new_idx)
                     }
                 };
+                state.selection_drag_page_id = Some(page.id.clone());
                 state.resize_corner = Some(corner);
                 state.drag_start_pos = Some(page_p);
                 return;
@@ -530,6 +557,7 @@ fn handle_drag_started(
                 .find(|h| h.kind == h_kind)
                 .map(|h| h.pos.to_pos2())
                 .unwrap_or(page_p);
+            state.selection_drag_page_id = Some(page.id.clone());
             state.resize_corner = Some(corner);
             state.drag_start_pos = Some(page_p);
             state.resize_initial_bounds = sel.rect;
@@ -552,6 +580,7 @@ fn handle_drag_started(
             point_in_polygon(page_p, &frame.corners)
         };
         if inside_selection {
+            state.selection_drag_page_id = Some(page.id.clone());
             state.is_dragging_selection = true;
             state.drag_start_pos = Some(page_p);
             state.push_undo(&page.id, &page.objects);
@@ -683,6 +712,7 @@ fn handle_drag_started(
             state.lasso_points = vec![page_p];
         }
         ActiveTool::Laser => {
+            state.selection_drag_page_id = Some(page.id.clone());
             state.laser_is_drawing = true;
             state.laser_last_active = Instant::now();
             state.current_laser_stroke = vec![press_pos];
@@ -752,7 +782,10 @@ fn handle_drag_started(
             state.focus_text_edit = true;
             state.current_tool = ActiveTool::Lasso;
         }
-        ActiveTool::Hand | ActiveTool::Equation => {}
+        ActiveTool::Hand => {
+            state.selection_drag_page_id = Some(page.id.clone());
+        }
+        ActiveTool::Equation => {}
     }
 }
 
@@ -797,6 +830,9 @@ fn handle_drag_moved(
                 .iter()
                 .filter(|o| state.selected_ids.contains(&o.id().to_string()) && !o.is_locked())
                 .collect();
+            if selected_objects.is_empty() {
+                return;
+            }
 
             if let Some(moving_bounds) = combined_bounds(&selected_objects) {
                 let tentative_rect = moving_bounds.translate(Vec2::new(dx, dy));
@@ -1617,6 +1653,9 @@ fn handle_drag_stopped(
     }
     if state.laser_is_drawing {
         state.laser_is_drawing = false;
+        if state.selection_drag_page_id.as_deref() == Some(&page.id) {
+            state.selection_drag_page_id = None;
+        }
         if !state.current_laser_stroke.is_empty() {
             let stroke = std::mem::take(&mut state.current_laser_stroke);
             state.laser_strokes.push(stroke);
@@ -1626,12 +1665,14 @@ fn handle_drag_stopped(
     if state.is_dragging_selection {
         state.is_dragging_selection = false;
         state.drag_start_pos = None;
+        state.selection_drag_page_id = None;
         // Task 8.5: Periksa bila ada shape bergerak yang menimpa control points pada connector tanpa clone objek
         prune_all_invalid_connector_control_points(&mut page.objects);
         state.clean_redundant_top_undo(&page.id, &page.objects);
         state.rebuild_spatial_grid(&page.id, &page.objects);
     } else if let Some(corner) = state.resize_corner.take() {
         let drag_start_pos = state.drag_start_pos.take();
+        state.selection_drag_page_id = None;
         state.resize_initial_bounds = None;
         state.resize_initial_frame = None;
         state.resize_handle_offset = Vec2::ZERO;
@@ -2001,6 +2042,8 @@ fn handle_drag_stopped(
             state.lasso_points.clear();
         }
         state.clear_active_draft_state();
+    } else if state.selection_drag_page_id.as_deref() == Some(&page.id) {
+        state.selection_drag_page_id = None;
     }
 }
 
@@ -2083,6 +2126,7 @@ fn handle_double_click(
         {
             state.show_equation_dialog = true;
             state.editing_equation_id = Some(id.clone());
+            state.equation_target_page_id = Some(page.id.clone());
             state.equation_latex_buffer = latex.clone();
             state.equation_font_size = *font_size;
             state.selected_ids = vec![id];
@@ -2217,12 +2261,14 @@ fn handle_primary_click(
         if let Some((id, (latex, fsz))) = hit_eq {
             state.show_equation_dialog = true;
             state.editing_equation_id = Some(id.clone());
+            state.equation_target_page_id = Some(page.id.clone());
             state.equation_latex_buffer = latex;
             state.equation_font_size = fsz;
             state.selected_ids = vec![id];
         } else {
             state.show_equation_dialog = true;
             state.editing_equation_id = None;
+            state.equation_target_page_id = Some(page.id.clone());
             state.equation_insert_pos = page_p;
             state.equation_latex_buffer = String::new();
         }

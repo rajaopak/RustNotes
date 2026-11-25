@@ -530,6 +530,10 @@ impl RustNotesApp {
                     self.canvas_state.show_equation_dialog = true;
                     self.canvas_state.editing_equation_id = None;
                     self.canvas_state.equation_latex_buffer.clear();
+                    self.canvas_state.equation_target_page_id = self.library.notebooks[nb_idx]
+                        .pages
+                        .get(self.current_page_index)
+                        .map(|p| p.id.clone());
                 } else if crate::app::is_action_triggered(
                     ShortcutAction::ToolLaser,
                     &self.settings.shortcuts,

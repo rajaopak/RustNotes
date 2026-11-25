@@ -47,6 +47,7 @@ pub struct CanvasState {
     pub lasso_points: Vec<Pos2>,
     pub selected_ids: Vec<String>,
     pub is_dragging_selection: bool,
+    pub selection_drag_page_id: Option<String>,
     pub drag_start_pos: Option<Pos2>,
     pub resize_corner: Option<ResizeCorner>,
     pub resize_initial_bounds: Option<Rect>,
@@ -131,6 +132,7 @@ pub struct CanvasState {
     pub equation_latex_buffer: String,
     pub editing_equation_id: Option<String>,
     pub equation_insert_pos: Pos2,
+    pub equation_target_page_id: Option<String>,
     pub equation_font_size: f32,
 
     // Fase G7: Connector interactive creation & snapping state
@@ -181,6 +183,7 @@ impl Default for CanvasState {
             lasso_points: Vec::new(),
             selected_ids: Vec::new(),
             is_dragging_selection: false,
+            selection_drag_page_id: None,
             drag_start_pos: None,
             resize_corner: None,
             resize_initial_bounds: None,
@@ -238,6 +241,7 @@ impl Default for CanvasState {
             equation_latex_buffer: String::new(),
             editing_equation_id: None,
             equation_insert_pos: Pos2::new(100.0, 100.0),
+            equation_target_page_id: None,
             equation_font_size: 22.0,
             draft_connector_start: None,
             draft_connector_current: None,
@@ -983,6 +987,7 @@ impl CanvasState {
     /// Membersihkan seluruh state draft sementara alat kanvas tanpa memengaruhi zoom window atau undo history.
     pub fn clear_active_draft_state(&mut self) {
         self.active_stroke_page_id = None;
+        self.selection_drag_page_id = None;
         self.draft_stroke = None;
         self.raw_stroke_samples.clear();
         self.pending_press_event = None;

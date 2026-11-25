@@ -184,7 +184,13 @@ pub fn render_page_canvas(ui: &mut Ui, page: &mut Page, state: &mut CanvasState)
     render_inline_text_editor(ui, &painter, page, state, page_to_screen);
 
     // 10. Dialog Modal LaTeX Equation Tool (Task 10)
-    render_equation_modal_dialog(ui.ctx(), state, page);
+    if state
+        .equation_target_page_id
+        .as_deref()
+        .is_none_or(|pid| pid == page.id)
+    {
+        render_equation_modal_dialog(ui.ctx(), state, page);
+    }
 
     // Context menu on selection or blank canvas
     let has_selection_on_this_page = !state.selected_ids.is_empty()
