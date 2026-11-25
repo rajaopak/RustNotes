@@ -1459,6 +1459,43 @@ pub enum LaserColorMode {
     Rainbow,
 }
 
+/// Posisi docking 4 sisi untuk Floating Quick Tool Bar pada kanvas editor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FloatingToolBarDock {
+    #[default]
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+impl FloatingToolBarDock {
+    pub const ALL: [Self; 4] = [Self::Top, Self::Bottom, Self::Left, Self::Right];
+
+    #[inline]
+    pub fn is_horizontal(self) -> bool {
+        matches!(self, Self::Top | Self::Bottom)
+    }
+
+    #[inline]
+    pub fn is_vertical(self) -> bool {
+        matches!(self, Self::Left | Self::Right)
+    }
+
+    pub fn label(self, lang: AppLanguage) -> &'static str {
+        match (self, lang) {
+            (Self::Top, AppLanguage::Indonesian) => "Atas",
+            (Self::Top, AppLanguage::English) => "Top",
+            (Self::Bottom, AppLanguage::Indonesian) => "Bawah",
+            (Self::Bottom, AppLanguage::English) => "Bottom",
+            (Self::Left, AppLanguage::Indonesian) => "Kiri",
+            (Self::Left, AppLanguage::English) => "Left",
+            (Self::Right, AppLanguage::Indonesian) => "Kanan",
+            (Self::Right, AppLanguage::English) => "Right",
+        }
+    }
+}
+
 pub fn default_laser_color() -> ColorData {
     ColorData {
         r: 255,
@@ -1506,6 +1543,12 @@ pub struct AppSettings {
     /// Mode warna Penunjuk Laser (Solid atau Rainbow).
     #[serde(default)]
     pub laser_color_mode: LaserColorMode,
+    /// Menampilkan atau menyembunyikan Floating Quick Tool Bar pada editor.
+    #[serde(default = "default_true")]
+    pub floating_tool_bar_visible: bool,
+    /// Posisi docking 4 sisi Floating Quick Tool Bar (Top / Bottom / Left / Right).
+    #[serde(default)]
+    pub floating_tool_bar_dock: FloatingToolBarDock,
 }
 
 fn default_false() -> bool {
@@ -1805,6 +1848,8 @@ impl Default for AppSettings {
             highlighter_pressure_enabled: false,
             laser_color: default_laser_color(),
             laser_color_mode: LaserColorMode::Solid,
+            floating_tool_bar_visible: true,
+            floating_tool_bar_dock: FloatingToolBarDock::Top,
         }
     }
 }
@@ -2607,5 +2652,24 @@ mod tests {
             serde_json::from_str("{}").expect("deserialize legacy empty json");
         assert_eq!(legacy.laser_color, default_laser_color());
         assert_eq!(legacy.laser_color_mode, LaserColorMode::Solid);
+    }
+
+    #[test]
+    fn test_floating_tool_bar_settings_roundtrip_and_legacy_defaults() {
+        let settings = AppSettings {
+            floating_tool_bar_visible: false,
+            floating_tool_bar_dock: FloatingToolBarDock::Right,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&settings).expect("serialize floating bar settings");
+        let decoded: AppSettings =
+            serde_json::from_str(&json).expect("deserialize floating bar settings");
+        assert!(!decoded.floating_tool_bar_visible);
+        assert_eq!(decoded.floating_tool_bar_dock, FloatingToolBarDock::Right);
+
+        let legacy: AppSettings =
+            serde_json::from_str("{}").expect("deserialize legacy empty json");
+        assert!(legacy.floating_tool_bar_visible);
+        assert_eq!(legacy.floating_tool_bar_dock, FloatingToolBarDock::Top);
     }
 }
