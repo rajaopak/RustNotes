@@ -1422,3 +1422,68 @@ fn test_export_svg_and_png_text_alignment_not_offside_left() {
         "PNG exported Center/Right text must stay inside [x=120..], found offside dark pixel at x={min_dark_x}"
     );
 }
+
+#[test]
+fn test_export_png_and_svg_latex_graph_geometry_and_table() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut page = Page::new(PageTemplate::Blank);
+    let col = ColorData {
+        r: 25,
+        g: 28,
+        b: 35,
+        a: 255,
+    };
+
+    page.objects.push(DrawObject::Equation {
+        id: "eq-graph".into(),
+        latex: r"\begin{axis}[grid=major]\addplot[blue, domain=-2:2]{x^2};\end{axis}".into(),
+        x: 30.0,
+        y: 30.0,
+        font_size: 16.0,
+        scale: 1.0,
+        color: col.clone(),
+        rotation: 0.0,
+        locked: false,
+    });
+    page.objects.push(DrawObject::Equation {
+        id: "eq-geom".into(),
+        latex: r"\begin{tikzpicture}\filldraw[fill=red!25, draw=red] (0,0) -- (2,0) -- (1,2) -- cycle;\draw[green] (1,1) circle (0.6);\end{tikzpicture}".into(),
+        x: 30.0,
+        y: 300.0,
+        font_size: 16.0,
+        scale: 1.0,
+        color: col.clone(),
+        rotation: 0.0,
+        locked: false,
+    });
+    page.objects.push(DrawObject::Equation {
+        id: "eq-table".into(),
+        latex: r"\begin{tabular}{|l|r|}\hline Nama & Skor \\\hline Andi & 95 \\\hline\end{tabular}"
+            .into(),
+        x: 30.0,
+        y: 500.0,
+        font_size: 16.0,
+        scale: 1.0,
+        color: col,
+        rotation: 0.0,
+        locked: false,
+    });
+
+    let svg = export_page_to_svg(&page);
+    assert!(svg.contains("<polyline"));
+    assert!(svg.contains("<polygon"));
+    assert!(svg.contains("<ellipse"));
+    assert!(svg.contains("<line"));
+    assert!(svg.contains("Andi"));
+
+    let img = super::export_png::render_page_to_rgba_image(tmp.path(), "nb_latex_all", &page)
+        .expect("PNG render of graph/geometry/table must succeed");
+    let non_white = img
+        .pixels()
+        .filter(|p| p[0] < 245 || p[1] < 245 || p[2] < 245)
+        .count();
+    assert!(
+        non_white > 500,
+        "Rendered PNG of LaTeX graph, geometry & table must contain rich visible pixels, got {non_white}"
+    );
+}

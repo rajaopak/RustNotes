@@ -6743,3 +6743,53 @@ fn test_all_text_settings_font_bold_italic_color_size_alignment_work_end_to_end(
     assert_eq!(fmt.color, custom_col);
     assert_eq!(ts.galley.job.halign, eframe::egui::Align::Center);
 }
+
+#[test]
+fn test_equation_modal_preview_renders_graph_geometry_and_table() {
+    let ctx = egui::Context::default();
+    let cases = [
+        (
+            "graph",
+            "\\begin{axis}[title={Parabola}, grid=major, axis lines=middle]\n\\addplot[blue, domain=-2:2]{x^2};\n\\end{axis}",
+        ),
+        (
+            "geometry",
+            "\\begin{tikzpicture}\n\\filldraw[fill=blue!20, draw=blue] (0,0) -- (3,0) -- (1.5,2) -- cycle;\n\\draw[red] (1.5,1) circle (0.5);\n\\end{tikzpicture}",
+        ),
+        (
+            "table",
+            "\\begin{tabular}{|l|c|}\n\\hline\nA & B \\\\\n\\hline\n1 & 2 \\\\\n\\hline\n\\end{tabular}",
+        ),
+    ];
+
+    for (label, code) in cases {
+        let mut page = Page::new(PageTemplate::Blank);
+        page.id = format!("preview-{label}");
+        let mut state = CanvasState {
+            show_equation_dialog: true,
+            equation_latex_buffer: code.to_string(),
+            equation_font_size: 20.0,
+            ..Default::default()
+        };
+        assert!(
+            crate::geometry::math::parse_latex_math(&state.equation_latex_buffer).is_ok(),
+            "{label} LaTeX code must validate cleanly"
+        );
+        let out = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    Pos2::ZERO,
+                    Vec2::new(1024.0, 800.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                super::widgets::render_equation_modal_dialog(ctx, &mut state, &mut page);
+            },
+        );
+        assert!(
+            !out.shapes.is_empty(),
+            "Preview modal for {label} must emit shapes cleanly"
+        );
+    }
+}

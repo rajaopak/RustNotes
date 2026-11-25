@@ -4000,11 +4000,11 @@ fn test_unsupported_latex_macro_returns_parse_error() {
     let err = res.unwrap_err();
     assert!(err.message.contains("tidak didukung") && err.message.contains("unknownMacro"));
 
-    // 2. Makro paket eksternal (TikZ/PGF) ditolak secara eksplisit
-    let res_tikz = parse_latex_math(r"\begin{tikzpicture}\draw (0,0) -- (1,1);\end{tikzpicture}");
-    assert!(res_tikz.is_err());
-    let err_tikz = res_tikz.unwrap_err();
-    assert!(err_tikz.message.contains("tidak didukung"));
+    // 2. Environment/paket eksternal yang belum didukung (mis. circuitikz) ditolak secara eksplisit
+    let res_env = parse_latex_math(r"\begin{circuitikz}\draw (0,0) to[R] (2,0);\end{circuitikz}");
+    assert!(res_env.is_err());
+    let err_env = res_env.unwrap_err();
+    assert!(err_env.message.contains("tidak didukung"));
 
     // 3. Formula valid yang disusupi perintah tidak sah harus gagal secara utuh
     let res_mixed = parse_latex_math(r"\frac{\alpha + \beta}{\bogusCommand{x}}");
@@ -6631,4 +6631,172 @@ fn test_scale_object_respects_locked_connector_and_clamps_image_dimensions() {
     if let DrawObject::Image { width, height, .. } = img {
         assert!(width <= MAX_OBJECT_DIM && height <= MAX_OBJECT_DIM);
     }
+}
+
+#[test]
+fn test_latex_expr_evaluator_functions_precedence_and_safety() {
+    use super::math::expr::{eval_const_expr, eval_math_expr};
+
+    assert!((eval_math_expr("x^2 + 2x + 1", 3.0).unwrap() - 16.0).abs() < 1e-6);
+    assert!((eval_math_expr("-x^2", 3.0).unwrap() + 9.0).abs() < 1e-6);
+    assert!((eval_math_expr("sin(x)", std::f64::consts::FRAC_PI_2).unwrap() - 1.0).abs() < 1e-6);
+    assert!(
+        (eval_math_expr("sin(deg(x))", std::f64::consts::FRAC_PI_2).unwrap() - 1.0).abs() < 1e-6
+    );
+    assert!((eval_math_expr(r"\cos(\pi)", 0.0).unwrap() + 1.0).abs() < 1e-6);
+    assert!((eval_const_expr(r"\sqrt{9} + 2*3").unwrap() - 9.0).abs() < 1e-6);
+    assert!(eval_math_expr("1/x", 0.0).is_none());
+    let deep = format!("{}x{}", "(".repeat(100), ")".repeat(100));
+    assert!(eval_math_expr(&deep, 1.0).is_none());
+}
+
+#[test]
+fn test_latex_table_and_matrix_parsing_layout_and_svg() {
+    let table_code = r"
+\begin{tabular}{|l|c|r|}
+\hline
+\multicolumn{3}{|c|}{\textbf{Ringkasan Data}} \\
+\hline
+\textbf{Fungsi} & \textbf{Nilai} & \textbf{Keterangan} \\
+\cline{1-2}
+$x^2$ & $\frac{1}{2}$ & Genap \\
+\hline
+\end{tabular}";
+    let layout = MathLayout::compute_from_str_checked(table_code, 18.0)
+        .expect("Valid tabular LaTeX must parse cleanly");
+    assert!(layout.width > 120.0);
+    assert!(layout.height > 70.0);
+    let line_cnt = layout
+        .items
+        .iter()
+        .filter(|it| {
+            matches!(
+                it,
+                MathLayoutItem::Line { .. } | MathLayoutItem::StyledLine { .. }
+            )
+        })
+        .count();
+    assert!(
+        line_cnt >= 6,
+        "Table must render horizontal & vertical borders"
+    );
+    let svg = layout.to_svg(10.0, 10.0, &dummy_color(), 0.0);
+    assert!(svg.contains("<line") && svg.contains("<text"));
+
+    // Matriks & cases
+    let mat_code = r"A = \begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix}";
+    let mat_layout =
+        MathLayout::compute_from_str_checked(mat_code, 20.0).expect("pmatrix must parse");
+    assert!(
+        mat_layout
+            .items
+            .iter()
+            .any(|it| matches!(it, MathLayoutItem::Polyline { .. })),
+        "pmatrix must render curved matrix parentheses"
+    );
+
+    let cases_code = r"f(x) = \begin{cases} x^2 & x \geq 0 \\ -x & x < 0 \end{cases}";
+    let cases_layout =
+        MathLayout::compute_from_str_checked(cases_code, 18.0).expect("cases must parse");
+    assert!(cases_layout.height > 40.0);
+    assert!(
+        MathLayout::compute_from_str_checked(r"\begin{unknownenv}a\end{unknownenv}", 18.0).is_err()
+    );
+}
+
+#[test]
+fn test_latex_tikz_geometry_and_graph_theory_parsing_layout_and_svg() {
+    let geom_code = r"
+\begin{tikzpicture}
+\draw[lightgray, step=1] (0,0) grid (4,3);
+\filldraw[fill=blue!20, draw=blue, thick] (0,0) node[below left]{$A$} -- (4,0) node[below right]{$B$} -- (2,3) node[above]{$C$} -- cycle;
+\draw[red, dashed] (2,3) -- (2,0) node[below]{$H$};
+\draw[green] (1,1) circle (0.8);
+\draw[purple, ->] (0.5,0) arc (0:60:0.5);
+\node[circle, draw=black, fill=yellow!20] (P) at (5,1.5) {P};
+\node[circle, draw=black, fill=yellow!20] (Q) at (7,1.5) {Q};
+\draw[->, thick] (P) -- node[above]{5} (Q);
+\end{tikzpicture}";
+    let layout = MathLayout::compute_from_str_checked(geom_code, 18.0)
+        .expect("Valid tikzpicture must parse");
+    assert!(layout.width > 160.0 && layout.height > 80.0);
+    assert!(
+        layout
+            .items
+            .iter()
+            .any(|it| matches!(it, MathLayoutItem::Polygon { fill: Some(_), .. }))
+    );
+    assert!(
+        layout
+            .items
+            .iter()
+            .any(|it| matches!(it, MathLayoutItem::Ellipse { .. }))
+    );
+    assert!(layout.items.iter().any(|it| matches!(
+        it,
+        MathLayoutItem::StyledLine {
+            dash: crate::geometry::math::MathLineDash::Dashed,
+            ..
+        }
+    )));
+    assert!(layout.items.iter().any(|it| matches!(
+        it,
+        MathLayoutItem::StyledLine {
+            arrow_end: true,
+            ..
+        }
+    )));
+    let svg = layout.to_svg(0.0, 0.0, &dummy_color(), 0.0);
+    assert!(svg.contains("<polygon") && svg.contains("<ellipse") && svg.contains("<polyline"));
+}
+
+#[test]
+fn test_latex_pgfplots_axis_function_and_data_graph_layout_and_svg() {
+    let plot_code = r"
+\begin{tikzpicture}
+\begin{axis}[title={Grafik Fungsi}, xlabel={$x$}, ylabel={$y$}, xmin=-3, xmax=3, ymin=-4, ymax=4, grid=major, axis lines=middle]
+\addplot[blue, domain=-3:3, samples=60]{x^2};
+\addplot[red, dashed, domain=-3:3, samples=60]{1/x};
+\addplot[green, only marks, mark=*] coordinates {(-2, 1) (0, 2) (2, 3)};
+\legend{$x^2$, $1/x$, Data}
+\end{axis}
+\end{tikzpicture}";
+    let layout = MathLayout::compute_from_str_checked(plot_code, 18.0)
+        .expect("PGFPlots axis inside tikzpicture must parse");
+    assert!(layout.width > 200.0 && layout.height > 150.0);
+    // Plot 1/x terpecah saat melompati asimtot & menghasilkan banyak Polyline terpisah
+    let poly_count = layout
+        .items
+        .iter()
+        .filter(|it| matches!(it, MathLayoutItem::Polyline { .. }))
+        .count();
+    assert!(
+        poly_count >= 2,
+        "Function plots including 1/x must emit polylines, got {poly_count}"
+    );
+    assert!(
+        layout
+            .items
+            .iter()
+            .any(|it| matches!(it, MathLayoutItem::Ellipse { .. })),
+        "Scatter coordinates must emit point markers"
+    );
+
+    // Uji axis berdiri sendiri tanpa pembungkus tikzpicture + bar chart
+    let standalone_bar = r"
+\begin{axis}[title={Penjualan}, ybar, grid=major]
+\addplot[orange] coordinates {(1, 10) (2, 25) (3, 18)};
+\end{axis}";
+    let bar_layout = MathLayout::compute_from_str_checked(standalone_bar, 18.0)
+        .expect("Standalone axis must parse");
+    assert!(
+        bar_layout
+            .items
+            .iter()
+            .filter(|it| matches!(it, MathLayoutItem::Polygon { fill: Some(_), .. }))
+            .count()
+            >= 3
+    );
+    let svg = layout.to_svg(0.0, 0.0, &dummy_color(), 0.0);
+    assert!(svg.contains("<polyline") && svg.contains("Grafik Fungsi"));
 }
