@@ -152,10 +152,44 @@ jobs:
             throw "Expected dist\RustNotes-Setup.exe was not generated"
           }
 
-      - name: Smoke-test Windows Installer (Silent Install + PDFium Init)
+      - name: Smoke-test Windows Installer (Lifecycle, Upgrade, Guards & PDFium Init)
         shell: pwsh
         run: |
-          .\scripts\verify_installer.ps1 -InstallerPath "dist\RustNotes-Setup.exe"
+          $ver = "${{ steps.meta.outputs.version }}"
+          $buildDir = "target\x86_64-pc-windows-msvc\release"
+          $lifecycleDir = "dist\test-lifecycle"
+          New-Item -ItemType Directory -Force -Path $lifecycleDir | Out-Null
+          try {
+            $baseNumeric = ($ver -split '[-+]')[0]
+            $parts = $baseNumeric.Split('.')
+            $maj = [int]$parts[0]
+            $min = if ($parts.Length -gt 1) { [int]$parts[1] } else { 0 }
+            $pat = if ($parts.Length -gt 2) { [int]$parts[2] } else { 0 }
+
+            if ($pat -gt 0) {
+              $olderVer = "$maj.$min.$($pat - 1)"
+            } elseif ($min -gt 0) {
+              $olderVer = "$maj.$($min - 1).9"
+            } elseif ($maj -gt 0) {
+              $olderVer = "$($maj - 1).9.9"
+            } else {
+              $olderVer = "0.0.0-alpha"
+            }
+            $newerVer = "$maj.$min.$($pat + 1)"
+
+            iscc "/DMyAppVersion=$olderVer" "/DBuildDir=..\$buildDir" "/O$lifecycleDir" "/FRustNotes-Setup-Older" "installer\rustnotes.iss"
+            iscc "/DMyAppVersion=$newerVer" "/DBuildDir=..\$buildDir" "/O$lifecycleDir" "/FRustNotes-Setup-Newer" "installer\rustnotes.iss"
+
+            .\scripts\verify_installer.ps1 `
+              -InstallerPath "dist\RustNotes-Setup.exe" `
+              -OlderInstallerPath "$lifecycleDir\RustNotes-Setup-Older.exe" `
+              -NewerInstallerPath "$lifecycleDir\RustNotes-Setup-Newer.exe" `
+              -ExpectedBaseVersion "$ver" `
+              -ExpectedNewerVersion "$newerVer"
+          }
+          finally {
+            Remove-Item -Recurse -Force $lifecycleDir -ErrorAction SilentlyContinue
+          }
 
       - name: Upload Windows distribution artifacts
         uses: actions/upload-artifact@v4
