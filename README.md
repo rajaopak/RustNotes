@@ -12,188 +12,227 @@
   <img src="https://img.shields.io/badge/Language-Rust%202024%20Edition-orange?logo=rust" alt="Rust 2024">
   <img src="https://img.shields.io/badge/GUI-eframe%20%2F%20egui%200.31-blue" alt="egui 0.31">
   <img src="https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20(x64)-0078D6?logo=windows" alt="Windows 64-bit">
-  <img src="https://img.shields.io/badge/Runtime-Zero%20External%20Runtime-success" alt="Zero Runtime">
-  <img src="https://img.shields.io/badge/Tests-185%2B%20Passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/Runtime-Zero%20Web%20Runtime-success" alt="Zero Web Runtime">
+  <img src="https://img.shields.io/badge/Tests-312%20Passing-brightgreen" alt="Tests">
 </p>
 
 ---
 
 ## ⚡ Ikhtisar & Keunggulan
 
-Sebagian besar aplikasi catatan modern dibangun menggunakan tumpukan teknologi berbasis web (Electron, Chromium, React, NodeJS) yang memakan ratusan megabyte RAM dan sering mengalami latensi inking. **RustNotes** dirancang dari nol menggunakan **Pure Rust** dengan pustaka Immediate Mode GUI **`eframe` / `egui 0.31`** yang berkomunikasi langsung dengan GPU (DirectX / OpenGL / WGPU).
+Sebagian besar aplikasi catatan modern dibangun menggunakan tumpukan teknologi berbasis web (Electron, Chromium, React, Node.js) yang memakan ratusan megabyte RAM dan sering mengalami latensi *inking*. **RustNotes** dirancang dari nol menggunakan **Pure Rust** dengan pustaka Immediate Mode GUI **`eframe` / `egui 0.31`** yang berkomunikasi langsung dengan GPU melalui painter native, tanpa Electron, Chromium, Node.js, maupun WebView.
 
 ### 📊 Perbandingan Metrik: Electron vs RustNotes
 
 | Metrik | Aplikasi Catatan Berbasis Web/Electron | **RustNotes (Pure Rust)** |
 |---|:---:|:---:|
-| **Ukuran Executable** | 150 MB – 300 MB+ | **~5.5 MB** *(Single Standalone `.exe`)* |
+| **Ukuran Distribusi** | 150 MB – 300 MB+ | **~9.5 MB** (`rustnotes.exe`) + **~7.5 MB** (`pdfium.dll` x64 untuk PDF) |
 | **Konsumsi Memori RAM** | 450 MB – 1.2 GB | **~75 MB – 95 MB** |
 | **Waktu Startup** | 2 – 5 detik | **< 0.1 detik (Instan)** |
 | **Mesin Render** | Web DOM / HTML Canvas / SVG | **Native GPU Immediate Mode Painter (60–144+ FPS)** |
-| **Ketergantungan Eksternal** | Node.js, V8 Engine, Chromium Runtime | **Nol (Zero External Dependencies)** |
-| **Undo / Redo Reliability** | Sering desinkronisasi pada state DOM | **Deterministik (Immutable Page Snapshot Stack)** |
+| **Ketergantungan Runtime** | Node.js, V8 Engine, Chromium, WebView | **Nol Web Runtime** *(hanya `pdfium.dll` BSD-3-Clause di samping `.exe`)* |
+| **Undo / Redo Reliability** | Sering desinkronisasi pada state DOM | **Deterministik (Per-Page Immutable Snapshot Stack)** |
 
 ---
 
 ## ✨ Fitur Utama
 
-### 🖋️ 1. Mesin Inking & Peralatan Menggambar Halus
-- **Pen & Pencil:** Interpolasi kurva kuadratik Bézier (*midpoint smoothing*) adaptif menjamin goresan bebas sudut patah tanpa latensi kursor.
-- **Highlighter Bebas Tumpukan Gelap (*Overlap-Free*):** Menghasilkan pita stabil semi-transparan dengan potongan rata (*flat chisel ends*), mengeliminasi masalah warna menumpuk atau bintik gelap pada sambungan goresan.
-- **Multi-layer Neon Laser Pointer:** Laser interaktif dengan lingkaran cahaya neon berlapis (*Ambient Aura, Mid Halo, Core Beam, White Hotspot*) dan efek peluruhan halus saat diam atau diangkat.
-- **Smart Shape Recognition:** Tahan ujung pena selama $\approx 500$ ms di akhir goresan untuk otomatis merapikan goresan menjadi bentuk geometri sempurna (Garis lurus, Persegi, Segitiga, Lingkaran, Jajar Genjang).
-- **Penghapus Cerdas:** Mode penghapus utuh (*Whole Stroke Eraser*) dengan *spatial index* cepat dan penghapus parsial (*Partial Stroke Splitter*).
-- **Zoom Window:** Jendela bantuan penulisan detail halus dengan mekanisme *auto-advance* otomatis ke kanan saat mencapai batas tepi.
-- **Palm Rejection:** Filter deteksi sentuhan telapak tangan yang menolak goresan palsu ketika multi-touch terdeteksi.
+### 🖋️ 1. Mesin Inking & 12 Peralatan Kanvas Lengkap
+- **12 Alat Aktif:** `Pen`, `Pencil`, `Highlighter`, `Eraser`, `Lasso`, `Shape`, `Connector`, `Text`, `StickyNote`, `Equation` (LaTeX), `Laser`, dan `Hand`.
+- **Pen & Pencil:** Interpolasi kurva kuadratik Bézier (*midpoint smoothing*) dengan sensitivitas tekanan stylus yang dapat dikonfigurasi.
+- **Highlighter Bebas Tumpukan Gelap (*Overlap-Free*):** Menghasilkan pita semi-transparan rata (*flat chisel ends*) dengan pengaturan opasitas dan opsi sensitivitas tekanan tanpa bintik gelap di persimpangan goresan.
+- **Multi-layer Neon Laser Pointer:** Laser interaktif dengan 4 lapisan cahaya neon berlapis, peluruhan halus, serta mode warna **Solid** maupun **Rainbow**.
+- **Smart Shape Recognition & Connector Diagram:** Mendukung 9 jenis bentuk (`Rectangle`, `Ellipse`, `Line`, `Triangle`, `RightTriangle`, `ScaleneTriangle`, `Parallelogram`, `Diamond`, `Curve`), konektor `Straight` / `Orthogonal` / `Curved` dengan *connection sites*, *Quick Diagramming* (`Tab` / `Enter`), *Smart Alignment Guides*, dan kunci objek (`Ctrl+L`).
+- **Text Tool Presisi:** Inisialisasi bebas border/placeholder mengganggu, dukungan keluarga font (`Sans-Serif`, `Serif`, `Monospace`), gaya **Bold**, *Italic*, *Underline*, dan *Strikethrough*, perataan Kiri/Tengah/Kanan yang akurat di dalam bounding box, serta pengubahan ukuran interaktif yang mulus.
+- **Penghapus Cerdas:** Mode penghapus parsial (*Partial Stroke Splitter*) dan penghapus utuh (*Whole Stroke Eraser*) berbasis *spatial hash grid* + *Zoom Window* dengan *auto-advance* dan *Palm Rejection*.
 
-### 📐 2. Seleksi Lasso & Transformasi Objek Lengkap
-- **Seleksi Fleksibel:** Melingkari objek dengan kurva lasso bebas (*Ray-casting point-in-polygon* dan deteksi perpotongan CCW).
-- **Transformasi Bebas:** Menggeser (*move*), mengubah ukuran (*scale*), memutar dengan pivot sudut bebas (*rotation*), serta *flip* horizontal dan vertikal.
-- **Manajemen Objek:** Salin, Potong, Tempel, Duplikasi, Ubah Urutan tumpukan (*Bring to Front / Send to Back*), dan ubah warna seleksi massal.
-- **Sistem Clipboard Aplikasi:** Manajemen riwayat salinan independen berurutan waktu, terintegrasi mulus dengan clipboard gambar OS Windows (`Ctrl+V` langsung menempelkan foto).
+### 🎛️ 2. Floating Quick Tool Bar 4 Sisi (Kontekstual & Fleksibel)
+- **Tata Letak 4 Sisi Fleksibel:** Dapat di-*dock* pada sisi **Atas (Top)**, **Bawah (Bottom)**, **Kiri (Left)**, atau **Kanan (Right)** kanvas melalui *drag-to-redock* (dengan pratinjau zona drop di 4 sisi) maupun menu dock cepat.
+- **Toggle Tampil / Sembunyi:** Dapat ditampilkan atau disembunyikan kapan saja dari bilah editor, dan preferensi posisi serta visibilitasnya disimpan persisten ke `settings.json`.
+- **Kontrol Kontekstual Per-Tool & Anti-Tabrakan:** Menampilkan pengaturan cepat sesuai alat yang aktif (warna, ukuran/ketebalan, tipe garis, bentuk, perataan teks, mode eraser/lasso, mode warna laser, dll.) beserta tombol akses cepat ke pengaturan lengkap tool. Posisi bar otomatis menghindari panel *Side Pages*, kapsul Undo/Page, kapsul Zoom, *Zoom Window*, dan modal/popup.
 
-### 📑 3. Manajemen Halaman & Dokumen Lanjutan
-- **Rotasi Penuh Halaman (Full Page Rotation):** Memutar halaman sebesar 90° Searah Jarum Jam (CW), 90° Berlawanan Jarum Jam (CCW), atau 180°. Seluruh dimensi kertas, goresan pena, bentuk geometri, kotak teks, dan gambar ikut berputar dengan orientasi matematis yang presisi.
-- **Pengaturan Urutan Halaman:** Drag-and-drop thumbnail halaman pada sidebar kiri untuk memindahkan urutan halaman secara instan.
-- **Operasi Massal (*Bulk Actions*):** Seleksi beberapa halaman sekaligus untuk melakukan ekspor PDF massal, duplikasi, rotasi, atau penghapusan bersamaan.
-- **Katalog Template Kertas:** Preset ukuran A4, Letter, A5, dan Legacy dengan orientasi Portrait/Landscape serta template *Blank*, *Ruled*, *Grid*, *Dotted*, dan *Cornell Notes*.
+### 🧮 3. Mesin LaTeX Native (Formula, Tabel, Geometri TikZ, & Grafik 2D/3D)
+- **Dukungan LaTeX Kaya Secara Offline:**
+  - **Formula Matematika:** Fraksi, akar, eksponen/subskrip, integral/penjumlahan, matriks (`pmatrix`/`bmatrix`/`cases`), simbol Yunani & operator.
+  - **Tabel:** Lingkungan `tabular` dan `array` dengan perataan kolom serta garis pemisah sel.
+  - **Geometri & Diagram TikZ:** Mendukung `\documentclass{article}`, `\usepackage{pgfplots}`, dan `\begin{tikzpicture}` untuk garis, lingkaran, poligon, kurva, koordinat, dan label.
+  - **Grafik 2D & Permukaan 3D PGFPlots:** Mendukung `\begin{axis}` dengan `\addplot` 2D maupun `\addplot3[surf]` 3D lengkap dengan domain $x, y$ dan pewarnaan permukaan.
+- **Pratinjau & Transformasi Akurat:** Modal penyunting dengan pratinjau langsung + template cepat, skalabilitas linear proporsional saat di-resize langsung maupun lewat Lasso, serta dukungan penuh pada ekspor PNG, SVG vektor, dan PDF.
 
-### 📂 4. Organisasi & Keandalan Data
-- **Struktur Folder Bersarang (*Nested Folders*):** Tata catatan ke dalam hierarki folder bertingkat dengan navigasi *breadcrumb* yang bersih.
-- **Pencarian Cerdas & OCR Tulisan Tangan:** Ekstraksi otomatis goresan tangan ke teks digital di latar belakang untuk pencarian dokumen global maupun per-buku (`Ctrl+F`).
-- **Penyimpanan Atomik (*Atomic Writes*):** Penyimpanan aman ke `%APPDATA%\RustNotes\` melalui mekanisme `.tmp` $\rightarrow$ salinan cadangan `.previous.json` $\rightarrow$ penggantian atomik. Mencegah berkas korup jika terjadi pemadaman listrik tiba-tiba.
-- **Impor & Ekspor Fleksibel:**
-  - Impor PDF langsung ke halaman buku catatan via `pdfium`.
-  - Ekspor dokumen penuh atau halaman terpilih ke berkas PDF vektor berkualitas tinggi atau gambar PNG resolusi tinggi.
-  - Cadangkan dan bagikan dokumen dengan format berkas arsip portabel `.rnote` atau `.zip`.
+### 📐 4. Seleksi Lasso & Transformasi Objek Multi-Halaman
+- **Seleksi Fleksibel:** Seleksi bebas maupun persegi panjang dengan kurva lasso (*ray-casting* & deteksi perpotongan CCW).
+- **Transformasi Terisolasi & Stabil:** Geser (*move*), skala (*resize*), putar (*rotate*), serta *flip* horizontal/vertikal yang terisolasi bersih per halaman.
+- **Manajemen Objek & Clipboard Independen:** Salin, Potong, Tempel, Duplikasi, *Bring to Front / Send to Back*, kunci objek (`Ctrl+L`), serta integrasi tempel gambar dari clipboard OS Windows (`Ctrl+V`).
+
+### 📑 5. Manajemen Halaman, Template, & Organisasi Dokumen
+- **Rotasi Penuh Halaman:** Putar halaman 90° CW, 90° CCW, atau 180° — dimensi kertas dan seluruh objek (termasuk LaTeX, teks, shape, konektor, dan gambar) ikut berputar presisi.
+- **7 Preset Ukuran Kertas & 10 Template Bawaan:** `A4`, `Letter`, `A5`, `16:9 Slide`, `4:3 Standard`, `Square`, dan `Legacy` (Portrait/Landscape) dengan template `Blank`, `Ruled`, `RuledNarrow`, `RuledWide`, `Grid`, `GridFine`, `Dotted`, `DottedFine`, `Cornell`, dan `Isometric`, plus dukungan *Custom Templates*.
+- **Organisasi & Pencarian:** Folder bersarang, *Favorites*, *Trash* dengan pemulihan, pencarian global dan per-buku (`Ctrl+F`) berbasis OCR tulisan tangan lokal, serta UI dwibahasa (**Indonesia / English**) dan tema (**Dark / Light / System**).
+
+### 📦 6. Distribusi Windows (Installer Berbasis Versi & Edisi Portabel)
+- **Windows Installer (`RustNotes-Setup.exe`):**
+  - Membundel `rustnotes.exe`, pustaka PDF **`pdfium.dll`** (x64), aset ikon, serta asosiasi berkas `.rnote`.
+  - **Versi lebih baru:** Otomatis mendeteksi instalasi RustNotes di Windows dan memperbarui aplikasi secara *in-place* tanpa mengganggu atau menghapus catatan pengguna.
+  - **Versi sama:** Memberi tahu pengguna bahwa versi tersebut sudah terpasang dan keluar dengan aman (kecuali diminta `/REINSTALL`).
+  - **Versi lebih lama (*outdated*):** Menampilkan peringatan dan memblokir instalasi agar pengguna tidak menimpa instalasi baru dengan versi lama yang berisiko memicu bug atau masalah kompatibilitas.
+- **Edisi Portabel (`RustNotes-Portable.zip`):**
+  - Berjalan mandiri di foldernya sendiri (`portable.txt` + `rustnotes.exe` + `pdfium.dll`) dengan seluruh catatan, pengaturan, template, dan log disimpan di `.\data\` di samping `rustnotes.exe`.
 
 ---
 
-## ⌨️ Pintasan Keyboard (Keyboard Shortcuts)
+## ⌨️ Pintasan Keyboard Default
 
-| Pintasan | Aksi |
+Seluruh **27 pintasan** dapat dikustomisasi secara bebas melalui dialog pintasan (`F1` atau `?`) dan disimpan ke `settings.json`.
+
+| Pintasan Default | Aksi |
 |---|---|
-| `Ctrl + Z` / `Ctrl + Y` | Membatalkan (*Undo*) / Mengulang (*Redo*) mutasi kanvas |
+| `Ctrl + Z` / `Ctrl + Y` | Membatalkan (*Undo*) / Mengulang (*Redo*) |
 | `Ctrl + S` | Simpan dokumen saat ini secara instan |
 | `Ctrl + F` | Buka pencarian teks & OCR di dalam buku catatan |
+| `Ctrl + A` | Pilih semua objek di halaman aktif |
 | `Ctrl + C` / `Ctrl + X` | Salin (*Copy*) / Potong (*Cut*) objek seleksi |
-| `Ctrl + V` | Tempelkan (*Paste*) objek atau gambar dari clipboard |
+| `Ctrl + V` | Tempelkan (*Paste*) objek aplikasi atau gambar Windows clipboard |
 | `Ctrl + D` | Duplikasi objek seleksi langsung di tempat |
-| `P` / `H` / `E` / `L` / `T` | Pintasan alat: Pena (*Pen*), Stabilo (*Highlighter*), Penghapus (*Eraser*), Lasso, Teks |
-| `Ctrl + Scroll` | Zoom in / Zoom out pada posisi kursor |
-| `Ctrl + 0` | Mengembalikan tingkat pembesaran ke 100% (Reset Zoom) |
-| `F1` / `?` | Buka dialog bantuan pintasan keyboard |
+| `Ctrl + L` | Kunci (*Lock*) / Buka kunci (*Unlock*) objek terpilih |
+| `Delete` | Hapus objek terpilih |
+| `P` / `B` / `H` / `E` | Pen / Pencil / Highlighter / Eraser |
+| `L` / `T` / `S` / `C` / `N` | Lasso / Text / Shape / Connector / Sticky Note |
+| `Alt + E` / `R` / `Space` | Equation (LaTeX) / Laser Pointer / Hand (Geser Kanvas) |
+| `F6` / `Alt + Z` / `Alt + G` | Toggle Panel Halaman / Zoom Window / Grid Snapping |
+| `Tab` / `Enter` | *Quick Diagramming* bentuk anak (kanan) / saudara (bawah) |
+| `Ctrl + Scroll` / `Ctrl + 0` | Zoom In/Out pada kursor / Reset Zoom 100% |
+| `F1` / `?` | Buka dialog pintasan keyboard & panduan |
 
 ---
 
-## 🚀 Memulai (Build from Source)
+## 🚀 Memulai (Build & Paket Distribusi)
 
 ### Prasyarat
 - **Sistem Operasi:** Windows 10 atau Windows 11 (64-bit).
-- **Rust Toolchain:** Rust versi terbaru (edisi 2024 atau stabil $\ge 1.85$). Disarankan menggunakan toolchain `x86_64-pc-windows-msvc`.
+- **Rust Toolchain:** Rust edisi 2024 ($\ge 1.85$) target `x86_64-pc-windows-msvc`.
+- *(Opsional untuk installer)* **Inno Setup 6** (`ISCC.exe`) untuk mengompilasi `installer/rustnotes.iss`.
 
-### Langkah Kompilasi
+### Langkah Kompilasi & Verifikasi
 
-1. **Clone repositori:**
-   ```bash
-   git clone https://github.com/rajaopak/RustNotes.git
-   cd RustNotes/goodnotes-rust
-   ```
+```powershell
+git clone https://github.com/rajaopak/RustNotes.git
+cd RustNotes/goodnotes-rust
 
-2. **Jalankan pengujian unit (Unit Tests):**
-   ```powershell
-   cargo test
-   ```
+# 1. Verifikasi format, linter, dan seluruh unit/integration tests (312 tests)
+cargo fmt --check
+cargo clippy -- -D warnings
+cargo test
 
-3. **Verifikasi kode dengan Clippy:**
-   ```powershell
-   cargo clippy --all-targets -- -D warnings
-   ```
+# 2. Kompilasi biner Release (build.rs otomatis memvalidasi & menyalin pdfium.dll x64)
+cargo build --release
 
-4. **Kompilasi biner Release:**
-   ```powershell
-   cargo build --release
-   ```
+# 3. Validasi runtime lokal & inisialisasi PDFium
+.\target\release\rustnotes.exe --verify-runtime
 
-File biner executable mandiri akan tersedia di:
-```text
-goodnotes-rust/target/release/rustnotes.exe
+# 4. (Opsional) Paketkan Edisi Portabel ke dist\RustNotes-Portable.zip
+.\package_portable.ps1
+
+# 5. (Opsional, butuh Inno Setup 6) Bangun & uji lifecycle Windows Installer
+iscc installer\rustnotes.iss
+.\scripts\verify_installer.ps1 -InstallerPath "dist\RustNotes-Setup.exe"
 ```
 
-*(Ukuran binary hanya sekitar 5.5 MB, berjalan langsung tanpa memerlukan instalasi runtime tambahan).*
+Lihat [docs/RELEASE.md](docs/RELEASE.md) untuk rincian lengkap aturan rilis, PDFium, dan kebijakan versi installer.
 
 ---
 
 ## 🏗️ Struktur Arsitektur Kode
 
-Kode sumber diorganisir secara modular berdasarkan domain tanggung jawab tunggal:
-
 ```text
 goodnotes-rust/
-├── Cargo.toml                  # Konfigurasi dependensi dan profil rilis
-├── pdfium.dll                  # Pustaka rendering PDF opsional
-├── assets/                     # Aset ikon dan grafis antarmuka
+├── Cargo.toml                      # Konfigurasi dependensi dan profil rilis (LTO)
+├── build.rs                        # Validasi PE x64 & penyalinan otomatis pdfium.dll
+├── pdfium.dll                      # Pustaka rendering & impor/ekspor PDF (x86_64, BSD-3-Clause)
+├── lib/pdfium.dll.lib              # Import library (hanya untuk link build, tidak dibundel)
+├── package_portable.ps1            # Skrip pemaketan RustNotes-Portable.zip
+├── installer/rustnotes.iss         # Skrip Inno Setup 6 (upgrade/same-version/downgrade guard)
+├── scripts/verify_installer.ps1    # Uji otomatis installer (lifecycle, PDFium, & proteksi notes)
+├── docs/RELEASE.md                 # Panduan rilis, PDFium, dan kebijakan versi installer
+├── .github/workflows/              # CI Windows (ci.yml & windows-release.yml)
+├── assets/                         # Aset ikon aplikasi (icon.ico, icon.png)
 └── src/
-    ├── main.rs                 # Entry point, subsistem GUI Windows, konfigurasi viewport
-    ├── lib.rs                  # Root crate library
-    ├── model.rs                # Struktur data: Library, Notebook, Page, DrawObject, Template
-    ├── crash_handler.rs        # Panic handler otomatis menulis log ke %APPDATA%\RustNotes\logs\
-    ├── app/                    # Antarmuka Pengguna & Logika State Aplikasi
-    │   ├── cover.rs            # Generator sampul buku realistis dengan pola dinamis
-    │   ├── document_ops.rs     # Operasi duplikasi, hapus, dan pengurutan halaman
-    │   ├── editor_navbar.rs    # Bilah alat atas Goodnotes-style (#284872) & pop-up alat
-    │   ├── editor_sidebar.rs   # Panel thumbnail kiri dengan fitur drag-drop & seleksi massal
-    │   ├── editor_view.rs      # Tampilan editor kanvas utama & sinkronisasi scroll
-    │   ├── library_view.rs     # Galeri rak buku catatan, navigasi folder, dan pencarian global
-    │   ├── modals.rs           # Dialog pembuatan buku, impor PDF/gambar, dan info About
-    │   ├── state.rs            # State utama RustNotesApp
-    │   ├── theme.rs            # Manajemen tema warna Goodnotes
-    │   └── types.rs            # Tipe data UI & enum navigasi
-    ├── canvas/                 # Mesin Render Kanvas & State Machine Peralatan
-    │   ├── gizmo.rs            # Transform handles, rotation pivot, multi-selection, alignment guides
-    │   ├── widgets.rs          # Floating toolbars (shape, connector, stroke) & inline text editor
-    │   ├── laser.rs            # Algoritma pita laser multi-layer bebas artifak
-    │   ├── primitives.rs       # Render pola kertas (ruled, grid, dotted), teks, & gambar
-    │   ├── render.rs           # Loop interaksi pointer, deteksi drag, dan painter GPU
-    │   ├── state.rs            # Undo/Redo stack per-halaman & seleksi aktif
-    │   ├── types.rs            # Enum alat (Pen, Pencil, Highlighter, Eraser, Lasso, dll.)
-    │   ├── zoom_window.rs      # Jendela zoom interaktif dengan auto-scroll
-    │   └── tests.rs            # Pengujian unit kanvas
-    ├── geometry/               # Kalkulasi Matematika 2D Murni (Zero UI Dependencies)
-    │   ├── primitives.rs       # Perhitungan bounding box akurat per objek & gabungan
-    │   ├── transform.rs        # Rotasi halaman, translasi, rotasi sudut, dan flip objek
-    │   ├── hit_test.rs         # Deteksi sentuhan kursor & pengujian objek di dalam lasso
-    │   ├── tessellation.rs     # Tessellator pita segitiga goresan, stabilo, & stylus pressure
-    │   ├── math.rs             # Parser LaTeX & mesin tata letak 2D formula matematika
-    │   ├── spatial_grid.rs     # Akselerasi spasial grid untuk hit-test cepat di halaman padat
-    │   ├── shapes.rs           # Algoritma pengenalan bentuk otomatis (Shape Recognition)
-    │   ├── eraser.rs           # Logika pemotongan goresan sebagian (Stroke Splitter)
-    │   ├── palm_rejection.rs   # Filter penolakan sentuhan telapak tangan
-    │   ├── ocr.rs              # Ekstraksi OCR fitur tulisan tangan berbasis topologi goresan
-    │   └── tests.rs            # Pengujian unit geometri
-    └── storage/                # Subsistem Penyimpanan Modular & Proteksi Integritas Data
-        ├── mod.rs              # Entry point re-export storage API
-        ├── io.rs               # Atomic write aman & retensi rolling backup 3 generasi
-        ├── notebook_store.rs   # Serialisasi notebook JSON, rotasi, & recovery multi-generasi
-        ├── archive.rs          # Ekspor/impor arsip ZIP (.rnote / .zip) aman dari path traversal
-        ├── export_png.rs       # Software PNG rasterizer (capsule blending & anti-aliasing)
-        ├── export_svg.rs       # Generator vector XML SVG
-        ├── export_pdf.rs       # PDFium PDF export & import
-        └── tests.rs            # Pengujian unit storage & migrasi
+    ├── main.rs                     # Entry point, --verify-runtime, file association, fonts
+    ├── lib.rs                      # Root crate library
+    ├── model.rs                    # Model domain: Library, Notebook, Page, DrawObject, AppSettings
+    ├── crash_handler.rs            # Panic hook otomatis menulis log ke folder data aktif\logs\
+    ├── app/                        # Antarmuka Pengguna & Orkestrasi Aplikasi
+    │   ├── mod.rs                  # Ekspor & lifecycle frame eframe::App
+    │   ├── types.rs                # Enum UI, tab, modal, konteks menu, clipboard queue
+    │   ├── state.rs                # State utama RustNotesApp & sinkronisasi penyimpanan
+    │   ├── theme.rs                # Tema visual Goodnotes (Dark / Light / System)
+    │   ├── cover.rs                # Generator sampul buku dinamis
+    │   ├── shortcuts.rs            # Manajemen 27 pintasan keyboard yang dapat dikustomisasi
+    │   ├── document_ops.rs         # Operasi duplikasi, pindah, hapus, impor/ekspor halaman
+    │   ├── editor_navbar.rs        # Bilah alat atas, kontrol halaman, dan popup pengaturan tool
+    │   ├── floating_tool_bar.rs    # Floating Quick Tool Bar 4 sisi (Top/Bottom/Left/Right)
+    │   ├── editor_sidebar.rs       # Panel thumbnail halaman dengan drag-drop & aksi massal
+    │   ├── editor_view.rs          # Viewport editor kanvas, kapsul Undo/Zoom, & isolasi overlay
+    │   ├── library_view.rs         # Galeri rak buku, folder bersarang, Favorites, Trash, pencarian
+    │   └── modals/                 # Dialog modular (document_modals, page_modals, settings_modal, mod)
+    ├── canvas/                     # Mesin Render Kanvas, Input, & Interaksi
+    │   ├── mod.rs                  # Re-export modul canvas
+    │   ├── types.rs                # Enum 12 ActiveTool, EraserMode, ResizeCorner, LaserTrailPoint
+    │   ├── state.rs                # Undo/Redo stack terisolasi per halaman & cache tekstur/mesh
+    │   ├── interaction.rs          # State machine pointer, seleksi lasso, drag/resize terisolasi
+    │   ├── sampling.rs             # Pengambilan sampel goresan & filtering stylus
+    │   ├── render.rs               # Render kanvas utama & koordinasi layer
+    │   ├── primitives.rs           # Render 10 template kertas, teks, gambar, & bayangan
+    │   ├── highlighter_renderer.rs # Renderer stabilo overlap-free
+    │   ├── gizmo.rs                # Handle transformasi, rotasi pivot, & smart alignment guides
+    │   ├── widgets.rs              # Editor teks inline, quick toolbar objek, & modal LaTeX
+    │   ├── laser.rs                # Laser pointer neon 4 lapis dengan peluruhan waktu
+    │   ├── zoom_window.rs          # Jendela zoom tulis dengan auto-advance
+    │   └── tests.rs                # 79 unit test kanvas
+    ├── geometry/                   # Kalkulasi Matematika 2D & Mesin LaTeX (Zero UI State Mutation)
+    │   ├── mod.rs                  # Re-export modul geometry
+    │   ├── primitives.rs           # Bounding box, ray casting, jarak segmen
+    │   ├── curves.rs               # Utilitas kurva & interpolasi
+    │   ├── tessellation.rs         # Tesselasi pita segitiga goresan & stabilo
+    │   ├── highlighter.rs          # Geometri pita stabilo flat-chisel
+    │   ├── shapes.rs               # Pengenalan bentuk otomatis (Smart Shape Recognition)
+    │   ├── shape_ops.rs            # Pembuatan & geometri 9 jenis bentuk + label
+    │   ├── connectors.rs           # Routing konektor, snap site, & quick diagramming
+    │   ├── snapping.rs             # Grid snapping & smart alignment guides
+    │   ├── eraser.rs               # Pemotongan goresan parsial (Stroke Splitter)
+    │   ├── hit_test.rs             # Hit-testing & pengujian objek dalam lasso
+    │   ├── transform.rs            # Translasi, scale, rotasi objek, & rotasi halaman penuh
+    │   ├── spatial_grid.rs         # Akselerasi spasial grid untuk hit-test cepat
+    │   ├── palm_rejection.rs       # Filter penolakan sentuhan telapak tangan
+    │   ├── ocr.rs                  # Ekstraksi fitur tulisan tangan offline
+    │   ├── math/                   # Mesin LaTeX native (mod, expr, table, tikz/PGFPlots 2D & 3D)
+    │   └── tests.rs                # 132 unit test geometri & LaTeX
+    └── storage/                    # Subsistem Penyimpanan & Proteksi Integritas Data
+        ├── mod.rs                  # Re-export API penyimpanan
+        ├── io.rs                   # Atomic write, rolling backup 3 generasi, deteksi Mode Portabel
+        ├── library_store.rs        # Indeks library, migrasi skema, & quarantine aman
+        ├── notebook_store.rs       # Penyimpanan per-notebook, deduplikasi aset SHA-256, recovery
+        ├── archive.rs              # Ekspor/impor arsip ZIP (.rnote / .zip) anti path-traversal
+        ├── export_png.rs           # Rasterizer PNG (termasuk grafik/tabel/formula LaTeX)
+        ├── export_svg.rs           # Generator vector XML SVG
+        ├── export_pdf.rs           # Integrasi PDFium (impor/ekspor PDF & validasi runtime PE)
+        ├── templates.rs            # Penyimpanan custom template & AppSettings
+        └── tests.rs                # 45 unit test storage, export, & recovery
 ```
 
 ---
 
 ## 🛡️ Keamanan & Privasi Data
 
-- **100% Offline & Lokal:** Semua catatan, buku, folder, dan berkas aset disimpan secara lokal di komputer pengguna (`%APPDATA%\RustNotes\`). Tidak ada data atau telemetri yang dikirimkan ke server eksternal mana pun.
-- **Penyimpanan Atomik & Retensi Rolling Backup:** Penulisan berkas menggunakan mekanisme atomic temporary replacement dengan retensi 3 generasi berkas cadangan (`.bak.1.json`, `.bak.2.json`, `.bak.3.json`, `.previous.json`). Jika terjadi crash atau kegagalan tak terduga, RustNotes otomatis memulihkan notebook dari cadangan valid terbaru.
-- **Schema Versioning:** Dilengkapi versi skema dokumen eksplisit (`schema_version`) untuk menjamin kompatibilitas maju-mundur dan mencegah korupsi file saat versi aplikasi diperbarui.
-- **Ekstraksi Arsip Aman:** Pemeriksaan ketat terhadap berkas impor arsip ZIP untuk memblokir eksploitasi direktori traversal (`..`) dan membatasi ukuran ekstraksi untuk mencegah *zip bomb*.
+- **100% Offline & Lokal:** Tidak ada data atau telemetri yang dikirim ke server eksternal.
+  - **Installed Mode:** Data disimpan di **`%LOCALAPPDATA%\RustNotes\`** (tidak menulis ke `Program Files`, sehingga aman saat update/reinstall installer).
+  - **Portable Mode:** Jika terdapat berkas `portable.txt` (atau `.portable` / folder `data/`) di samping `rustnotes.exe`, seluruh data disimpan lokal di **`.\data\`**.
+- **Penyimpanan Atomik & Rolling Backup:** Menggunakan berkas temporer `.tmp` $\rightarrow$ `sync_all` $\rightarrow$ rotasi cadangan `.previous.json` & `.bak.1..3.json` sebelum *rename* atomik (lengkap dengan mekanisme rollback jika file terkunci sementara di Windows).
+- **Schema Versioning:** `CURRENT_SCHEMA_VERSION = 3` (Library) dan `CURRENT_NOTEBOOK_SCHEMA_VERSION` dengan penolakan penimpaan berkas dari versi aplikasi yang lebih baru.
+- **Ekstraksi Arsip Aman:** Proteksi path traversal (`..`) dan batas ukuran ekstraksi untuk arsip `.rnote`/`.zip`.
 
 ---
 
 ## 📄 Lisensi
 
 Proyek ini dilisensikan di bawah lisensi terbuka [MIT License](LICENSE).
-Bebas digunakan, dimodifikasi, dan didistribusikan untuk keperluan pribadi maupun komersial.
+`pdfium.dll` merupakan perangkat lunak sumber terbuka berlisensi **BSD 3-Clause License**.

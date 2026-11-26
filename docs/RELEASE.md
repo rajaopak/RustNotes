@@ -46,17 +46,31 @@ cargo test
 # 3. Build Windows Installer (dist/RustNotes-Setup.exe) — requires Inno Setup 6
 iscc installer\rustnotes.iss
 
-# 4. Run Automated Silent-Install Smoke Test (verifies pdfium.dll + --verify-runtime)
+# 4. Run Automated Lifecycle Smoke Test (fresh install, same-version notice, downgrade guard, upgrade + notes preservation + pdfium.dll)
 .\scripts\verify_installer.ps1 -InstallerPath "dist\RustNotes-Setup.exe"
 ```
 
-## 5. Troubleshooting `pdfium.dll not found`
+## 5. Windows Installer Version Policy (`installer/rustnotes.iss`)
+
+`RustNotes-Setup.exe` compares its embedded SemVer (`MyAppVersion`) against any existing RustNotes installation registered under `HKCU` or `HKLM` (only treating an installation as active if its executable still exists on disk):
+
+| Condition | Interactive Behavior | Silent Behavior (`/VERYSILENT`) | User Data (`%LOCALAPPDATA%\RustNotes\`) |
+|---|---|---|---|
+| **Newer version** (`installer > installed`) | Prompts user to confirm in-place update into the existing directory, automatically updates `rustnotes.exe` + `pdfium.dll`, and skips changing directory unless overridden. | Updates existing installation in-place automatically. | **Preserved** (never modified or deleted). |
+| **Same version** (`installer == installed`) | Informs the user that the same version is already installed and exits cleanly. | Aborts cleanly (`exit code != 0`) unless `/REINSTALL` is passed explicitly. | **Preserved**. |
+| **Older version** (`installer < installed`) | Displays a critical warning refusing to overwrite a newer installation with an outdated installer (to avoid bugs/compatibility issues) and aborts. | **Blocked** (`exit code != 0`). | **Preserved**. |
+
+- **Portable Edition Independence:** `RustNotes-Portable.zip` (built by `package_portable.ps1`) includes `portable.txt`, `rustnotes.exe`, and `pdfium.dll`, runs completely standalone in its own folder, and stores user data in `.\data\`. The Windows Installer never touches portable folders and never bundles `portable.txt`.
+
+> For CI-style full lifecycle verification against older and newer installers, pass `-OlderInstallerPath`, `-NewerInstallerPath`, `-ExpectedBaseVersion`, and `-ExpectedNewerVersion` to `scripts\verify_installer.ps1`.
+
+## 6. Troubleshooting `pdfium.dll not found`
 
 1. Verify `pdfium.dll` exists in the exact same directory as `rustnotes.exe` (e.g. `{app}\pdfium.dll` or `RustNotes-Portable\pdfium.dll`).
 2. Run `rustnotes.exe --verify-runtime` from that directory. On failure, it prints all searched paths and distinguishes missing files, invalid PE headers, x86/ARM64 architecture mismatches, and OS loader dependency errors.
 3. For custom/override locations, set `RUSTNOTES_PDFIUM_PATH` (or `PDFIUM_PATH`) to the full path or directory containing an `x86_64` `pdfium.dll`.
 
-## 6. Clean Machine Verification Checklist
+## 7. Clean Machine Verification Checklist
 
 ### Portable ZIP (`RustNotes-Portable.zip`)
 1. Extract `RustNotes-Portable.zip` to a folder outside the repository on a machine without Rust/Cargo installed.
