@@ -224,8 +224,7 @@ impl RustNotesApp {
                             ui.set_max_width(VERTICAL_BAR_INNER_WIDTH);
                         }
                         let mut render_contents = |ui: &mut egui::Ui| {
-                            // 1. Handle seret untuk memindahkan posisi ke 4 sisi kanvas
-                            let grip_text = if is_horiz { "⋮⋮" } else { "⋯" };
+                            // 1. Handle seret vektor (6-titik) untuk memindahkan posisi ke 4 sisi kanvas
                             let grip_size = if is_horiz {
                                 Vec2::new(18.0, 24.0)
                             } else {
@@ -242,13 +241,13 @@ impl RustNotesApp {
                                     Color32::TRANSPARENT
                                 },
                             );
-                            ui.painter().text(
-                                grip_rect.center(),
-                                egui::Align2::CENTER_CENTER,
-                                grip_text,
-                                FontId::proportional(13.0),
-                                pal.muted,
-                            );
+                            let grip_color =
+                                if grip_resp.hovered() || self.dragging_floating_tool_bar {
+                                    pal.fg
+                                } else {
+                                    pal.muted
+                                };
+                            paint_drag_grip_icon(ui.painter(), grip_rect, is_horiz, grip_color);
                             if grip_resp.hovered() {
                                 ctx.set_cursor_icon(CursorIcon::Grab);
                             }
@@ -1194,6 +1193,27 @@ impl RustNotesApp {
     }
 }
 
+/// Menggambar ikon handle seret 6 titik secara vektor murni agar tidak pernah tampil kotak fallback font (`□`).
+pub(crate) fn paint_drag_grip_icon(
+    painter: &egui::Painter,
+    rect: Rect,
+    is_horiz: bool,
+    color: Color32,
+) {
+    let center = rect.center();
+    let (cols, rows): (usize, usize) = if is_horiz { (2, 3) } else { (3, 2) };
+    let step = 4.2_f32;
+    let radius = 1.35_f32;
+    let start_x = center.x - ((cols - 1) as f32 * step) * 0.5;
+    let start_y = center.y - ((rows - 1) as f32 * step) * 0.5;
+    for r in 0..rows {
+        for c in 0..cols {
+            let pos = Pos2::new(start_x + c as f32 * step, start_y + r as f32 * step);
+            painter.circle_filled(pos, radius, color);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1364,5 +1384,78 @@ mod tests {
         );
         assert!(!out.shapes.is_empty());
         assert!(app.floating_tool_bar_last_rect.is_some());
+    }
+
+    fn scan_shapes_for_grip(
+        shape: &egui::Shape,
+        bar_rect: Rect,
+        circle_count: &mut usize,
+        has_bad_glyph: &mut bool,
+    ) {
+        match shape {
+            egui::Shape::Text(text_shape) => {
+                let txt = text_shape.galley.text();
+                if txt.contains('⋮') || txt.contains('⋯') {
+                    *has_bad_glyph = true;
+                }
+            }
+            egui::Shape::Circle(circle) => {
+                if bar_rect.contains(circle.center) && circle.radius <= 2.0 {
+                    *circle_count += 1;
+                }
+            }
+            egui::Shape::Vec(children) => {
+                for child in children {
+                    scan_shapes_for_grip(child, bar_rect, circle_count, has_bad_glyph);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn test_floating_tool_bar_drag_grip_uses_vector_dots_not_missing_unicode_glyphs() {
+        let ctx = egui::Context::default();
+        let mut app = RustNotesApp::default();
+        let nb = Notebook::new("Grip Test", PageTemplate::Blank, Color32::WHITE);
+        app.active_notebook_id = Some(nb.id.clone());
+        app.library.notebooks = vec![nb];
+        app.settings.floating_tool_bar_visible = true;
+
+        for dock in [FloatingToolBarDock::Top, FloatingToolBarDock::Left] {
+            app.settings.floating_tool_bar_dock = dock;
+            app.floating_tool_bar_last_rect = None;
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, 800.0))),
+                ..Default::default()
+            };
+            let _ = ctx.run(raw.clone(), |ctx| {
+                app.render_editor_view(ctx);
+            });
+            let out = ctx.run(raw, |ctx| {
+                app.render_editor_view(ctx);
+            });
+            let bar_rect = app
+                .floating_tool_bar_last_rect
+                .expect("Floating bar rect must be recorded");
+            let mut circle_count = 0usize;
+            let mut has_bad_glyph = false;
+            for clipped in &out.shapes {
+                scan_shapes_for_grip(
+                    &clipped.shape,
+                    bar_rect,
+                    &mut circle_count,
+                    &mut has_bad_glyph,
+                );
+            }
+            assert!(
+                !has_bad_glyph,
+                "{dock:?}: drag grip must not use unsupported Unicode glyphs (⋮ / ⋯)"
+            );
+            assert!(
+                circle_count >= 6,
+                "{dock:?}: drag grip must draw 6 vector circles inside {bar_rect:?}, got {circle_count}"
+            );
+        }
     }
 }
