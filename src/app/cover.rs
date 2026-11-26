@@ -36,8 +36,8 @@ pub fn draw_goodnotes_cover(
     );
 
     // 3. Center Label Badge (white label badge)
-    let badge_w = rect.width() * 0.72;
-    let badge_h = 38.0;
+    let badge_w = rect.width() * 0.76;
+    let badge_h = (rect.height() * 0.24).clamp(32.0, 42.0);
     let badge_rect = Rect::from_center_size(
         Pos2::new(rect.center().x + 5.0, rect.top() + rect.height() * 0.35),
         Vec2::new(badge_w, badge_h),
@@ -45,7 +45,7 @@ pub fn draw_goodnotes_cover(
     painter.rect_filled(
         badge_rect,
         3.0,
-        Color32::from_rgba_premultiplied(255, 255, 255, 220),
+        Color32::from_rgba_premultiplied(255, 255, 255, 225),
     );
     painter.rect_stroke(
         badge_rect,
@@ -54,18 +54,18 @@ pub fn draw_goodnotes_cover(
         StrokeKind::Outside,
     );
 
-    // Title inside badge
-    let truncated_title = if title.chars().count() > 16 {
-        format!("{}…", title.chars().take(15).collect::<String>())
-    } else {
-        title.to_string()
-    };
+    // Measure actual pixel width of title so it never touches or clips outside the badge edges
+    let font_size = (rect.width() * 0.092).clamp(10.5, 12.5);
+    let font_id = FontId::proportional(font_size);
+    let text_color = Color32::from_rgb(28, 30, 34);
+    let max_text_w = (badge_w - 12.0).max(20.0);
+    let display_title = fit_title_to_width(painter, title, &font_id, text_color, max_text_w);
     painter.text(
         badge_rect.center(),
         egui::Align2::CENTER_CENTER,
-        truncated_title,
-        FontId::proportional(12.0),
-        Color32::from_rgb(30, 30, 30),
+        display_title,
+        font_id,
+        text_color,
     );
 
     // 4. Subtle watermark lines at bottom right
@@ -94,6 +94,44 @@ pub fn draw_goodnotes_cover(
             FontId::proportional(16.0),
             Color32::from_rgb(255, 204, 0),
         );
+    }
+}
+
+/// Memotong teks dengan elipsis `…` berdasarkan lebar piksel terukur sehingga tidak pernah meluber.
+pub(crate) fn fit_title_to_width(
+    painter: &Painter,
+    title: &str,
+    font_id: &FontId,
+    color: Color32,
+    max_width: f32,
+) -> String {
+    let full = painter.layout_no_wrap(title.to_string(), font_id.clone(), color);
+    if full.size().x <= max_width {
+        return title.to_string();
+    }
+    let chars: Vec<char> = title.chars().collect();
+    if chars.is_empty() || max_width <= 8.0 {
+        return "…".to_string();
+    }
+    let mut lo = 0usize;
+    let mut hi = chars.len();
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        let mut candidate: String = chars[..mid].iter().collect();
+        candidate.push('…');
+        let g = painter.layout_no_wrap(candidate, font_id.clone(), color);
+        if g.size().x <= max_width {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    if lo == 0 {
+        "…".to_string()
+    } else {
+        let mut out: String = chars[..lo].iter().collect();
+        out.push('…');
+        out
     }
 }
 

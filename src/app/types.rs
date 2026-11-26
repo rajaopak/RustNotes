@@ -59,9 +59,79 @@ pub enum AddPagePosition {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NavView {
+    Recent,
     Documents,
     Favorites,
     Trash,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum LibrarySortBy {
+    #[default]
+    LastModified,
+    DateCreated,
+    NameAsc,
+    NameDesc,
+    PageCount,
+}
+
+impl LibrarySortBy {
+    pub const ALL: [Self; 5] = [
+        Self::LastModified,
+        Self::DateCreated,
+        Self::NameAsc,
+        Self::NameDesc,
+        Self::PageCount,
+    ];
+
+    pub fn label(self, lang: crate::model::AppLanguage) -> &'static str {
+        match (self, lang) {
+            (Self::LastModified, crate::model::AppLanguage::Indonesian) => "Terakhir Diubah",
+            (Self::LastModified, crate::model::AppLanguage::English) => "Last Modified",
+            (Self::DateCreated, crate::model::AppLanguage::Indonesian) => "Tanggal Dibuat",
+            (Self::DateCreated, crate::model::AppLanguage::English) => "Date Created",
+            (Self::NameAsc, _) => "Nama (A–Z)",
+            (Self::NameDesc, _) => "Nama (Z–A)",
+            (Self::PageCount, crate::model::AppLanguage::Indonesian) => "Jumlah Halaman",
+            (Self::PageCount, crate::model::AppLanguage::English) => "Page Count",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum LibraryViewStyle {
+    #[default]
+    Grid,
+    List,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum LibraryFilter {
+    #[default]
+    All,
+    PdfOnly,
+    FavoritesOnly,
+}
+
+impl LibraryFilter {
+    pub const ALL: [Self; 3] = [Self::All, Self::PdfOnly, Self::FavoritesOnly];
+
+    pub fn label(self, lang: crate::model::AppLanguage) -> &'static str {
+        match (self, lang) {
+            (Self::All, crate::model::AppLanguage::Indonesian) => "Semua",
+            (Self::All, crate::model::AppLanguage::English) => "All",
+            (Self::PdfOnly, crate::model::AppLanguage::Indonesian) => "PDF",
+            (Self::PdfOnly, crate::model::AppLanguage::English) => "PDF",
+            (Self::FavoritesOnly, crate::model::AppLanguage::Indonesian) => "Favorit",
+            (Self::FavoritesOnly, crate::model::AppLanguage::English) => "Favorites",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LibraryDragPayload {
+    Notebooks(Vec<String>),
+    Folder(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
