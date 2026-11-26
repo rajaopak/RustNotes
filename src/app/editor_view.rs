@@ -974,7 +974,7 @@ impl RustNotesApp {
             let pill_pos = canvas_top_rect.left_top() + Vec2::new(12.0, 10.0);
             egui::Area::new(egui::Id::new("goodnotes_floating_undo_pill"))
                 .fixed_pos(pill_pos)
-                .order(egui::Order::Foreground)
+                .order(egui::Order::Middle)
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         // Pill 1: `( ↩ | ↪ )` Undo & Redo
@@ -1123,7 +1123,7 @@ impl RustNotesApp {
             let zoom_pill_pos = canvas_top_rect.left_bottom() + Vec2::new(12.0, -42.0);
             egui::Area::new(egui::Id::new("goodnotes_floating_zoom_pill"))
                 .fixed_pos(zoom_pill_pos)
-                .order(egui::Order::Foreground)
+                .order(egui::Order::Middle)
                 .show(ctx, |ui| {
                     egui::Frame::NONE
                         .fill(palette.bg_elevated)
@@ -1264,7 +1264,7 @@ impl RustNotesApp {
                 });
         }
 
-        // Navbar Popups & Editor Modal Dialogs (dirender paling akhir pada layer Middle agar selalu di atas floating bar)
+        // Navbar Popups (Order::Foreground, di atas floating pills) & Editor Modal Dialogs
         self.render_navbar_popups(ctx, nb_idx);
         self.render_editor_modals(ctx, nb_idx);
     }
@@ -1530,5 +1530,44 @@ mod tests {
         press_key(&mut app, &ctx, egui::Key::Q, true);
         assert_eq!(app.canvas_state.current_tool, ActiveTool::Equation);
         assert!(app.canvas_state.show_equation_dialog);
+    }
+
+    #[test]
+    fn test_doc_title_popup_renders_above_floating_undo_and_page_pills() {
+        let ctx = egui::Context::default();
+        let mut app = test_app_with_single_page();
+        app.show_doc_title_popup = true;
+
+        step_editor(&mut app, &ctx, vec![]);
+        step_editor(&mut app, &ctx, vec![]);
+
+        let doc_popup_id = egui::Id::new("goodnotes_doc_title_popup");
+        let undo_pill_id = egui::Id::new("goodnotes_floating_undo_pill");
+        let doc_rect = ctx
+            .memory(|m| m.area_rect(doc_popup_id))
+            .expect("Document title popup area must be registered");
+        let undo_rect = ctx
+            .memory(|m| m.area_rect(undo_pill_id))
+            .expect("Floating undo/page pill area must be registered");
+
+        let overlap = doc_rect.intersect(undo_rect);
+        assert!(
+            overlap.is_positive(),
+            "Expected overlap region to test z-order: doc={doc_rect:?}, undo={undo_rect:?}"
+        );
+        assert_eq!(
+            ctx.layer_id_at(overlap.center()),
+            Some(egui::LayerId::new(egui::Order::Foreground, doc_popup_id)),
+            "Document title popup must stay above floating undo & page pills"
+        );
+
+        let uncovered_undo_pt = Pos2::new(undo_rect.left() + 6.0, undo_rect.center().y);
+        if !doc_rect.contains(uncovered_undo_pt) {
+            assert_eq!(
+                ctx.layer_id_at(uncovered_undo_pt),
+                Some(egui::LayerId::new(egui::Order::Middle, undo_pill_id)),
+                "Floating undo pill must live on Order::Middle"
+            );
+        }
     }
 }

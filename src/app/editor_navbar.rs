@@ -657,9 +657,18 @@ impl RustNotesApp {
         // =====================================================================
         if self.show_doc_title_popup {
             egui::Window::new(lang.tr("📄 Info & Judul Dokumen", "📄 Document Title & Info"))
+                .id(egui::Id::new("goodnotes_doc_title_popup"))
+                .order(egui::Order::Foreground)
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::LEFT_TOP, [44.0, 56.0])
+                .frame(
+                    egui::Frame::window(&ctx.style())
+                        .fill(palette.bg_elevated)
+                        .stroke(Stroke::new(1.0_f32, palette.border_subtle))
+                        .corner_radius(10.0)
+                        .inner_margin(10.0),
+                )
                 .show(ctx, |ui| {
                     ui.set_width(290.0);
                     ui.label(
@@ -724,6 +733,8 @@ impl RustNotesApp {
                 56.0
             };
             egui::Window::new(lang.tr("🎨 Pengaturan Alat & Palet", "🎨 Tool & Palette Settings"))
+                .id(egui::Id::new("goodnotes_tool_popup"))
+                .order(egui::Order::Foreground)
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_TOP, [0.0, top_y])
@@ -1146,6 +1157,7 @@ impl RustNotesApp {
                 self.current_page_index + 1
             ))
             .id(egui::Id::new("goodnotes_more_menu_popup"))
+            .order(egui::Order::Foreground)
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::RIGHT_TOP, [right_x, 56.0])
