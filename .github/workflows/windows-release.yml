@@ -178,7 +178,13 @@ jobs:
             $newerVer = "$maj.$min.$($pat + 1)"
 
             iscc "/DMyAppVersion=$olderVer" "/DBuildDir=..\$buildDir" "/O$lifecycleDir" "/FRustNotes-Setup-Older" "installer\rustnotes.iss"
+            if ($LASTEXITCODE -ne 0) {
+              throw "iscc failed building older test installer (exit code $LASTEXITCODE)"
+            }
             iscc "/DMyAppVersion=$newerVer" "/DBuildDir=..\$buildDir" "/O$lifecycleDir" "/FRustNotes-Setup-Newer" "installer\rustnotes.iss"
+            if ($LASTEXITCODE -ne 0) {
+              throw "iscc failed building newer test installer (exit code $LASTEXITCODE)"
+            }
 
             .\scripts\verify_installer.ps1 `
               -InstallerPath "dist\RustNotes-Setup.exe" `

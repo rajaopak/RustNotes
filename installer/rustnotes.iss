@@ -77,8 +77,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "{#BuildDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion replacesameversion restartreplace
-Source: "{#PdfiumSource}"; DestDir: "{app}"; Flags: ignoreversion replacesameversion restartreplace
+Source: "{#BuildDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion restartreplace
+Source: "{#PdfiumSource}"; DestDir: "{app}"; Flags: ignoreversion restartreplace
 Source: "..\assets\icon.ico"; DestDir: "{app}\assets"; Flags: ignoreversion
 Source: "..\assets\icon.png"; DestDir: "{app}\assets"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
@@ -549,12 +549,15 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ExePath, PdfDllPath: String;
+  ExeStatus, PdfStatus: String;
 begin
   if CurStep = ssPostInstall then
   begin
     ExePath := ExpandConstant('{app}\{#MyAppExeName}');
     PdfDllPath := ExpandConstant('{app}\pdfium.dll');
-    Log('Post-install check: exe=' + ExePath + ' (exists=' + IntToStr(Ord(FileExists(ExePath))) + '), pdfium=' + PdfDllPath + ' (exists=' + IntToStr(Ord(FileExists(PdfDllPath))) + ').');
+    if FileExists(ExePath) then ExeStatus := 'yes' else ExeStatus := 'no';
+    if FileExists(PdfDllPath) then PdfStatus := 'yes' else PdfStatus := 'no';
+    Log('Post-install check: exe=' + ExePath + ' (exists=' + ExeStatus + '), pdfium=' + PdfDllPath + ' (exists=' + PdfStatus + ').');
   end;
 end;
 
