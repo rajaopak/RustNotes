@@ -147,8 +147,9 @@ pub struct CanvasState {
     pub grid_spacing: f32,
     pub active_alignment_guides: Vec<crate::geometry::AlignmentGuide>,
 
-    // Sinkronisasi konfigurasi shortcut untuk label dinamis pada menu konteks kanvas
+    // Sinkronisasi konfigurasi shortcut & bahasa untuk menu konteks dan dialog kanvas
     pub shortcuts: crate::model::ShortcutSettings,
+    pub language: crate::model::AppLanguage,
 }
 
 impl Default for CanvasState {
@@ -251,6 +252,7 @@ impl Default for CanvasState {
             grid_spacing: 30.0,
             active_alignment_guides: Vec::new(),
             shortcuts: crate::model::ShortcutSettings::default(),
+            language: crate::model::AppLanguage::Indonesian,
         }
     }
 }

@@ -60,6 +60,40 @@ impl PageTemplate {
             Self::Isometric => "Grid titik isometrik 60° untuk gambar teknik & 3D",
         }
     }
+
+    pub fn name_tr(&self, lang: AppLanguage) -> &'static str {
+        match (self, lang) {
+            (Self::Blank, AppLanguage::Indonesian) => "Blank (Polos)",
+            (Self::Blank, AppLanguage::English) => "Blank",
+            (Self::Ruled, _) => "Ruled Standard",
+            (Self::RuledNarrow, _) => "Ruled Narrow",
+            (Self::RuledWide, _) => "Ruled Wide",
+            (Self::Grid, _) => "Grid Standard",
+            (Self::GridFine, _) => "Grid Fine (5mm)",
+            (Self::Dotted, _) => "Dotted Standard",
+            (Self::DottedFine, _) => "Dotted Fine",
+            (Self::Cornell, _) => "Cornell Notes",
+            (Self::Isometric, _) => "Isometric 3D",
+        }
+    }
+
+    pub fn description_tr(&self, lang: AppLanguage) -> &'static str {
+        match lang {
+            AppLanguage::Indonesian => self.description(),
+            AppLanguage::English => match self {
+                Self::Blank => "Clean plain paper for versatile notes",
+                Self::Ruled => "Standard horizontal ruled lines (30 pt)",
+                Self::RuledNarrow => "Tight horizontal ruling for dense writing (20 pt)",
+                Self::RuledWide => "Wide horizontal ruling for larger handwriting (40 pt)",
+                Self::Grid => "Standard symmetric square grid (30 pt)",
+                Self::GridFine => "Fine precision square grid (15 pt / ~5 mm)",
+                Self::Dotted => "Standard symmetric dot grid (30 pt)",
+                Self::DottedFine => "Fine dot grid (15 pt)",
+                Self::Cornell => "Cornell layout with cue column & summary section",
+                Self::Isometric => "60° isometric dot grid for 3D & technical sketches",
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -559,6 +593,18 @@ impl StrokeStyle {
             StrokeStyle::Dotted => "Dotted",
         }
     }
+
+    pub fn name_tr(&self, lang: AppLanguage) -> &'static str {
+        match (self, lang) {
+            (StrokeStyle::Solid, AppLanguage::Indonesian) => "Lurus (Solid)",
+            (StrokeStyle::Solid, AppLanguage::English) => "Solid",
+            (StrokeStyle::Dashed, AppLanguage::Indonesian) => "Putus-Putus",
+            (StrokeStyle::Dashed, AppLanguage::English) => "Dashed",
+            (StrokeStyle::DashDot, _) => "Dash-Dot",
+            (StrokeStyle::Dotted, AppLanguage::Indonesian) => "Titik-Titik",
+            (StrokeStyle::Dotted, AppLanguage::English) => "Dotted",
+        }
+    }
 }
 
 /// Mode seleksi untuk Lasso Tool (Task 6)
@@ -581,10 +627,28 @@ impl LassoSelectionMode {
         }
     }
 
+    pub fn label_tr(&self, lang: AppLanguage) -> &'static str {
+        match (self, lang) {
+            (Self::Containment, AppLanguage::Indonesian) => "Lingkup Penuh (Containment)",
+            (Self::Containment, AppLanguage::English) => "Full Enclosure (Containment)",
+            (Self::Intersection, AppLanguage::Indonesian) => "Sentuhan / Irisan (Intersection)",
+            (Self::Intersection, AppLanguage::English) => "Touch / Intersect (Intersection)",
+        }
+    }
+
     pub fn short_label(&self) -> &'static str {
         match self {
             Self::Containment => "⧉ Lingkup",
             Self::Intersection => "⨅ Irisan",
+        }
+    }
+
+    pub fn short_label_tr(&self, lang: AppLanguage) -> &'static str {
+        match (self, lang) {
+            (Self::Containment, AppLanguage::Indonesian) => "⧉ Lingkup",
+            (Self::Containment, AppLanguage::English) => "⧉ Enclose",
+            (Self::Intersection, AppLanguage::Indonesian) => "⨅ Irisan",
+            (Self::Intersection, AppLanguage::English) => "⨅ Intersect",
         }
     }
 }
@@ -1348,6 +1412,17 @@ impl ThemeMode {
             ThemeMode::Dark => ThemeMode::Light,
             ThemeMode::Light => ThemeMode::System,
             ThemeMode::System => ThemeMode::Dark,
+        }
+    }
+
+    pub fn label_tr(self, lang: AppLanguage) -> &'static str {
+        match (self, lang) {
+            (ThemeMode::Dark, AppLanguage::Indonesian) => "🌙 Gelap",
+            (ThemeMode::Dark, AppLanguage::English) => "🌙 Dark",
+            (ThemeMode::Light, AppLanguage::Indonesian) => "☀ Terang",
+            (ThemeMode::Light, AppLanguage::English) => "☀ Light",
+            (ThemeMode::System, AppLanguage::Indonesian) => "💻 Sistem",
+            (ThemeMode::System, AppLanguage::English) => "💻 System",
         }
     }
 }

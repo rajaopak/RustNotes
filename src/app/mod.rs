@@ -4,6 +4,8 @@ pub mod editor_navbar;
 pub mod editor_sidebar;
 pub mod editor_view;
 pub mod floating_tool_bar;
+pub mod library_layout;
+pub mod library_modals;
 pub mod library_view;
 pub mod modals;
 pub mod shortcuts;
@@ -18,7 +20,7 @@ pub use theme::*;
 pub use types::*;
 
 use crate::storage::{LoadStatus, app_storage_dir, save_notebook_to_dir};
-use eframe::egui::{self, Align, Color32, Layout, RichText};
+use eframe::egui::{self, Align, Layout, RichText};
 use std::time::Instant;
 
 impl eframe::App for RustNotesApp {
@@ -46,6 +48,7 @@ impl eframe::App for RustNotesApp {
         if self.canvas_state.shortcuts != self.settings.shortcuts {
             self.canvas_state.shortcuts = self.settings.shortcuts.clone();
         }
+        self.canvas_state.language = self.settings.language;
 
         // Apply Goodnotes theme styling (Dark / Light / System OS Windows)
         setup_goodnotes_theme(ctx, self.settings.theme_mode);
@@ -110,6 +113,7 @@ impl eframe::App for RustNotesApp {
         }
 
         // Render toast / banner if active
+        let palette = UiPalette::from_ctx(ctx, self.settings.theme_mode);
         let mut dismiss_toast = false;
         if let Some(msg) = &self.toast_message {
             egui::TopBottomPanel::bottom("status_banner")
@@ -117,11 +121,12 @@ impl eframe::App for RustNotesApp {
                 .show(ctx, |ui| {
                     ui.horizontal_centered(|ui| {
                         let is_err = self.is_read_only
-                            || matches!(self.load_status, LoadStatus::CorruptedQuarantined { .. });
+                            || matches!(self.load_status, LoadStatus::CorruptedQuarantined { .. })
+                            || msg.contains('⚠');
                         let text_color = if is_err {
-                            Color32::from_rgb(255, 120, 120)
+                            palette.danger
                         } else {
-                            Color32::from_rgb(120, 220, 140)
+                            palette.success
                         };
                         ui.label(RichText::new(msg).color(text_color).strong().size(12.0));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -161,8 +166,15 @@ impl eframe::App for RustNotesApp {
                     && let Ok(bytes) = std::fs::read(path)
                 {
                     self.insert_image_to_page(idx, self.current_page_index, &bytes, &ext, None);
-                    self.toast_message =
-                        Some("✅ Gambar berhasil disisipkan via Drag & Drop.".to_string());
+                    self.toast_message = Some(
+                        self.settings
+                            .language
+                            .tr(
+                                "✅ Gambar berhasil disisipkan via Drag & Drop.",
+                                "✅ Image inserted via Drag & Drop.",
+                            )
+                            .to_string(),
+                    );
                 }
             }
         }

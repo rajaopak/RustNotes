@@ -41,6 +41,32 @@ impl DiagramStarterKind {
             }
         }
     }
+
+    pub fn title_tr(self, lang: crate::model::AppLanguage) -> &'static str {
+        match (self, lang) {
+            (Self::Flowchart, crate::model::AppLanguage::Indonesian) => "Alur Kerja (Flowchart)",
+            (Self::Flowchart, crate::model::AppLanguage::English) => "Flowchart Workflow",
+            (Self::MindMap, crate::model::AppLanguage::Indonesian) => "Peta Pikiran (Mind Map)",
+            (Self::MindMap, crate::model::AppLanguage::English) => "Mind Map",
+            (Self::Architecture3Tier, crate::model::AppLanguage::Indonesian) => {
+                "Arsitektur Sistem (3-Tier)"
+            }
+            (Self::Architecture3Tier, crate::model::AppLanguage::English) => "3-Tier Architecture",
+        }
+    }
+
+    pub fn description_tr(self, lang: crate::model::AppLanguage) -> &'static str {
+        match lang {
+            crate::model::AppLanguage::Indonesian => self.description(),
+            crate::model::AppLanguage::English => match self {
+                Self::Flowchart => "Start, process, decision branch, and end connected with arrows",
+                Self::MindMap => "Central idea with 4 topic branches linked by curved connectors",
+                Self::Architecture3Tier => {
+                    "Connected Presentation Tier, Application Logic, and Data Storage"
+                }
+            },
+        }
+    }
 }
 
 /// Menghasilkan sekumpulan bentuk dan konektor terhubung siap pakai untuk diagram awal.
