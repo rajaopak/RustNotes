@@ -6359,7 +6359,9 @@ fn test_tessellate_stroke_styled_aa_emits_transparent_outer_skirt_without_spikes
         // Pastikan seluruh segitiga AA (dengan vertex alpha == 0) digambar sebelum segitiga inti penuh
         let last_aa_tri = mesh
             .indices
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .enumerate()
             .filter(|(_, tri)| {
                 tri.iter()
@@ -6370,7 +6372,9 @@ fn test_tessellate_stroke_styled_aa_emits_transparent_outer_skirt_without_spikes
             .unwrap();
         let first_core_tri = mesh
             .indices
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .enumerate()
             .filter(|(_, tri)| {
                 tri.iter()
