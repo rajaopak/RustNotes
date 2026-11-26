@@ -11,6 +11,7 @@ impl RustNotesApp {
         }
 
         let lang = self.settings.language;
+        let palette = super::super::theme::UiPalette::from_ctx(ctx, self.settings.theme_mode);
 
         // Logika Penangkapan Rebinding Tombol saat pengguna sedang merekam shortcut baru
         if let Some(target_action) = self.rebinding_shortcut {
@@ -211,7 +212,9 @@ impl RustNotesApp {
                                         }
                                     } else {
                                         ui.label(
-                                            RichText::new("•").size(10.0).color(Color32::DARK_GRAY),
+                                            RichText::new("•")
+                                                .size(10.0)
+                                                .color(palette.text_muted),
                                         );
                                     }
 
@@ -426,7 +429,15 @@ impl RustNotesApp {
                                 Sense::hover(),
                             );
                             let painter = ui.painter_at(rect);
-                            painter.rect_filled(rect, 4.0, Color32::from_rgb(40, 44, 52));
+                            painter.rect_filled(
+                                rect,
+                                4.0,
+                                if palette.is_dark {
+                                    Color32::from_rgb(40, 44, 52)
+                                } else {
+                                    Color32::from_rgb(228, 234, 244)
+                                },
+                            );
                             let steps = 40;
                             for s in 0..steps {
                                 let raw = s as f32 / (steps - 1) as f32;

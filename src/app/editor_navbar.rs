@@ -3,7 +3,7 @@ use super::types::ViewMode;
 use crate::canvas::{
     ActiveTool, EraserMode, hsv_to_rgb, rainbow_laser_color, tessellate_laser_neon_beam,
 };
-use crate::model::{LaserColorMode, ShapeKind, ThemeMode};
+use crate::model::{LaserColorMode, ShapeKind};
 use crate::storage::{
     app_storage_dir, export_notebook_to_pdf, export_page_to_png, export_page_to_svg_file,
 };
@@ -379,7 +379,13 @@ impl RustNotesApp {
                         ui.menu_button(
                             RichText::new("📤").size(13.5).color(Color32::WHITE),
                             |ui| {
-                                if ui.button("📄 Export Notebook to PDF").clicked() {
+                                if ui
+                                    .button(lang.tr(
+                                        "📄 Ekspor Buku ke PDF",
+                                        "📄 Export Notebook to PDF",
+                                    ))
+                                    .clicked()
+                                {
                                     ui.close_menu();
                                     let nb = &self.library.notebooks[nb_idx];
                                     let default_name = format!(
@@ -398,17 +404,32 @@ impl RustNotesApp {
                                         match export_notebook_to_pdf(&storage_dir, nb, &path) {
                                             Ok(()) => {
                                                 self.toast_message = Some(
-                                                    "✅ Dokumen PDF berhasil diekspor.".to_string(),
+                                                    lang.tr(
+                                                        "✅ Dokumen PDF berhasil diekspor.",
+                                                        "✅ PDF document exported successfully.",
+                                                    )
+                                                    .to_string(),
                                                 );
                                             }
                                             Err(e) => {
-                                                self.toast_message =
-                                                    Some(format!("⚠ Gagal ekspor PDF: {e}"));
+                                                self.toast_message = Some(format!(
+                                                    "{}: {e}",
+                                                    lang.tr(
+                                                        "⚠ Gagal ekspor PDF",
+                                                        "⚠ Failed to export PDF"
+                                                    )
+                                                ));
                                             }
                                         }
                                     }
                                 }
-                                if ui.button("🖼 Export Page to PNG").clicked() {
+                                if ui
+                                    .button(lang.tr(
+                                        "🖼 Ekspor Halaman ke PNG",
+                                        "🖼 Export Page to PNG",
+                                    ))
+                                    .clicked()
+                                {
                                     ui.close_menu();
                                     let page = &self.library.notebooks[nb_idx].pages
                                         [self.current_page_index];
@@ -428,18 +449,32 @@ impl RustNotesApp {
                                         ) {
                                             Ok(()) => {
                                                 self.toast_message = Some(
-                                                    "✅ Halaman berhasil diekspor ke PNG."
-                                                        .to_string(),
+                                                    lang.tr(
+                                                        "✅ Halaman berhasil diekspor ke PNG.",
+                                                        "✅ Page exported to PNG.",
+                                                    )
+                                                    .to_string(),
                                                 );
                                             }
                                             Err(e) => {
-                                                self.toast_message =
-                                                    Some(format!("⚠ Gagal ekspor PNG: {e}"));
+                                                self.toast_message = Some(format!(
+                                                    "{}: {e}",
+                                                    lang.tr(
+                                                        "⚠ Gagal ekspor PNG",
+                                                        "⚠ Failed to export PNG"
+                                                    )
+                                                ));
                                             }
                                         }
                                     }
                                 }
-                                if ui.button("📐 Export Page to SVG (Vector)").clicked() {
+                                if ui
+                                    .button(lang.tr(
+                                        "📐 Ekspor Halaman ke SVG (Vektor)",
+                                        "📐 Export Page to SVG (Vector)",
+                                    ))
+                                    .clicked()
+                                {
                                     ui.close_menu();
                                     let page = &self.library.notebooks[nb_idx].pages
                                         [self.current_page_index];
@@ -453,13 +488,21 @@ impl RustNotesApp {
                                         match export_page_to_svg_file(&path, page) {
                                             Ok(()) => {
                                                 self.toast_message = Some(
-                                                    "✅ Halaman berhasil diekspor ke SVG (Vector)."
-                                                        .to_string(),
+                                                    lang.tr(
+                                                        "✅ Halaman berhasil diekspor ke SVG (Vektor).",
+                                                        "✅ Page exported to SVG (Vector).",
+                                                    )
+                                                    .to_string(),
                                                 );
                                             }
                                             Err(e) => {
-                                                self.toast_message =
-                                                    Some(format!("⚠ Gagal ekspor SVG: {e}"));
+                                                self.toast_message = Some(format!(
+                                                    "{}: {e}",
+                                                    lang.tr(
+                                                        "⚠ Gagal ekspor SVG",
+                                                        "⚠ Failed to export SVG"
+                                                    )
+                                                ));
                                             }
                                         }
                                     }
@@ -608,11 +651,12 @@ impl RustNotesApp {
 
     fn render_doc_title_popup(&mut self, ctx: &egui::Context, nb_idx: usize, notebook_id: &str) {
         let lang = self.settings.language;
+        let palette = super::theme::UiPalette::from_ctx(ctx, self.settings.theme_mode);
         // =====================================================================
         // GOODNOTES POP-UP 1: Document Title & Info Pop-up (`[Title] ▾`)
         // =====================================================================
         if self.show_doc_title_popup {
-            egui::Window::new("📄 Info & Judul Dokumen")
+            egui::Window::new(lang.tr("📄 Info & Judul Dokumen", "📄 Document Title & Info"))
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::LEFT_TOP, [44.0, 56.0])
@@ -621,7 +665,7 @@ impl RustNotesApp {
                     ui.label(
                         RichText::new(lang.tr("Judul Catatan:", "Notebook Title:"))
                             .size(12.0)
-                            .color(Color32::GRAY),
+                            .color(palette.text_muted),
                     );
                     if ui
                         .text_edit_singleline(&mut self.library.notebooks[nb_idx].title)
@@ -634,23 +678,30 @@ impl RustNotesApp {
                     let cur_p = &self.library.notebooks[nb_idx].pages[self.current_page_index];
                     ui.label(
                         RichText::new(format!(
-                            "Halaman Aktif: {} dari {} ({:.0} × {:.0} pt, {:?})",
+                            "{}: {} {} {} ({:.0} × {:.0} pt, {})",
+                            lang.tr("Halaman Aktif", "Active Page"),
                             self.current_page_index + 1,
+                            lang.tr("dari", "of"),
                             page_cnt,
                             cur_p.width,
                             cur_p.height,
-                            cur_p.template
+                            cur_p.template.name_tr(lang)
                         ))
                         .size(11.5)
-                        .color(Color32::LIGHT_GRAY),
+                        .color(palette.text_secondary),
                     );
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        if ui.button("📐 Atur Ukuran Kertas...").clicked() {
+                        if ui
+                            .button(
+                                lang.tr("📐 Atur Ukuran Kertas...", "📐 Paper Size & Template..."),
+                            )
+                            .clicked()
+                        {
                             self.show_doc_title_popup = false;
                             self.open_page_resize_modal(nb_idx, self.current_page_index);
                         }
-                        if ui.button("Tutup").clicked() {
+                        if ui.button(lang.tr("Tutup", "Close")).clicked() {
                             self.show_doc_title_popup = false;
                         }
                     });
@@ -660,6 +711,7 @@ impl RustNotesApp {
 
     fn render_tool_popup(&mut self, ctx: &egui::Context, nb_idx: usize, notebook_id: &str) {
         let lang = self.settings.language;
+        let palette = super::theme::UiPalette::from_ctx(ctx, self.settings.theme_mode);
         // =====================================================================
         // GOODNOTES POP-UP 2: Tool Settings Pop-up (Ketebalan, Warna, Bentuk, Eraser)
         // =====================================================================
@@ -671,7 +723,7 @@ impl RustNotesApp {
             } else {
                 56.0
             };
-            egui::Window::new("🎨 Pengaturan Alat & Palet")
+            egui::Window::new(lang.tr("🎨 Pengaturan Alat & Palet", "🎨 Tool & Palette Settings"))
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_TOP, [0.0, top_y])
@@ -685,22 +737,25 @@ impl RustNotesApp {
 
                     // Ketebalan Goresan (Stroke Width Presets + Slider)
                     ui.label(
-                        RichText::new(
-                            lang.tr("Ketebalan Goresan (Stroke Width):", "Stroke Width:"),
-                        )
-                        .strong()
-                        .size(12.0),
+                        RichText::new(lang.tr("Ketebalan Goresan:", "Stroke Width:"))
+                            .strong()
+                            .size(12.0),
                     );
                     ui.horizontal_wrapped(|ui| {
                         let mut remove_width_idx = None;
                         let widths = self.settings.pen_widths.clone();
                         for (idx, &w) in widths.iter().enumerate() {
                             let is_sel = (self.canvas_state.stroke_width - w).abs() < 0.1;
-                            let btn = Button::new(format!("{w:.1}px"))
-                                .fill(if is_sel {
-                                    Color32::from_rgb(0, 114, 206)
+                            let btn =
+                                Button::new(RichText::new(format!("{w:.1}px")).color(if is_sel {
+                                    Color32::WHITE
                                 } else {
-                                    Color32::from_rgb(65, 63, 64)
+                                    palette.btn_neutral_text
+                                }))
+                                .fill(if is_sel {
+                                    palette.accent
+                                } else {
+                                    palette.btn_neutral_bg
                                 })
                                 .corner_radius(6.0);
                             let resp = ui.add(btn);
@@ -710,9 +765,10 @@ impl RustNotesApp {
                             if resp.secondary_clicked() && self.settings.pen_widths.len() > 1 {
                                 remove_width_idx = Some(idx);
                             }
-                            resp.on_hover_text(
+                            resp.on_hover_text(lang.tr(
                                 "Klik kiri: pilih ketebalan | Klik kanan: hapus preset",
-                            );
+                                "Left-click: pick width | Right-click: remove preset",
+                            ));
                         }
                         if let Some(rem) = remove_width_idx {
                             self.settings.pen_widths.remove(rem);
@@ -720,7 +776,10 @@ impl RustNotesApp {
                         }
                         if ui
                             .small_button("+")
-                            .on_hover_text("Tambah preset ketebalan baru (+2.0px)")
+                            .on_hover_text(lang.tr(
+                                "Tambah preset ketebalan baru (+2.0px)",
+                                "Add new width preset (+2.0px)",
+                            ))
                             .clicked()
                         {
                             let next_w = (self.settings.pen_widths.last().copied().unwrap_or(2.0)
@@ -746,14 +805,14 @@ impl RustNotesApp {
 
                     // Gaya Garis (Stroke Style: Solid, Dashed, DashDot, Dotted)
                     ui.label(
-                        RichText::new(lang.tr("Gaya Garis (Stroke Style):", "Stroke Style:"))
+                        RichText::new(lang.tr("Gaya Garis:", "Stroke Style:"))
                             .strong()
                             .size(12.0),
                     );
                     ui.horizontal_wrapped(|ui| {
                         for style in crate::model::StrokeStyle::ALL {
                             let is_sel = self.canvas_state.stroke_style == style;
-                            if ui.selectable_label(is_sel, style.name()).clicked() {
+                            if ui.selectable_label(is_sel, style.name_tr(lang)).clicked() {
                                 self.canvas_state.stroke_style = style;
                                 if let Some(nb_id) = &self.active_notebook_id
                                     && let Some(nb) =
@@ -788,7 +847,7 @@ impl RustNotesApp {
 
                     // Palet Warna (Color Swatches + Color Picker)
                     ui.label(
-                        RichText::new(lang.tr("Palet Warna (Color Swatches):", "Color Swatches:"))
+                        RichText::new(lang.tr("Palet Warna:", "Color Swatches:"))
                             .strong()
                             .size(12.0),
                     );
@@ -800,9 +859,9 @@ impl RustNotesApp {
                             let (rect, resp) =
                                 ui.allocate_exact_size(Vec2::new(24.0, 24.0), Sense::click());
                             let stroke = if self.canvas_state.stroke_color == c {
-                                Stroke::new(2.5_f32, Color32::from_rgb(76, 147, 236))
+                                Stroke::new(2.5_f32, palette.border_accent)
                             } else {
-                                Stroke::new(1.0_f32, Color32::from_rgb(100, 100, 100))
+                                Stroke::new(1.0_f32, palette.border_strong)
                             };
                             ui.painter_at(rect)
                                 .rect(rect, 12.0, c, stroke, StrokeKind::Outside);
@@ -812,7 +871,10 @@ impl RustNotesApp {
                             if resp.secondary_clicked() && self.settings.color_swatches.len() > 1 {
                                 remove_swatch_idx = Some(idx);
                             }
-                            resp.on_hover_text("Klik kiri: pilih warna | Klik kanan: hapus swatch");
+                            resp.on_hover_text(lang.tr(
+                                "Klik kiri: pilih warna | Klik kanan: hapus swatch",
+                                "Left-click: pick color | Right-click: remove swatch",
+                            ));
                         }
                         if let Some(rem) = remove_swatch_idx {
                             self.settings.color_swatches.remove(rem);
@@ -820,8 +882,11 @@ impl RustNotesApp {
                         }
                         ui.color_edit_button_srgba(&mut self.canvas_state.stroke_color);
                         if ui
-                            .small_button("+ Simpan Warna")
-                            .on_hover_text("Simpan warna aktif ke palet swatch")
+                            .small_button(lang.tr("+ Simpan Warna", "+ Save Color"))
+                            .on_hover_text(lang.tr(
+                                "Simpan warna aktif ke palet swatch",
+                                "Save active color to swatch palette",
+                            ))
                             .clicked()
                         {
                             let new_sw: crate::model::ColorData =
@@ -836,7 +901,11 @@ impl RustNotesApp {
                     // Opsi Spesifik Bentuk Geometri (Shapes)
                     if matches!(self.canvas_state.current_tool, ActiveTool::Shape(_)) {
                         ui.separator();
-                        ui.label(RichText::new("Jenis Bentuk (Shape):").strong().size(12.0));
+                        ui.label(
+                            RichText::new(lang.tr("Jenis Bentuk:", "Shape Type:"))
+                                .strong()
+                                .size(12.0),
+                        );
                         ui.horizontal_wrapped(|ui| {
                             let scalene_preset = ShapeKind::ScaleneTriangle {
                                 u0: 0.22,
@@ -847,13 +916,28 @@ impl RustNotesApp {
                                 v2: 1.0,
                             };
                             let shapes = [
-                                (ShapeKind::Rectangle, "▭ Rectangle"),
-                                (ShapeKind::Parallelogram, "▱ Jajar Genjang"),
-                                (ShapeKind::Ellipse, "◯ Circle / Ellipse"),
-                                (ShapeKind::Line, "╱ Line"),
-                                (ShapeKind::Triangle, "△ Segitiga Sama Kaki"),
-                                (ShapeKind::RightTriangle, "◣ Segitiga Siku-Siku"),
-                                (scalene_preset, "◿ Segitiga Sembarang"),
+                                (ShapeKind::Rectangle, lang.tr("▭ Persegi", "▭ Rectangle")),
+                                (
+                                    ShapeKind::Parallelogram,
+                                    lang.tr("▱ Jajar Genjang", "▱ Parallelogram"),
+                                ),
+                                (
+                                    ShapeKind::Ellipse,
+                                    lang.tr("◯ Lingkaran / Elips", "◯ Circle / Ellipse"),
+                                ),
+                                (ShapeKind::Line, lang.tr("╱ Garis", "╱ Line")),
+                                (
+                                    ShapeKind::Triangle,
+                                    lang.tr("△ Segitiga Sama Kaki", "△ Isosceles Triangle"),
+                                ),
+                                (
+                                    ShapeKind::RightTriangle,
+                                    lang.tr("◣ Segitiga Siku-Siku", "◣ Right Triangle"),
+                                ),
+                                (
+                                    scalene_preset,
+                                    lang.tr("◿ Segitiga Sembarang", "◿ Scalene Triangle"),
+                                ),
                             ];
                             for (kind, name) in shapes {
                                 let is_sel = match (self.canvas_state.current_tool, kind) {
@@ -872,15 +956,18 @@ impl RustNotesApp {
 
                         ui.add_space(4.0);
                         ui.label(
-                            RichText::new("📋 Template Diagram Siap Pakai:")
-                                .strong()
-                                .size(11.5),
+                            RichText::new(lang.tr(
+                                "📋 Template Diagram Siap Pakai:",
+                                "📋 Starter Diagram Templates:",
+                            ))
+                            .strong()
+                            .size(11.5),
                         );
                         ui.horizontal_wrapped(|ui| {
                             for kind in crate::geometry::DiagramStarterKind::ALL {
                                 if ui
-                                    .button(kind.title())
-                                    .on_hover_text(kind.description())
+                                    .button(kind.title_tr(lang))
+                                    .on_hover_text(kind.description_tr(lang))
                                     .clicked()
                                 {
                                     let cur_p = &self.library.notebooks[nb_idx].pages
@@ -907,9 +994,11 @@ impl RustNotesApp {
                                     );
                                     self.mark_dirty(notebook_id);
                                     self.toast_message = Some(format!(
-                                        "✅ Template {} disisipkan ({} objek).",
-                                        kind.title(),
-                                        added_count
+                                        "✅ {} {} ({} {}).",
+                                        lang.tr("Template", "Inserted"),
+                                        kind.title_tr(lang),
+                                        added_count,
+                                        lang.tr("objek disisipkan", "objects")
                                     ));
                                     self.show_tool_popup = false;
                                 }
@@ -921,14 +1010,20 @@ impl RustNotesApp {
                     if self.canvas_state.current_tool == ActiveTool::Eraser {
                         ui.separator();
                         ui.label(
-                            RichText::new("Mode Penghapus (Eraser Mode):")
+                            RichText::new(lang.tr("Mode Penghapus:", "Eraser Mode:"))
                                 .strong()
                                 .size(12.0),
                         );
                         ui.horizontal(|ui| {
                             let modes = [
-                                (EraserMode::Partial, "✂ Partial (Potong Segmen)"),
-                                (EraserMode::WholeStroke, "⌫ Whole Stroke (Hapus Utuh)"),
+                                (
+                                    EraserMode::Partial,
+                                    lang.tr("✂ Parsial (Potong Segmen)", "✂ Partial Stroke"),
+                                ),
+                                (
+                                    EraserMode::WholeStroke,
+                                    lang.tr("⌫ Utuh (Hapus Objek)", "⌫ Whole Stroke"),
+                                ),
                             ];
                             for (mode, label) in modes {
                                 let is_sel = self.canvas_state.eraser_mode == mode;
@@ -942,11 +1037,15 @@ impl RustNotesApp {
                     // Opsi Spesifik Lasso (Lasso Selection Mode - Task 6)
                     if self.canvas_state.current_tool == ActiveTool::Lasso {
                         ui.separator();
-                        ui.label(RichText::new("Mode Seleksi Lasso:").strong().size(12.0));
+                        ui.label(
+                            RichText::new(lang.tr("Mode Seleksi Lasso:", "Lasso Selection Mode:"))
+                                .strong()
+                                .size(12.0),
+                        );
                         ui.horizontal(|ui| {
                             for mode in crate::model::LassoSelectionMode::ALL {
                                 let is_sel = self.canvas_state.lasso_selection_mode == mode;
-                                if ui.selectable_label(is_sel, mode.label()).clicked() {
+                                if ui.selectable_label(is_sel, mode.label_tr(lang)).clicked() {
                                     self.canvas_state.lasso_selection_mode = mode;
                                 }
                             }
@@ -1008,7 +1107,7 @@ impl RustNotesApp {
                             self.show_shortcut_modal = true;
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.button("Selesai").clicked() {
+                            if ui.button(lang.tr("Selesai", "Done")).clicked() {
                                 self.show_tool_popup = false;
                             }
                         });
@@ -1019,8 +1118,9 @@ impl RustNotesApp {
 
     fn render_more_menu_popup(&mut self, ctx: &egui::Context, nb_idx: usize, notebook_id: &str) {
         let lang = self.settings.language;
+        let palette = super::theme::UiPalette::from_ctx(ctx, self.settings.theme_mode);
         // =====================================================================
-        // GOODNOTES POP-UP 3: Authentic GoodNotes Right Pop-up Menu (`⋯`)
+        // GOODNOTES POP-UP 3: Authentic GoodNotes Right Pop-up Menu (`⚙` / More)
         // =====================================================================
         if self.show_more_menu_popup {
             let page_count = self.library.notebooks[nb_idx].pages.len();
@@ -1031,485 +1131,479 @@ impl RustNotesApp {
             } else {
                 -12.0
             };
-            egui::Window::new(format!("Page {}", self.current_page_index + 1))
-                .id(egui::Id::new("goodnotes_more_menu_popup"))
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::RIGHT_TOP, [right_x, 56.0])
-                .frame(
-                    egui::Frame::window(&ctx.style())
-                        .fill(Color32::from_rgb(26, 26, 28))
-                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(62, 62, 66)))
-                        .corner_radius(12.0)
-                        .inner_margin(12.0),
+            let menu_btn = |ui: &mut egui::Ui, label: &str, col: Color32| -> bool {
+                ui.add(
+                    Button::new(RichText::new(label).color(col))
+                        .fill(Color32::TRANSPARENT)
+                        .min_size(Vec2::new(260.0, 25.0)),
                 )
-                .show(ctx, |ui| {
-                    ui.set_width(275.0);
-                    ui.spacing_mut().item_spacing.y = 5.0;
+                .clicked()
+            };
 
-                    // --- Section 1: Page Actions (seperti GoodNotes) ---
-                    let is_bm =
-                        self.library.notebooks[nb_idx].pages[self.current_page_index].bookmarked;
-                    if ui
-                        .add(
-                            Button::new(
-                                RichText::new(if is_bm {
-                                    "★ Remove Bookmark"
-                                } else {
-                                    "🔖 Bookmark Page"
-                                })
-                                .color(Color32::WHITE),
-                            )
-                            .fill(Color32::TRANSPARENT)
-                            .min_size(Vec2::new(260.0, 26.0)),
-                        )
-                        .clicked()
+            egui::Window::new(format!(
+                "{} {}",
+                lang.tr("Halaman", "Page"),
+                self.current_page_index + 1
+            ))
+            .id(egui::Id::new("goodnotes_more_menu_popup"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::RIGHT_TOP, [right_x, 56.0])
+            .frame(
+                egui::Frame::window(&ctx.style())
+                    .fill(palette.bg_elevated)
+                    .stroke(Stroke::new(1.0_f32, palette.border_subtle))
+                    .corner_radius(12.0)
+                    .inner_margin(12.0),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(275.0);
+                ui.spacing_mut().item_spacing.y = 5.0;
+
+                // --- Section 1: Page Actions ---
+                let is_bm =
+                    self.library.notebooks[nb_idx].pages[self.current_page_index].bookmarked;
+                if menu_btn(
+                    ui,
+                    if is_bm {
+                        lang.tr("★ Hapus Penanda Halaman", "★ Remove Bookmark")
+                    } else {
+                        lang.tr("🔖 Tandai Halaman", "🔖 Bookmark Page")
+                    },
+                    palette.text_primary,
+                ) {
+                    self.library.notebooks[nb_idx].pages[self.current_page_index].bookmarked =
+                        !is_bm;
+                    self.mark_dirty(notebook_id);
+                    self.show_more_menu_popup = false;
+                }
+
+                if menu_btn(
+                    ui,
+                    lang.tr("📄 Duplikasi Halaman", "📄 Duplicate Page"),
+                    palette.text_primary,
+                ) {
+                    self.push_doc_undo(nb_idx);
+                    if let Some(new_idx) =
+                        self.library.notebooks[nb_idx].duplicate_page(self.current_page_index)
                     {
-                        self.library.notebooks[nb_idx].pages[self.current_page_index].bookmarked =
-                            !is_bm;
+                        self.navigate_to_page(nb_idx, new_idx);
                         self.mark_dirty(notebook_id);
-                        self.show_more_menu_popup = false;
                     }
+                    self.show_more_menu_popup = false;
+                }
 
-                    if ui
-                        .add(
-                            Button::new(RichText::new("📄 Duplicate Page").color(Color32::WHITE))
-                                .fill(Color32::TRANSPARENT)
-                                .min_size(Vec2::new(260.0, 26.0)),
-                        )
-                        .clicked()
+                if menu_btn(
+                    ui,
+                    lang.tr(
+                        "↻ Putar Halaman 90° Searah Jarum Jam",
+                        "↻ Rotate Page 90° CW",
+                    ),
+                    palette.text_primary,
+                ) {
+                    self.push_doc_undo(nb_idx);
+                    self.library.notebooks[nb_idx].rotate_page(self.current_page_index, 90);
+                    self.canvas_state.mesh_cache.clear();
+                    if let Some(p) = self.library.notebooks[nb_idx]
+                        .pages
+                        .get(self.current_page_index)
                     {
-                        self.push_doc_undo(nb_idx);
-                        if let Some(new_idx) =
-                            self.library.notebooks[nb_idx].duplicate_page(self.current_page_index)
-                        {
-                            self.navigate_to_page(nb_idx, new_idx);
-                            self.mark_dirty(notebook_id);
-                        }
-                        self.show_more_menu_popup = false;
+                        self.canvas_state.spatial_grid.rebuild(&p.objects);
                     }
-
-                    if ui
-                        .add(
-                            Button::new(
-                                RichText::new("↻ Rotate Page 90° CW (Searah Jarum Jam)")
-                                    .color(Color32::WHITE),
-                            )
-                            .fill(Color32::TRANSPARENT)
-                            .min_size(Vec2::new(260.0, 26.0)),
+                    self.mark_dirty(notebook_id);
+                    self.toast_message = Some(
+                        lang.tr(
+                            "↻ Halaman diputar 90° searah jarum jam.",
+                            "↻ Page rotated 90° clockwise.",
                         )
-                        .clicked()
-                    {
-                        self.push_doc_undo(nb_idx);
-                        self.library.notebooks[nb_idx].rotate_page(self.current_page_index, 90);
-                        self.canvas_state.mesh_cache.clear();
-                        if let Some(p) = self.library.notebooks[nb_idx]
-                            .pages
-                            .get(self.current_page_index)
-                        {
-                            self.canvas_state.spatial_grid.rebuild(&p.objects);
-                        }
-                        self.mark_dirty(notebook_id);
-                        self.toast_message =
-                            Some("↻ Halaman diputar 90° searah jarum jam.".to_string());
-                        self.show_more_menu_popup = false;
-                    }
-
-                    if ui
-                        .add(
-                            Button::new(
-                                RichText::new("↺ Rotate Page 90° CCW (Berlawanan Jarum Jam)")
-                                    .color(Color32::WHITE),
-                            )
-                            .fill(Color32::TRANSPARENT)
-                            .min_size(Vec2::new(260.0, 26.0)),
-                        )
-                        .clicked()
-                    {
-                        self.push_doc_undo(nb_idx);
-                        self.library.notebooks[nb_idx].rotate_page(self.current_page_index, -90);
-                        self.canvas_state.mesh_cache.clear();
-                        if let Some(p) = self.library.notebooks[nb_idx]
-                            .pages
-                            .get(self.current_page_index)
-                        {
-                            self.canvas_state.spatial_grid.rebuild(&p.objects);
-                        }
-                        self.mark_dirty(notebook_id);
-                        self.toast_message =
-                            Some("↺ Halaman diputar 90° berlawanan arah jarum jam.".to_string());
-                        self.show_more_menu_popup = false;
-                    }
-
-                    if ui
-                        .add(
-                            Button::new(RichText::new("⟲ Rotate Page 180°").color(Color32::WHITE))
-                                .fill(Color32::TRANSPARENT)
-                                .min_size(Vec2::new(260.0, 26.0)),
-                        )
-                        .clicked()
-                    {
-                        self.push_doc_undo(nb_idx);
-                        self.library.notebooks[nb_idx].rotate_page(self.current_page_index, 180);
-                        self.canvas_state.mesh_cache.clear();
-                        if let Some(p) = self.library.notebooks[nb_idx]
-                            .pages
-                            .get(self.current_page_index)
-                        {
-                            self.canvas_state.spatial_grid.rebuild(&p.objects);
-                        }
-                        self.mark_dirty(notebook_id);
-                        self.toast_message = Some("⟲ Halaman diputar 180°.".to_string());
-                        self.show_more_menu_popup = false;
-                    }
-
-                    if ui
-                        .add(
-                            Button::new(
-                                RichText::new("📑 Add Page to Outline...").color(Color32::WHITE),
-                            )
-                            .fill(Color32::TRANSPARENT)
-                            .min_size(Vec2::new(260.0, 26.0)),
-                        )
-                        .clicked()
-                    {
-                        self.new_outline_title = format!("Halaman {}", self.current_page_index + 1);
-                        self.show_add_outline_modal = true;
-                        self.show_more_menu_popup = false;
-                    }
-
-                    if ui
-                        .add(
-                            Button::new(
-                                RichText::new("📐 Change Template & Paper Size...")
-                                    .color(Color32::WHITE),
-                            )
-                            .fill(Color32::TRANSPARENT)
-                            .min_size(Vec2::new(260.0, 26.0)),
-                        )
-                        .clicked()
-                    {
-                        self.show_more_menu_popup = false;
-                        self.open_page_resize_modal(nb_idx, self.current_page_index);
-                    }
-
-                    if ui
-                        .add(
-                            Button::new(
-                                RichText::new("💾 Save Page as Custom Template...")
-                                    .color(Color32::WHITE),
-                            )
-                            .fill(Color32::TRANSPARENT)
-                            .min_size(Vec2::new(260.0, 26.0)),
-                        )
-                        .clicked()
-                    {
-                        self.show_more_menu_popup = false;
-                        self.show_save_template_modal = true;
-                        self.new_template_name =
-                            format!("Template {}", self.current_page_index + 1);
-                    }
-
-                    ui.menu_button(
-                        RichText::new("📊 Insert Starter Diagram ▶").color(Color32::WHITE),
-                        |ui| {
-                            for kind in crate::geometry::DiagramStarterKind::ALL {
-                                if ui
-                                    .button(kind.title())
-                                    .on_hover_text(kind.description())
-                                    .clicked()
-                                {
-                                    ui.close_menu();
-                                    let cur_p = &self.library.notebooks[nb_idx].pages
-                                        [self.current_page_index];
-                                    let new_objs = crate::geometry::generate_diagram_starter(
-                                        kind,
-                                        cur_p.width,
-                                        cur_p.height,
-                                    );
-                                    let added_count = new_objs.len();
-                                    self.canvas_state.push_undo(&cur_p.id, &cur_p.objects);
-                                    let new_ids =
-                                        new_objs.iter().map(|o| o.id().to_string()).collect();
-                                    self.library.notebooks[nb_idx].pages[self.current_page_index]
-                                        .objects
-                                        .extend(new_objs);
-                                    self.canvas_state.selected_ids = new_ids;
-                                    self.canvas_state.current_tool = ActiveTool::Lasso;
-                                    self.canvas_state.mesh_cache.clear();
-                                    self.canvas_state.spatial_grid.rebuild(
-                                        &self.library.notebooks[nb_idx].pages
-                                            [self.current_page_index]
-                                            .objects,
-                                    );
-                                    self.mark_dirty(notebook_id);
-                                    self.toast_message = Some(format!(
-                                        "✅ Template {} disisipkan ({} objek).",
-                                        kind.title(),
-                                        added_count
-                                    ));
-                                    self.show_more_menu_popup = false;
-                                }
-                            }
-                        },
+                        .to_string(),
                     );
+                    self.show_more_menu_popup = false;
+                }
 
-                    // Go to Page row (`Go to Page   ◀ 1 of N ▶`)
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("➡ Go to Page").color(Color32::WHITE));
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if self.current_page_index + 1 < page_count
-                                && ui.small_button("▶").clicked()
+                if menu_btn(
+                    ui,
+                    lang.tr(
+                        "↺ Putar Halaman 90° Berlawanan Jarum Jam",
+                        "↺ Rotate Page 90° CCW",
+                    ),
+                    palette.text_primary,
+                ) {
+                    self.push_doc_undo(nb_idx);
+                    self.library.notebooks[nb_idx].rotate_page(self.current_page_index, -90);
+                    self.canvas_state.mesh_cache.clear();
+                    if let Some(p) = self.library.notebooks[nb_idx]
+                        .pages
+                        .get(self.current_page_index)
+                    {
+                        self.canvas_state.spatial_grid.rebuild(&p.objects);
+                    }
+                    self.mark_dirty(notebook_id);
+                    self.toast_message = Some(
+                        lang.tr(
+                            "↺ Halaman diputar 90° berlawanan arah jarum jam.",
+                            "↺ Page rotated 90° counter-clockwise.",
+                        )
+                        .to_string(),
+                    );
+                    self.show_more_menu_popup = false;
+                }
+
+                if menu_btn(
+                    ui,
+                    lang.tr("⟲ Putar Halaman 180°", "⟲ Rotate Page 180°"),
+                    palette.text_primary,
+                ) {
+                    self.push_doc_undo(nb_idx);
+                    self.library.notebooks[nb_idx].rotate_page(self.current_page_index, 180);
+                    self.canvas_state.mesh_cache.clear();
+                    if let Some(p) = self.library.notebooks[nb_idx]
+                        .pages
+                        .get(self.current_page_index)
+                    {
+                        self.canvas_state.spatial_grid.rebuild(&p.objects);
+                    }
+                    self.mark_dirty(notebook_id);
+                    self.toast_message = Some(
+                        lang.tr("⟲ Halaman diputar 180°.", "⟲ Page rotated 180°.")
+                            .to_string(),
+                    );
+                    self.show_more_menu_popup = false;
+                }
+
+                if menu_btn(
+                    ui,
+                    lang.tr("📑 Tambah ke Daftar Isi...", "📑 Add Page to Outline..."),
+                    palette.text_primary,
+                ) {
+                    self.new_outline_title = format!(
+                        "{} {}",
+                        lang.tr("Halaman", "Page"),
+                        self.current_page_index + 1
+                    );
+                    self.show_add_outline_modal = true;
+                    self.show_more_menu_popup = false;
+                }
+
+                if menu_btn(
+                    ui,
+                    lang.tr(
+                        "📐 Ubah Template & Ukuran Kertas...",
+                        "📐 Change Template & Paper Size...",
+                    ),
+                    palette.text_primary,
+                ) {
+                    self.show_more_menu_popup = false;
+                    self.open_page_resize_modal(nb_idx, self.current_page_index);
+                }
+
+                if menu_btn(
+                    ui,
+                    lang.tr(
+                        "💾 Simpan sebagai Template Kustom...",
+                        "💾 Save Page as Custom Template...",
+                    ),
+                    palette.text_primary,
+                ) {
+                    self.show_more_menu_popup = false;
+                    self.show_save_template_modal = true;
+                    self.new_template_name = format!("Template {}", self.current_page_index + 1);
+                }
+
+                ui.menu_button(
+                    RichText::new(
+                        lang.tr("📊 Sisipkan Diagram Awal ▶", "📊 Insert Starter Diagram ▶"),
+                    )
+                    .color(palette.text_primary),
+                    |ui| {
+                        for kind in crate::geometry::DiagramStarterKind::ALL {
+                            if ui
+                                .button(kind.title_tr(lang))
+                                .on_hover_text(kind.description_tr(lang))
+                                .clicked()
                             {
-                                let next_idx = self.current_page_index + 1;
-                                self.navigate_to_page(nb_idx, next_idx);
+                                ui.close_menu();
+                                let cur_p =
+                                    &self.library.notebooks[nb_idx].pages[self.current_page_index];
+                                let new_objs = crate::geometry::generate_diagram_starter(
+                                    kind,
+                                    cur_p.width,
+                                    cur_p.height,
+                                );
+                                let added_count = new_objs.len();
+                                self.canvas_state.push_undo(&cur_p.id, &cur_p.objects);
+                                let new_ids = new_objs.iter().map(|o| o.id().to_string()).collect();
+                                self.library.notebooks[nb_idx].pages[self.current_page_index]
+                                    .objects
+                                    .extend(new_objs);
+                                self.canvas_state.selected_ids = new_ids;
+                                self.canvas_state.current_tool = ActiveTool::Lasso;
+                                self.canvas_state.mesh_cache.clear();
+                                self.canvas_state.spatial_grid.rebuild(
+                                    &self.library.notebooks[nb_idx].pages[self.current_page_index]
+                                        .objects,
+                                );
+                                self.mark_dirty(notebook_id);
+                                self.toast_message = Some(format!(
+                                    "✅ {} {} ({} {}).",
+                                    lang.tr("Template", "Inserted"),
+                                    kind.title_tr(lang),
+                                    added_count,
+                                    lang.tr("objek disisipkan", "objects")
+                                ));
+                                self.show_more_menu_popup = false;
                             }
-                            ui.label(
-                                RichText::new(format!(
-                                    "{} of {}",
-                                    self.current_page_index + 1,
-                                    page_count
-                                ))
-                                .size(11.5)
-                                .color(Color32::GRAY),
-                            );
-                            if self.current_page_index > 0 && ui.small_button("◀").clicked() {
-                                let prev_idx = self.current_page_index - 1;
-                                self.navigate_to_page(nb_idx, prev_idx);
-                            }
-                        });
-                    });
-
-                    ui.separator();
-
-                    // --- Section 2: Clear or Trash Page (GoodNotes Red Actions) ---
-                    ui.label(
-                        RichText::new("Clear or Trash Page")
-                            .size(11.0)
-                            .strong()
-                            .color(Color32::GRAY),
-                    );
-                    if ui
-                        .add(
-                            Button::new(
-                                RichText::new("🧹 Clear Page")
-                                    .color(Color32::from_rgb(255, 99, 92)),
-                            )
-                            .fill(Color32::TRANSPARENT)
-                            .min_size(Vec2::new(260.0, 24.0)),
-                        )
-                        .clicked()
-                    {
-                        if !self.library.notebooks[nb_idx].pages[self.current_page_index]
-                            .objects
-                            .is_empty()
-                        {
-                            self.push_doc_undo(nb_idx);
-                            self.library.notebooks[nb_idx].pages[self.current_page_index]
-                                .objects
-                                .clear();
-                            self.mark_dirty(notebook_id);
                         }
-                        self.show_more_menu_popup = false;
-                    }
+                    },
+                );
 
-                    if page_count > 1
-                        && ui
-                            .add(
-                                Button::new(
-                                    RichText::new("🗑 Move Page to Trash")
-                                        .color(Color32::from_rgb(255, 99, 92)),
-                                )
-                                .fill(Color32::TRANSPARENT)
-                                .min_size(Vec2::new(260.0, 24.0)),
+                // Go to Page row
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(lang.tr("➡ Lompat ke Halaman", "➡ Go to Page"))
+                            .color(palette.text_primary),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if self.current_page_index + 1 < page_count
+                            && ui.small_button("▶").clicked()
+                        {
+                            let next_idx = self.current_page_index + 1;
+                            self.navigate_to_page(nb_idx, next_idx);
+                        }
+                        ui.label(
+                            RichText::new(format!(
+                                "{} {} {}",
+                                self.current_page_index + 1,
+                                lang.tr("dari", "of"),
+                                page_count
+                            ))
+                            .size(11.5)
+                            .color(palette.text_muted),
+                        );
+                        if self.current_page_index > 0 && ui.small_button("◀").clicked() {
+                            let prev_idx = self.current_page_index - 1;
+                            self.navigate_to_page(nb_idx, prev_idx);
+                        }
+                    });
+                });
+
+                ui.separator();
+
+                // --- Section 2: Clear or Delete Page ---
+                ui.label(
+                    RichText::new(lang.tr("Bersihkan atau Hapus Halaman", "Clear or Delete Page"))
+                        .size(11.0)
+                        .strong()
+                        .color(palette.text_muted),
+                );
+                if menu_btn(
+                    ui,
+                    lang.tr("🧹 Kosongkan Halaman Ini", "🧹 Clear Page"),
+                    palette.danger,
+                ) {
+                    if !self.library.notebooks[nb_idx].pages[self.current_page_index]
+                        .objects
+                        .is_empty()
+                    {
+                        self.push_doc_undo(nb_idx);
+                        self.library.notebooks[nb_idx].pages[self.current_page_index]
+                            .objects
+                            .clear();
+                        self.mark_dirty(notebook_id);
+                    }
+                    self.show_more_menu_popup = false;
+                }
+
+                if page_count > 1
+                    && menu_btn(
+                        ui,
+                        lang.tr("🗑 Hapus Halaman Ini", "🗑 Delete Current Page"),
+                        palette.danger,
+                    )
+                {
+                    self.push_doc_undo(nb_idx);
+                    if let Ok(new_idx) =
+                        self.library.notebooks[nb_idx].delete_page(self.current_page_index)
+                    {
+                        self.navigate_to_page(nb_idx, new_idx);
+                        self.mark_dirty(notebook_id);
+                    }
+                    self.show_more_menu_popup = false;
+                }
+
+                ui.separator();
+
+                // --- Section 3: Advanced Features ---
+                ui.label(
+                    RichText::new(lang.tr("Fitur Lanjutan", "Advanced Features"))
+                        .size(11.0)
+                        .strong()
+                        .color(palette.text_muted),
+                );
+                if menu_btn(
+                    ui,
+                    lang.tr(
+                        "🔍 OCR Tulisan Tangan (Ekstrak Teks)...",
+                        "🔍 Handwriting OCR (Extract Text)...",
+                    ),
+                    palette.text_primary,
+                ) {
+                    let p = &mut self.library.notebooks[nb_idx].pages[self.current_page_index];
+                    let extracted = crate::geometry::recognize_handwriting_from_strokes(&p.objects);
+                    if !extracted.is_empty() {
+                        p.ocr_text = extracted;
+                        self.mark_dirty(notebook_id);
+                    }
+                    self.show_ocr_modal = true;
+                    self.show_more_menu_popup = false;
+                }
+
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("✋ Palm Rejection").color(palette.text_primary));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.checkbox(&mut self.settings.palm_rejection, "").changed() {
+                            self.canvas_state.palm_rejection_enabled = self.settings.palm_rejection;
+                            self.persist_settings();
+                        }
+                    });
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("🔍 Zoom Window").color(palette.text_primary));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.checkbox(&mut self.canvas_state.show_zoom_window, "");
+                    });
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(lang.tr("🎛 Floating Tool Bar", "🎛 Floating Tool Bar"))
+                            .color(palette.text_primary),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .checkbox(&mut self.settings.floating_tool_bar_visible, "")
+                            .changed()
+                        {
+                            if !self.settings.floating_tool_bar_visible {
+                                self.floating_tool_bar_last_rect = None;
+                            }
+                            self.persist_settings();
+                        }
+                    });
+                });
+
+                ui.separator();
+
+                // --- Section 4: Settings ---
+                ui.label(
+                    RichText::new(lang.tr("Pengaturan", "Settings"))
+                        .size(11.0)
+                        .strong()
+                        .color(palette.text_muted),
+                );
+
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(lang.tr("📜 Mode Halaman", "📜 Page Mode"))
+                            .color(palette.text_primary),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .selectable_label(
+                                self.view_mode == ViewMode::SinglePage,
+                                lang.tr("1 Halaman", "Single Page"),
                             )
                             .clicked()
-                    {
-                        self.push_doc_undo(nb_idx);
-                        if let Ok(new_idx) =
-                            self.library.notebooks[nb_idx].delete_page(self.current_page_index)
                         {
-                            self.navigate_to_page(nb_idx, new_idx);
-                            self.mark_dirty(notebook_id);
+                            self.set_view_mode(nb_idx, ViewMode::SinglePage);
                         }
-                        self.show_more_menu_popup = false;
-                    }
-
-                    ui.separator();
-
-                    // --- Section 3: Fitur Lanjutan (Advanced Features) ---
-                    ui.label(
-                        RichText::new("Advanced Features")
-                            .size(11.0)
-                            .strong()
-                            .color(Color32::GRAY),
-                    );
-                    if ui
-                        .add(
-                            Button::new(
-                                RichText::new("🔍 Handwriting OCR (Ekstrak Teks)...")
-                                    .color(Color32::WHITE),
+                        if ui
+                            .selectable_label(
+                                self.view_mode == ViewMode::ContinuousVertical,
+                                lang.tr("Scroll", "Scrollable"),
                             )
-                            .fill(Color32::TRANSPARENT)
-                            .min_size(Vec2::new(260.0, 24.0)),
-                        )
-                        .clicked()
-                    {
-                        let p = &mut self.library.notebooks[nb_idx].pages[self.current_page_index];
-                        let extracted =
-                            crate::geometry::recognize_handwriting_from_strokes(&p.objects);
-                        if !extracted.is_empty() {
-                            p.ocr_text = extracted;
-                            self.mark_dirty(notebook_id);
+                            .clicked()
+                        {
+                            self.set_view_mode(nb_idx, ViewMode::ContinuousVertical);
                         }
-                        self.show_ocr_modal = true;
-                        self.show_more_menu_popup = false;
-                    }
-
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("✋ Palm Rejection").color(Color32::WHITE));
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.checkbox(&mut self.settings.palm_rejection, "").changed() {
-                                self.canvas_state.palm_rejection_enabled =
-                                    self.settings.palm_rejection;
-                                self.persist_settings();
-                            }
-                        });
                     });
-
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("🔍 Zoom Window").color(Color32::WHITE));
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.checkbox(&mut self.canvas_state.show_zoom_window, "");
-                        });
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(lang.tr("🎛 Floating Tool Bar", "🎛 Floating Tool Bar"))
-                                .color(Color32::WHITE),
-                        );
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui
-                                .checkbox(&mut self.settings.floating_tool_bar_visible, "")
-                                .changed()
-                            {
-                                if !self.settings.floating_tool_bar_visible {
-                                    self.floating_tool_bar_last_rect = None;
-                                }
-                                self.persist_settings();
-                            }
-                        });
-                    });
-
-                    ui.separator();
-
-                    // --- Section 4: Settings (Scrolling Direction, Zoom, Theme, Language, Shortcuts) ---
-                    ui.label(
-                        RichText::new("Settings")
-                            .size(11.0)
-                            .strong()
-                            .color(Color32::GRAY),
-                    );
-
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("📜 Page Mode").color(Color32::WHITE));
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui
-                                .selectable_label(
-                                    self.view_mode == ViewMode::SinglePage,
-                                    "Single Page",
-                                )
-                                .clicked()
-                            {
-                                self.set_view_mode(nb_idx, ViewMode::SinglePage);
-                            }
-                            if ui
-                                .selectable_label(
-                                    self.view_mode == ViewMode::ContinuousVertical,
-                                    "Scrollable",
-                                )
-                                .clicked()
-                            {
-                                self.set_view_mode(nb_idx, ViewMode::ContinuousVertical);
-                            }
-                        });
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("🔎 Canvas Zoom").color(Color32::WHITE));
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.small_button("+").clicked() {
-                                let z = (self.canvas_state.zoom + 0.1)
-                                    .min(crate::canvas::CanvasState::MAX_ZOOM);
-                                self.apply_zoom_anchored(nb_idx, z, None);
-                            }
-                            if ui
-                                .small_button(format!(
-                                    "{}%",
-                                    (self.canvas_state.zoom * 100.0).round() as i32
-                                ))
-                                .on_hover_text(self.action_hover_text(
-                                    crate::model::ShortcutAction::ResetZoom,
-                                    "Klik untuk reset Zoom ke 100%",
-                                    "Click to Reset Zoom to 100%",
-                                ))
-                                .clicked()
-                            {
-                                self.apply_zoom_anchored(nb_idx, 1.0, None);
-                                self.canvas_pan_offset = Vec2::ZERO;
-                            }
-                            if ui.small_button("-").clicked() {
-                                let z = (self.canvas_state.zoom - 0.1)
-                                    .max(crate::canvas::CanvasState::MIN_ZOOM);
-                                self.apply_zoom_anchored(nb_idx, z, None);
-                            }
-                        });
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("🎨 Theme").color(Color32::WHITE));
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            let theme_icon = match self.settings.theme_mode {
-                                ThemeMode::Dark => "🌙 Dark",
-                                ThemeMode::Light => "☀ Light",
-                                ThemeMode::System => "💻 System",
-                            };
-                            if ui.small_button(theme_icon).clicked() {
-                                self.settings.theme_mode = self.settings.theme_mode.next();
-                                self.persist_settings();
-                            }
-                        });
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("🌐 Language").color(Color32::WHITE));
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.small_button(lang.badge()).clicked() {
-                                self.settings.language = self.settings.language.toggle();
-                                self.persist_settings();
-                            }
-                        });
-                    });
-
-                    if ui
-                        .add(
-                            Button::new(
-                                RichText::new(lang.tr(
-                                    "⌨ Atur Pintasan Keyboard (F1)",
-                                    "⌨ Keyboard Shortcuts & Settings (F1)",
-                                ))
-                                .color(Color32::WHITE),
-                            )
-                            .fill(Color32::TRANSPARENT)
-                            .min_size(Vec2::new(260.0, 24.0)),
-                        )
-                        .clicked()
-                    {
-                        self.show_more_menu_popup = false;
-                        self.show_shortcut_modal = true;
-                    }
                 });
+
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(lang.tr("🔎 Zoom Kanvas", "🔎 Canvas Zoom"))
+                            .color(palette.text_primary),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.small_button("+").clicked() {
+                            let z = (self.canvas_state.zoom + 0.1)
+                                .min(crate::canvas::CanvasState::MAX_ZOOM);
+                            self.apply_zoom_anchored(nb_idx, z, None);
+                        }
+                        if ui
+                            .small_button(format!(
+                                "{}%",
+                                (self.canvas_state.zoom * 100.0).round() as i32
+                            ))
+                            .on_hover_text(self.action_hover_text(
+                                crate::model::ShortcutAction::ResetZoom,
+                                "Klik untuk reset Zoom ke 100%",
+                                "Click to Reset Zoom to 100%",
+                            ))
+                            .clicked()
+                        {
+                            self.apply_zoom_anchored(nb_idx, 1.0, None);
+                            self.canvas_pan_offset = Vec2::ZERO;
+                        }
+                        if ui.small_button("-").clicked() {
+                            let z = (self.canvas_state.zoom - 0.1)
+                                .max(crate::canvas::CanvasState::MIN_ZOOM);
+                            self.apply_zoom_anchored(nb_idx, z, None);
+                        }
+                    });
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(lang.tr("🎨 Tema", "🎨 Theme")).color(palette.text_primary),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .small_button(self.settings.theme_mode.label_tr(lang))
+                            .clicked()
+                        {
+                            self.settings.theme_mode = self.settings.theme_mode.next();
+                            self.persist_settings();
+                        }
+                    });
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(lang.tr("🌐 Bahasa", "🌐 Language"))
+                            .color(palette.text_primary),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.small_button(lang.badge()).clicked() {
+                            self.settings.language = self.settings.language.toggle();
+                            self.persist_settings();
+                        }
+                    });
+                });
+
+                if menu_btn(
+                    ui,
+                    lang.tr(
+                        "⌨ Atur Pintasan Keyboard (F1)",
+                        "⌨ Keyboard Shortcuts & Settings (F1)",
+                    ),
+                    palette.text_primary,
+                ) {
+                    self.show_more_menu_popup = false;
+                    self.show_shortcut_modal = true;
+                }
+            });
         }
     }
 

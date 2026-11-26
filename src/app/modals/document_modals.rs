@@ -12,6 +12,8 @@ impl RustNotesApp {
             self.show_in_doc_search = false;
             return;
         }
+        let lang = self.settings.language;
+        let palette = super::super::theme::UiPalette::from_ctx(ctx, self.settings.theme_mode);
         let right_x = if self.settings.floating_tool_bar_visible
             && self.settings.floating_tool_bar_dock == crate::model::FloatingToolBarDock::Right
         {
@@ -19,7 +21,7 @@ impl RustNotesApp {
         } else {
             -24.0
         };
-        egui::Window::new("🔍 Cari di Dokumen")
+        egui::Window::new(lang.tr("🔍 Cari di Dokumen", "🔍 Search In Document"))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::RIGHT_TOP, [right_x, 96.0])
@@ -67,9 +69,11 @@ impl RustNotesApp {
 
                     if matches.is_empty() {
                         ui.label(
-                            RichText::new("Tidak ditemukan kecocokan.")
-                                .size(11.0)
-                                .color(Color32::GRAY),
+                            RichText::new(
+                                lang.tr("Tidak ditemukan kecocokan.", "No matches found."),
+                            )
+                            .size(11.0)
+                            .color(palette.text_muted),
                         );
                     } else {
                         if self.doc_search_current_match >= matches.len() {
@@ -79,9 +83,14 @@ impl RustNotesApp {
 
                         ui.horizontal(|ui| {
                             ui.label(
-                                RichText::new(format!("{}/{} hasil", cur_match + 1, matches.len()))
-                                    .size(11.0)
-                                    .color(Color32::LIGHT_GRAY),
+                                RichText::new(format!(
+                                    "{}/{} {}",
+                                    cur_match + 1,
+                                    matches.len(),
+                                    lang.tr("hasil", "matches")
+                                ))
+                                .size(11.0)
+                                .color(palette.text_secondary),
                             );
                             if ui.small_button("◀").clicked() {
                                 if cur_match == 0 {
@@ -110,19 +119,23 @@ impl RustNotesApp {
                         let snippet_preview: String = snippet.chars().take(28).collect();
                         ui.label(
                             RichText::new(format!(
-                                "Hal. {}: \"{}…\"",
+                                "{} {}: \"{}…\"",
+                                lang.tr("Hal.", "Page"),
                                 target_page + 1,
                                 snippet_preview
                             ))
                             .size(10.0)
-                            .color(Color32::from_rgb(76, 147, 236)),
+                            .color(palette.accent_text),
                         );
                     }
                 } else {
                     ui.label(
-                        RichText::new("Ketik kata untuk mencari teks...")
-                            .size(10.0)
-                            .color(Color32::GRAY),
+                        RichText::new(lang.tr(
+                            "Ketik kata untuk mencari teks...",
+                            "Type a keyword to search text...",
+                        ))
+                        .size(10.0)
+                        .color(palette.text_muted),
                     );
                 }
             });
@@ -134,6 +147,8 @@ impl RustNotesApp {
         nb_idx: usize,
         notebook_id: &str,
     ) {
+        let lang = self.settings.language;
+        let palette = super::super::theme::UiPalette::from_ctx(ctx, self.settings.theme_mode);
         // Fase 5: Add Outline Item Modal Dialog
         if !self.show_add_outline_modal {
             return;
@@ -144,31 +159,46 @@ impl RustNotesApp {
         };
         if page_count == 0 {
             self.show_add_outline_modal = false;
-            self.toast_message =
-                Some("⚠️ Tidak dapat menambahkan daftar isi pada buku catatan kosong.".to_string());
+            self.toast_message = Some(
+                lang.tr(
+                    "⚠️ Tidak dapat menambahkan daftar isi pada buku catatan kosong.",
+                    "⚠️ Cannot add outline item to an empty notebook.",
+                )
+                .to_string(),
+            );
             return;
         }
         let target_page_idx = self.current_page_index.min(page_count - 1);
 
-        egui::Window::new("📑 Tambah ke Daftar Isi (Outline)")
+        egui::Window::new(lang.tr("📑 Tambah ke Daftar Isi (Outline)", "📑 Add to Outline"))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.set_width(320.0);
-                ui.label(RichText::new("Tambahkan Bab / Judul pada Halaman Aktif").strong());
                 ui.label(
-                    RichText::new(format!("Halaman saat ini: {}", target_page_idx + 1))
-                        .size(11.0)
-                        .color(Color32::GRAY),
+                    RichText::new(lang.tr(
+                        "Tambahkan Bab / Judul pada Halaman Aktif",
+                        "Add Section / Title on Current Page",
+                    ))
+                    .strong(),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "{}: {}",
+                        lang.tr("Halaman saat ini", "Current page"),
+                        target_page_idx + 1
+                    ))
+                    .size(11.0)
+                    .color(palette.text_muted),
                 );
                 ui.add_space(8.0);
-                ui.label("Judul / Topik:");
+                ui.label(lang.tr("Judul / Topik:", "Title / Topic:"));
                 ui.text_edit_singleline(&mut self.new_outline_title);
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("Simpan").clicked()
+                        if ui.button(lang.tr("Simpan", "Save")).clicked()
                             && !self.new_outline_title.trim().is_empty()
                         {
                             let item = OutlineItem {
@@ -183,7 +213,7 @@ impl RustNotesApp {
                             self.show_add_outline_modal = false;
                             self.new_outline_title.clear();
                         }
-                        if ui.button("Batal").clicked() {
+                        if ui.button(lang.tr("Batal", "Cancel")).clicked() {
                             self.show_add_outline_modal = false;
                         }
                     });

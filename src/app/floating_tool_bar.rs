@@ -555,7 +555,10 @@ impl RustNotesApp {
                     let is_sel = (self.canvas_state.stroke_width - w).abs() < 0.4;
                     if self
                         .quick_pill_button(ui, &format!("{w:.0}"), is_sel, pal)
-                        .on_hover_text(format!("Ukuran penghapus {w:.0}px"))
+                        .on_hover_text(format!(
+                            "{} {w:.0}px",
+                            lang.tr("Ukuran penghapus", "Eraser size")
+                        ))
                         .clicked()
                     {
                         self.canvas_state.stroke_width = w;
@@ -595,7 +598,13 @@ impl RustNotesApp {
                     for (kind, icon) in shapes {
                         let is_sel = cur_kind == kind;
                         if self
-                            .quick_toggle_chip(ui, icon, is_sel, pal, "Pilih Bentuk")
+                            .quick_toggle_chip(
+                                ui,
+                                icon,
+                                is_sel,
+                                pal,
+                                lang.tr("Pilih Bentuk", "Select Shape"),
+                            )
                             .clicked()
                         {
                             self.canvas_state.current_tool = ActiveTool::Shape(kind);
@@ -713,9 +722,13 @@ impl RustNotesApp {
                     self.canvas_state.text_italic = !self.canvas_state.text_italic;
                 }
                 for (align, icon, tip) in [
-                    (TextAlign::Left, "⬅", "Rata Kiri"),
-                    (TextAlign::Center, "⬌", "Rata Tengah"),
-                    (TextAlign::Right, "➡", "Rata Kanan"),
+                    (TextAlign::Left, "⬅", lang.tr("Rata Kiri", "Align Left")),
+                    (
+                        TextAlign::Center,
+                        "⬌",
+                        lang.tr("Rata Tengah", "Align Center"),
+                    ),
+                    (TextAlign::Right, "➡", lang.tr("Rata Kanan", "Align Right")),
                 ] {
                     let is_sel = self.canvas_state.text_alignment == align;
                     if self.quick_toggle_chip(ui, icon, is_sel, pal, tip).clicked() {
@@ -788,7 +801,11 @@ impl RustNotesApp {
                 if self
                     .quick_pill_button(
                         ui,
-                        if is_horiz { "∑ Editor LaTeX" } else { "∑" },
+                        if is_horiz {
+                            lang.tr("∑ Editor LaTeX", "∑ LaTeX Editor")
+                        } else {
+                            "∑"
+                        },
                         self.canvas_state.show_equation_dialog,
                         pal,
                     )
@@ -998,13 +1015,17 @@ impl RustNotesApp {
     }
 
     fn render_quick_width_presets(&mut self, ui: &mut egui::Ui, is_horiz: bool, pal: BarPalette) {
+        let lang = self.settings.language;
         let widths: Vec<f32> = self.settings.pen_widths.iter().copied().take(4).collect();
         let draw_widths = |ui: &mut egui::Ui| {
             for w in widths {
                 let is_sel = (self.canvas_state.stroke_width - w).abs() < 0.1;
                 if self
                     .quick_pill_button(ui, &format!("{w:.1}"), is_sel, pal)
-                    .on_hover_text(format!("Ketebalan {w:.1}px"))
+                    .on_hover_text(format!(
+                        "{} {w:.1}px",
+                        lang.tr("Ketebalan garis", "Stroke width")
+                    ))
                     .clicked()
                 {
                     self.canvas_state.stroke_width = w;
@@ -1041,6 +1062,7 @@ impl RustNotesApp {
         is_horiz: bool,
         pal: BarPalette,
     ) {
+        let lang = self.settings.language;
         let styles = [
             (StrokeStyle::Solid, "—"),
             (StrokeStyle::Dashed, "- -"),
@@ -1052,7 +1074,7 @@ impl RustNotesApp {
                 let is_sel = self.canvas_state.stroke_style == style;
                 if self
                     .quick_pill_button(ui, sym, is_sel, pal)
-                    .on_hover_text(style.name())
+                    .on_hover_text(style.name_tr(lang))
                     .clicked()
                 {
                     self.canvas_state.stroke_style = style;

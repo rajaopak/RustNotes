@@ -11,6 +11,8 @@ impl RustNotesApp {
     /// Render sidebar kiri editor (Thumbnail galeri halaman, drag-drop reordering, bookmarks, PDF outline).
     pub fn render_editor_sidebar(&mut self, ctx: &egui::Context, nb_idx: usize) {
         let notebook_id = self.library.notebooks[nb_idx].id.clone();
+        let lang = self.settings.language;
+        let palette = super::theme::UiPalette::from_ctx(ctx, self.settings.theme_mode);
         if self.show_thumbnail_sidebar {
             egui::SidePanel::left("editor_thumbnail_sidebar")
                 .exact_width(185.0)
@@ -21,9 +23,18 @@ impl RustNotesApp {
                     // Sidebar Tab Selector (Pages, Bookmarks, Outline)
                     ui.horizontal(|ui| {
                         let tabs = [
-                            (SidebarTab::Thumbnails, "📄 Pages"),
-                            (SidebarTab::Bookmarks, "🔖 Marks"),
-                            (SidebarTab::Outline, "📑 Outline"),
+                            (
+                                SidebarTab::Thumbnails,
+                                lang.tr("📄 Halaman", "📄 Pages"),
+                            ),
+                            (
+                                SidebarTab::Bookmarks,
+                                lang.tr("🔖 Penanda", "🔖 Marks"),
+                            ),
+                            (
+                                SidebarTab::Outline,
+                                lang.tr("📑 Daftar Isi", "📑 Outline"),
+                            ),
                         ];
                         for (tab, label) in tabs {
                             let is_sel = self.sidebar_tab == tab;
@@ -44,30 +55,63 @@ impl RustNotesApp {
                                 if self.thumb_select_mode {
                                     ui.label(
                                         RichText::new(format!(
-                                            "{} dipilih",
-                                            self.thumb_selected_pages.len()
+                                            "{} {}",
+                                            self.thumb_selected_pages.len(),
+                                            lang.tr("dipilih", "selected")
                                         ))
                                         .strong()
-                                        .color(Color32::WHITE),
+                                        .color(palette.text_primary),
                                     );
                                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                        if ui.button("✕").on_hover_text("Batal mode seleksi").clicked() {
+                                        if ui
+                                            .button("✕")
+                                            .on_hover_text(lang.tr(
+                                                "Batal mode seleksi",
+                                                "Exit selection mode",
+                                            ))
+                                            .clicked()
+                                        {
                                             self.thumb_select_mode = false;
                                             self.thumb_selected_pages.clear();
                                         }
-                                        if ui.button("Semua").on_hover_text("Pilih semua halaman").clicked() {
+                                        if ui
+                                            .button(lang.tr("Semua", "All"))
+                                            .on_hover_text(lang.tr(
+                                                "Pilih semua halaman",
+                                                "Select all pages",
+                                            ))
+                                            .clicked()
+                                        {
                                             for i in 0..page_count {
                                                 self.thumb_selected_pages.insert(i);
                                             }
                                         }
                                     });
                                 } else {
-                                    ui.label(RichText::new("Thumbnails").strong().color(Color32::WHITE));
+                                    ui.label(
+                                        RichText::new(lang.tr("Pratinjau", "Thumbnails"))
+                                            .strong()
+                                            .color(palette.text_primary),
+                                    );
                                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                        if ui.button("➕ Add").on_hover_text("Atur & Tambah Halaman Baru").clicked() {
+                                        if ui
+                                            .button(lang.tr("➕ Hal.", "➕ Add"))
+                                            .on_hover_text(lang.tr(
+                                                "Atur & Tambah Halaman Baru",
+                                                "Configure & Add New Page",
+                                            ))
+                                            .clicked()
+                                        {
                                             self.open_add_page_modal(nb_idx);
                                         }
-                                        if ui.button("☑ Pilih").on_hover_text("Pilih multi halaman untuk aksi massal").clicked() {
+                                        if ui
+                                            .button(lang.tr("☑ Pilih", "☑ Select"))
+                                            .on_hover_text(lang.tr(
+                                                "Pilih multi halaman untuk aksi massal",
+                                                "Select multiple pages for bulk actions",
+                                            ))
+                                            .clicked()
+                                        {
                                             self.thumb_select_mode = true;
                                             self.thumb_selected_pages.clear();
                                             self.thumb_selected_pages.insert(self.current_page_index);
@@ -83,7 +127,13 @@ impl RustNotesApp {
                                     ui.spacing_mut().item_spacing.x = 4.0;
                                     // 1. Bulk Delete (hanya jika sisa minimal 1 halaman)
                                     if self.thumb_selected_pages.len() < page_count
-                                        && ui.button("🗑 Hapus").on_hover_text("Hapus halaman terpilih").clicked()
+                                        && ui
+                                            .button(lang.tr("🗑 Hapus", "🗑 Delete"))
+                                            .on_hover_text(lang.tr(
+                                                "Hapus halaman terpilih",
+                                                "Delete selected pages",
+                                            ))
+                                            .clicked()
                                     {
                                         self.push_doc_undo(nb_idx);
                                         let to_delete: Vec<usize> =
@@ -97,12 +147,24 @@ impl RustNotesApp {
                                             .current_page_index
                                             .min(self.library.notebooks[nb_idx].pages.len().saturating_sub(1));
                                         self.mark_dirty(&notebook_id);
-                                        self.toast_message =
-                                            Some("🗑 Halaman terpilih berhasil dihapus.".to_string());
+                                        self.toast_message = Some(
+                                            lang.tr(
+                                                "🗑 Halaman terpilih berhasil dihapus.",
+                                                "🗑 Selected pages deleted.",
+                                            )
+                                            .to_string(),
+                                        );
                                     }
 
                                     // 2. Bulk Duplicate
-                                    if ui.button("📄 Salin").on_hover_text("Gandakan halaman terpilih").clicked() {
+                                    if ui
+                                        .button(lang.tr("📄 Salin", "📄 Copy"))
+                                        .on_hover_text(lang.tr(
+                                            "Gandakan halaman terpilih",
+                                            "Duplicate selected pages",
+                                        ))
+                                        .clicked()
+                                    {
                                         self.push_doc_undo(nb_idx);
                                         let to_dup: Vec<usize> =
                                             self.thumb_selected_pages.iter().copied().collect();
@@ -115,12 +177,24 @@ impl RustNotesApp {
                                         self.thumb_selected_pages.clear();
                                         self.thumb_select_mode = false;
                                         self.mark_dirty(&notebook_id);
-                                        self.toast_message =
-                                            Some("📄 Halaman terpilih berhasil digandakan.".to_string());
+                                        self.toast_message = Some(
+                                            lang.tr(
+                                                "📄 Halaman terpilih berhasil digandakan.",
+                                                "📄 Selected pages duplicated.",
+                                            )
+                                            .to_string(),
+                                        );
                                     }
 
                                     // 3. Bulk Rotate 90 CW
-                                    if ui.button("↻ Putar").on_hover_text("Putar halaman terpilih 90° CW").clicked() {
+                                    if ui
+                                        .button(lang.tr("↻ Putar", "↻ Rotate"))
+                                        .on_hover_text(lang.tr(
+                                            "Putar halaman terpilih 90° CW",
+                                            "Rotate selected pages 90° CW",
+                                        ))
+                                        .clicked()
+                                    {
                                         self.push_doc_undo(nb_idx);
                                         for &idx in &self.thumb_selected_pages {
                                             self.library.notebooks[nb_idx].rotate_page(idx, 90);
@@ -130,12 +204,24 @@ impl RustNotesApp {
                                             self.canvas_state.spatial_grid.rebuild(&p.objects);
                                         }
                                         self.mark_dirty(&notebook_id);
-                                        self.toast_message =
-                                            Some("↻ Halaman terpilih berhasil diputar 90°.".to_string());
+                                        self.toast_message = Some(
+                                            lang.tr(
+                                                "↻ Halaman terpilih berhasil diputar 90°.",
+                                                "↻ Selected pages rotated 90°.",
+                                            )
+                                            .to_string(),
+                                        );
                                     }
 
                                     // 4. Bulk Export to PDF
-                                    if ui.button("📤 Ekspor").on_hover_text("Ekspor halaman terpilih ke PDF").clicked() {
+                                    if ui
+                                        .button(lang.tr("📤 Ekspor", "📤 Export"))
+                                        .on_hover_text(lang.tr(
+                                            "Ekspor halaman terpilih ke PDF",
+                                            "Export selected pages to PDF",
+                                        ))
+                                        .clicked()
+                                    {
                                         let default_name = format!(
                                             "{}_selected.pdf",
                                             self.library.notebooks[nb_idx].title.replace(
@@ -160,13 +246,21 @@ impl RustNotesApp {
                                             match export_notebook_to_pdf(&storage_dir, &temp_nb, &path) {
                                                 Ok(()) => {
                                                     self.toast_message = Some(
-                                                        "✅ Halaman terpilih berhasil diekspor ke PDF."
-                                                            .to_string(),
+                                                        lang.tr(
+                                                            "✅ Halaman terpilih berhasil diekspor ke PDF.",
+                                                            "✅ Selected pages exported to PDF.",
+                                                        )
+                                                        .to_string(),
                                                     );
                                                 }
                                                 Err(e) => {
-                                                    self.toast_message =
-                                                        Some(format!("⚠ Gagal ekspor PDF: {e}"));
+                                                    self.toast_message = Some(format!(
+                                                        "{}: {e}",
+                                                        lang.tr(
+                                                            "⚠ Gagal ekspor PDF",
+                                                            "⚠ PDF export failed"
+                                                        )
+                                                    ));
                                                 }
                                             }
                                         }
@@ -652,13 +746,13 @@ impl RustNotesApp {
                                             // Border highlight for active page or selected pages
                                             let is_thumb_selected = self.thumb_selected_pages.contains(&p_i);
                                             let border_color = if is_thumb_selected {
-                                                Color32::from_rgb(0, 180, 255)
+                                                palette.border_accent
                                             } else if is_active {
-                                                Color32::from_rgb(0, 114, 206)
+                                                palette.accent
                                             } else if resp.hovered() {
-                                                Color32::from_rgb(90, 90, 90)
+                                                palette.border_strong
                                             } else {
-                                                Color32::from_rgb(50, 50, 50)
+                                                palette.border_subtle
                                             };
                                             let border_w = if is_active || is_thumb_selected { 2.5_f32 } else { 1.0_f32 };
                                             painter.rect_stroke(
@@ -688,50 +782,50 @@ impl RustNotesApp {
                                             }
 
                                             resp.context_menu(|ui| {
-                                                if ui.button("📄 Duplicate Page").clicked() {
+                                                if ui.button(lang.tr("📄 Duplikasi Halaman", "📄 Duplicate Page")).clicked() {
                                                     action_duplicate = Some(p_i);
                                                     ui.close_menu();
                                                 }
-                                                if page_count > 1 && ui.button("🗑 Delete Page").clicked()
+                                                if page_count > 1 && ui.button(lang.tr("🗑 Hapus Halaman", "🗑 Delete Page")).clicked()
                                                 {
                                                     action_delete = Some(p_i);
                                                     ui.close_menu();
                                                 }
                                                 ui.separator();
-                                                if ui.button("↻ Rotate 90° CW").clicked() {
+                                                if ui.button(lang.tr("↻ Putar 90° CW", "↻ Rotate 90° CW")).clicked() {
                                                     action_rotate_cw = Some(p_i);
                                                     ui.close_menu();
                                                 }
-                                                if ui.button("↺ Rotate 90° CCW").clicked() {
+                                                if ui.button(lang.tr("↺ Putar 90° CCW", "↺ Rotate 90° CCW")).clicked() {
                                                     action_rotate_ccw = Some(p_i);
                                                     ui.close_menu();
                                                 }
-                                                if ui.button("⟲ Rotate 180°").clicked() {
+                                                if ui.button(lang.tr("⟲ Putar 180°", "⟲ Rotate 180°")).clicked() {
                                                     action_rotate_180 = Some(p_i);
                                                     ui.close_menu();
                                                 }
                                                 ui.separator();
-                                                if p_i > 0 && ui.button("⬆ Move Up").clicked() {
+                                                if p_i > 0 && ui.button(lang.tr("⬆ Geser ke Atas", "⬆ Move Up")).clicked() {
                                                     action_move_up = Some(p_i);
                                                     ui.close_menu();
                                                 }
                                                 if p_i + 1 < page_count
-                                                    && ui.button("⬇ Move Down").clicked()
+                                                    && ui.button(lang.tr("⬇ Geser ke Bawah", "⬇ Move Down")).clicked()
                                                 {
                                                     action_move_down = Some(p_i);
                                                     ui.close_menu();
                                                 }
                                                 ui.separator();
-                                                if ui.button("➕ Insert Page Before").clicked() {
+                                                if ui.button(lang.tr("➕ Sisipkan Sebelumnya", "➕ Insert Page Before")).clicked() {
                                                     action_insert_before = Some(p_i);
                                                     ui.close_menu();
                                                 }
-                                                if ui.button("➕ Insert Page After").clicked() {
+                                                if ui.button(lang.tr("➕ Sisipkan Sesudahnya", "➕ Insert Page After")).clicked() {
                                                     action_insert_after = Some(p_i);
                                                     ui.close_menu();
                                                 }
                                                 ui.separator();
-                                                if ui.button("📐 Change Size...").clicked() {
+                                                if ui.button(lang.tr("📐 Ubah Ukuran...", "📐 Change Size...")).clicked() {
                                                     action_change_size = Some(p_i);
                                                     ui.close_menu();
                                                 }
@@ -740,9 +834,9 @@ impl RustNotesApp {
                                             ui.label(
                                                 RichText::new(format!("{}", p_i + 1)).size(11.0).color(
                                                     if is_active {
-                                                        Color32::from_rgb(76, 147, 236)
+                                                        palette.accent_text
                                                     } else {
-                                                        Color32::GRAY
+                                                        palette.text_muted
                                                     },
                                                 ),
                                             );
@@ -860,7 +954,11 @@ impl RustNotesApp {
                                 });
                         }
                         SidebarTab::Bookmarks => {
-                            ui.label(RichText::new("Bookmarked Pages").strong().color(Color32::WHITE));
+                            ui.label(
+                                RichText::new(lang.tr("Halaman Berpenanda", "Bookmarked Pages"))
+                                    .strong()
+                                    .color(palette.text_primary),
+                            );
                             ui.separator();
                             ScrollArea::vertical()
                                 .auto_shrink([false, false])
@@ -877,33 +975,47 @@ impl RustNotesApp {
                                     if bookmarked_list.is_empty() {
                                         ui.add_space(20.0);
                                         ui.label(
-                                            RichText::new("Tidak ada bookmark.\nKlik ikon 🔖 di bilah atas untuk menandai halaman.")
-                                                .size(11.0)
-                                                .color(Color32::GRAY),
+                                            RichText::new(lang.tr(
+                                                "Tidak ada bookmark.\nKlik ikon ☆ di bilah atas untuk menandai halaman.",
+                                                "No bookmarks yet.\nClick the ☆ icon in the top bar to bookmark a page.",
+                                            ))
+                                            .size(11.0)
+                                            .color(palette.text_muted),
                                         );
                                     } else {
                                         for (p_i, p) in bookmarked_list {
                                             let is_cur = p_i == self.current_page_index;
                                             ui.horizontal(|ui| {
-                                                let btn_text = format!("🔖 Hal. {}", p_i + 1);
+                                                let btn_text = format!(
+                                                    "🔖 {} {}",
+                                                    lang.tr("Hal.", "Page"),
+                                                    p_i + 1
+                                                );
                                                 let btn = Button::new(
                                                     RichText::new(btn_text)
                                                         .size(12.0)
                                                         .color(if is_cur {
-                                                            Color32::from_rgb(76, 147, 236)
+                                                            palette.accent_text
                                                         } else {
-                                                            Color32::WHITE
+                                                            palette.text_primary
                                                         }),
                                                 )
                                                 .fill(if is_cur {
-                                                    Color32::from_rgb(39, 54, 91)
+                                                    palette.accent_soft_bg
                                                 } else {
                                                     Color32::TRANSPARENT
                                                 });
                                                 if ui.add(btn).clicked() {
                                                     jump_idx = Some(p_i);
                                                 }
-                                                if ui.small_button("✕").on_hover_text("Hapus bookmark").clicked() {
+                                                if ui
+                                                    .small_button("✕")
+                                                    .on_hover_text(lang.tr(
+                                                        "Hapus bookmark",
+                                                        "Remove bookmark",
+                                                    ))
+                                                    .clicked()
+                                                {
                                                     unbookmark_idx = Some(p_i);
                                                 }
                                             });
@@ -921,7 +1033,11 @@ impl RustNotesApp {
                                             });
                                             if let Some(txt) = first_text {
                                                 let preview: String = txt.chars().take(22).collect();
-                                                ui.label(RichText::new(format!("  \"{preview}…\"")).size(10.0).color(Color32::DARK_GRAY));
+                                                ui.label(
+                                                    RichText::new(format!("  \"{preview}…\""))
+                                                        .size(10.0)
+                                                        .color(palette.text_muted),
+                                                );
                                             }
                                             ui.add_space(4.0);
                                         }
@@ -938,10 +1054,18 @@ impl RustNotesApp {
                         }
                         SidebarTab::Outline => {
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new("Daftar Isi").strong().color(Color32::WHITE));
+                                ui.label(
+                                    RichText::new(lang.tr("Daftar Isi", "Outline"))
+                                        .strong()
+                                        .color(palette.text_primary),
+                                );
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    if ui.button("➕ Tambah").clicked() {
-                                        self.new_outline_title = format!("Halaman {}", self.current_page_index + 1);
+                                    if ui.button(lang.tr("➕ Tambah", "➕ Add")).clicked() {
+                                        self.new_outline_title = format!(
+                                            "{} {}",
+                                            lang.tr("Halaman", "Page"),
+                                            self.current_page_index + 1
+                                        );
                                         self.show_add_outline_modal = true;
                                     }
                                 });
@@ -957,33 +1081,48 @@ impl RustNotesApp {
                                     if outline.is_empty() {
                                         ui.add_space(20.0);
                                         ui.label(
-                                            RichText::new("Belum ada daftar isi.\nKlik '➕ Tambah' untuk menandai bab/topik di halaman ini.")
-                                                .size(11.0)
-                                                .color(Color32::GRAY),
+                                            RichText::new(lang.tr(
+                                                "Belum ada daftar isi.\nKlik '➕ Tambah' untuk menandai bab/topik di halaman ini.",
+                                                "No outline entries yet.\nClick '➕ Add' to bookmark a section on this page.",
+                                            ))
+                                            .size(11.0)
+                                            .color(palette.text_muted),
                                         );
                                     } else {
                                         for (idx, item) in outline.iter().enumerate() {
                                             let is_cur = item.page_index == self.current_page_index;
                                             ui.horizontal(|ui| {
-                                                let label_text = format!("{} (Hal. {})", item.title, item.page_index + 1);
+                                                let label_text = format!(
+                                                    "{} ({} {})",
+                                                    item.title,
+                                                    lang.tr("Hal.", "p."),
+                                                    item.page_index + 1
+                                                );
                                                 let btn = Button::new(
                                                     RichText::new(label_text)
                                                         .size(12.0)
                                                         .color(if is_cur {
-                                                            Color32::from_rgb(76, 147, 236)
+                                                            palette.accent_text
                                                         } else {
-                                                            Color32::WHITE
+                                                            palette.text_primary
                                                         }),
                                                 )
                                                 .fill(if is_cur {
-                                                    Color32::from_rgb(39, 54, 91)
+                                                    palette.accent_soft_bg
                                                 } else {
                                                     Color32::TRANSPARENT
                                                 });
                                                 if ui.add(btn).clicked() {
                                                     jump_page = Some(item.page_index);
                                                 }
-                                                if ui.small_button("✕").on_hover_text("Hapus dari outline").clicked() {
+                                                if ui
+                                                    .small_button("✕")
+                                                    .on_hover_text(lang.tr(
+                                                        "Hapus dari outline",
+                                                        "Remove from outline",
+                                                    ))
+                                                    .clicked()
+                                                {
                                                     delete_outline_idx = Some(idx);
                                                 }
                                             });

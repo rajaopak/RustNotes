@@ -124,12 +124,16 @@ pub fn render_floating_connector_toolbar(
                     visuals.widgets.active.bg_fill = tb_style.active_btn_bg;
                     visuals.widgets.noninteractive.bg_stroke = tb_style.divider_stroke;
 
+                    let lang = state.language;
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
 
                         // 1. Jenis Rute Jalur
-                        ui.menu_button("🔀 Rute", |ui| {
-                            if ui.button("📏 Garis Lurus").clicked() {
+                        ui.menu_button(lang.tr("🔀 Rute", "🔀 Route"), |ui| {
+                            if ui
+                                .button(lang.tr("📏 Garis Lurus", "📏 Straight"))
+                                .clicked()
+                            {
                                 state.push_undo(&page.id, &page.objects);
                                 for obj in &mut page.objects {
                                     if obj.id() == conn_id
@@ -145,7 +149,10 @@ pub fn render_floating_connector_toolbar(
                                 }
                                 ui.close_menu();
                             }
-                            if ui.button("🔀 Siku (Orthogonal)").clicked() {
+                            if ui
+                                .button(lang.tr("🔀 Siku (Orthogonal)", "🔀 Orthogonal"))
+                                .clicked()
+                            {
                                 state.push_undo(&page.id, &page.objects);
                                 for obj in &mut page.objects {
                                     if obj.id() == conn_id
@@ -161,7 +168,10 @@ pub fn render_floating_connector_toolbar(
                                 }
                                 ui.close_menu();
                             }
-                            if ui.button("〰 Lengkung (Curved)").clicked() {
+                            if ui
+                                .button(lang.tr("〰 Lengkung (Curved)", "〰 Curved"))
+                                .clicked()
+                            {
                                 state.push_undo(&page.id, &page.objects);
                                 for obj in &mut page.objects {
                                     if obj.id() == conn_id
@@ -182,8 +192,8 @@ pub fn render_floating_connector_toolbar(
                         ui.separator();
 
                         // 2. Marker Ujung Panah
-                        ui.menu_button("➔ Ujung", |ui| {
-                            if ui.button("Tanpa Panah").clicked() {
+                        ui.menu_button(lang.tr("➔ Ujung", "➔ Ends"), |ui| {
+                            if ui.button(lang.tr("Tanpa Panah", "No Arrows")).clicked() {
                                 state.push_undo(&page.id, &page.objects);
                                 for obj in &mut page.objects {
                                     if obj.id() == conn_id
@@ -195,7 +205,10 @@ pub fn render_floating_connector_toolbar(
                                 }
                                 ui.close_menu();
                             }
-                            if ui.button("➔ Panah di Akhir").clicked() {
+                            if ui
+                                .button(lang.tr("➔ Panah di Akhir", "➔ End Arrow"))
+                                .clicked()
+                            {
                                 state.push_undo(&page.id, &page.objects);
                                 for obj in &mut page.objects {
                                     if obj.id() == conn_id
@@ -207,7 +220,10 @@ pub fn render_floating_connector_toolbar(
                                 }
                                 ui.close_menu();
                             }
-                            if ui.button("↔ Panah di Kedua Ujung").clicked() {
+                            if ui
+                                .button(lang.tr("↔ Panah di Kedua Ujung", "↔ Both Ends Arrows"))
+                                .clicked()
+                            {
                                 state.push_undo(&page.id, &page.objects);
                                 for obj in &mut page.objects {
                                     if obj.id() == conn_id
@@ -318,13 +334,16 @@ pub fn render_floating_connector_toolbar(
                                 && matches!(o, DrawObject::Connector { locked: true, .. })
                         });
                         let lock_text = if is_locked {
-                            "🔓 Buka"
+                            lang.tr("🔓 Buka", "🔓 Unlock")
                         } else {
-                            "🔒 Kunci"
+                            lang.tr("🔒 Kunci", "🔒 Lock")
                         };
                         if ui
                             .button(lock_text)
-                            .on_hover_text("Kunci atau Buka Kunci Connector")
+                            .on_hover_text(lang.tr(
+                                "Kunci atau Buka Kunci Connector",
+                                "Lock or Unlock Connector",
+                            ))
                             .clicked()
                         {
                             state.push_undo(&page.id, &page.objects);
@@ -345,10 +364,11 @@ pub fn render_floating_connector_toolbar(
                         if has_cps {
                             ui.separator();
                             if ui
-                                .button("↺ Jalur Otomatis")
-                                .on_hover_text(
+                                .button(lang.tr("↺ Jalur Otomatis", "↺ Auto Route"))
+                                .on_hover_text(lang.tr(
                                     "Hapus semua tikungan manual dan kembali ke rute otomatis",
-                                )
+                                    "Clear manual control points and restore automatic routing",
+                                ))
                                 .clicked()
                             {
                                 state.push_undo(&page.id, &page.objects);
@@ -406,11 +426,12 @@ pub fn render_floating_shape_toolbar(
                     visuals.widgets.active.bg_fill = tb_style.active_btn_bg;
                     visuals.widgets.noninteractive.bg_stroke = tb_style.divider_stroke;
 
+                    let lang = state.language;
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
 
                         // 1. Tombol Cepat "Rounded Rectangle" (Task 5.5) & Jenis Bentuk (5.3)
-                        ui.menu_button("📐 Bentuk", |ui| {
+                        ui.menu_button(lang.tr("📐 Bentuk", "📐 Shape"), |ui| {
                             if ui.button("▢ Rounded Rect").clicked() {
                                 state.push_undo(&page.id, &page.objects);
                                 for obj in &mut page.objects {
@@ -425,7 +446,10 @@ pub fn render_floating_shape_toolbar(
                                 state.spatial_grid.rebuild(&page.objects);
                                 ui.close_menu();
                             }
-                            if ui.button("▭ Persegi Panjang").clicked() {
+                            if ui
+                                .button(lang.tr("▭ Persegi Panjang", "▭ Rectangle"))
+                                .clicked()
+                            {
                                 state.push_undo(&page.id, &page.objects);
                                 for obj in &mut page.objects {
                                     if state.selected_ids.contains(&obj.id().to_string()) {
@@ -436,7 +460,7 @@ pub fn render_floating_shape_toolbar(
                                 state.spatial_grid.rebuild(&page.objects);
                                 ui.close_menu();
                             }
-                            if ui.button("⬭ Elips").clicked() {
+                            if ui.button(lang.tr("⬭ Elips", "⬭ Ellipse")).clicked() {
                                 state.push_undo(&page.id, &page.objects);
                                 for obj in &mut page.objects {
                                     if state.selected_ids.contains(&obj.id().to_string()) {
@@ -447,7 +471,7 @@ pub fn render_floating_shape_toolbar(
                                 state.spatial_grid.rebuild(&page.objects);
                                 ui.close_menu();
                             }
-                            if ui.button("◇ Belah Ketupat").clicked() {
+                            if ui.button(lang.tr("◇ Belah Ketupat", "◇ Diamond")).clicked() {
                                 state.push_undo(&page.id, &page.objects);
                                 for obj in &mut page.objects {
                                     if state.selected_ids.contains(&obj.id().to_string()) {
@@ -458,7 +482,7 @@ pub fn render_floating_shape_toolbar(
                                 state.spatial_grid.rebuild(&page.objects);
                                 ui.close_menu();
                             }
-                            if ui.button("△ Segitiga").clicked() {
+                            if ui.button(lang.tr("△ Segitiga", "△ Triangle")).clicked() {
                                 state.push_undo(&page.id, &page.objects);
                                 for obj in &mut page.objects {
                                     if state.selected_ids.contains(&obj.id().to_string()) {
@@ -469,7 +493,10 @@ pub fn render_floating_shape_toolbar(
                                 state.spatial_grid.rebuild(&page.objects);
                                 ui.close_menu();
                             }
-                            if ui.button("▱ Jajar Genjang").clicked() {
+                            if ui
+                                .button(lang.tr("▱ Jajar Genjang", "▱ Parallelogram"))
+                                .clicked()
+                            {
                                 state.push_undo(&page.id, &page.objects);
                                 for obj in &mut page.objects {
                                     if state.selected_ids.contains(&obj.id().to_string()) {
@@ -480,7 +507,7 @@ pub fn render_floating_shape_toolbar(
                                 state.spatial_grid.rebuild(&page.objects);
                                 ui.close_menu();
                             }
-                            if ui.button("╱ Garis").clicked() {
+                            if ui.button(lang.tr("╱ Garis", "╱ Line")).clicked() {
                                 state.push_undo(&page.id, &page.objects);
                                 for obj in &mut page.objects {
                                     if state.selected_ids.contains(&obj.id().to_string()) {
@@ -495,8 +522,11 @@ pub fn render_floating_shape_toolbar(
 
                         // Tombol Cepat "Rounded Rectangle" (Task 5.5)
                         if ui
-                            .button("▢ Bulat")
-                            .on_hover_text("Beralih ke Rounded Rectangle")
+                            .button(lang.tr("▢ Bulat", "▢ Rounded"))
+                            .on_hover_text(lang.tr(
+                                "Beralih ke Rounded Rectangle",
+                                "Switch to Rounded Rectangle",
+                            ))
                             .clicked()
                         {
                             state.push_undo(&page.id, &page.objects);
@@ -568,8 +598,10 @@ pub fn render_floating_shape_toolbar(
 
                         // 4. Warna Isi
                         if ui
-                            .button("⊘ Isi")
-                            .on_hover_text("Tanpa Isi (Transparan)")
+                            .button(lang.tr("⊘ Isi", "⊘ Fill"))
+                            .on_hover_text(
+                                lang.tr("Tanpa Isi (Transparan)", "No Fill (Transparent)"),
+                            )
                             .clicked()
                         {
                             state.push_undo(&page.id, &page.objects);
@@ -586,23 +618,23 @@ pub fn render_floating_shape_toolbar(
                         for &(f_col, tooltip) in &[
                             (
                                 Color32::from_rgba_unmultiplied(0, 114, 206, 45),
-                                "Biru Lembut",
+                                lang.tr("Biru Lembut", "Soft Blue"),
                             ),
                             (
                                 Color32::from_rgba_unmultiplied(255, 220, 50, 55),
-                                "Kuning Lembut",
+                                lang.tr("Kuning Lembut", "Soft Yellow"),
                             ),
                             (
                                 Color32::from_rgba_unmultiplied(40, 167, 69, 45),
-                                "Hijau Lembut",
+                                lang.tr("Hijau Lembut", "Soft Green"),
                             ),
                             (
                                 Color32::from_rgba_unmultiplied(220, 53, 69, 45),
-                                "Merah Lembut",
+                                lang.tr("Merah Lembut", "Soft Red"),
                             ),
                             (
                                 Color32::from_rgba_unmultiplied(240, 243, 246, 220),
-                                "Putih Kartu",
+                                lang.tr("Putih Kartu", "Card White"),
                             ),
                         ] {
                             let (f_rect, resp) =
@@ -640,8 +672,11 @@ pub fn render_floating_shape_toolbar(
 
                         // Tombol Tambah/Edit Teks di dalam Bentuk (Task 6.1)
                         if ui
-                            .button("✍ Teks")
-                            .on_hover_text("Tulis atau Sunting Teks di dalam Bentuk")
+                            .button(lang.tr("✍ Teks", "✍ Text"))
+                            .on_hover_text(lang.tr(
+                                "Tulis atau Sunting Teks di dalam Bentuk",
+                                "Write or Edit Text inside Shape",
+                            ))
                             .clicked()
                             && let Some(id) = state.selected_ids.first().cloned()
                             && let Some(obj) = page.objects.iter_mut().find(|o| o.id() == id)
@@ -667,13 +702,15 @@ pub fn render_floating_shape_toolbar(
 
                         // 5. Kunci / Buka Kunci (Lock / Unlock)
                         let lock_text = if all_locked {
-                            "🔓 Buka"
+                            lang.tr("🔓 Buka", "🔓 Unlock")
                         } else {
-                            "🔒 Kunci"
+                            lang.tr("🔒 Kunci", "🔒 Lock")
                         };
                         if ui
                             .button(lock_text)
-                            .on_hover_text("Kunci atau Buka Kunci Bentuk")
+                            .on_hover_text(
+                                lang.tr("Kunci atau Buka Kunci Bentuk", "Lock or Unlock Shape"),
+                            )
                             .clicked()
                         {
                             state.push_undo(&page.id, &page.objects);
@@ -728,9 +765,10 @@ pub fn render_floating_text_toolbar(
                     visuals.widgets.active.bg_fill = tb_style.active_btn_bg;
                     visuals.widgets.noninteractive.bg_stroke = tb_style.divider_stroke;
 
+                    let lang = state.language;
                     if all_locked {
                         ui.horizontal(|ui| {
-                            ui.label("🔒 Terkunci");
+                            ui.label(lang.tr("🔒 Terkunci", "🔒 Locked"));
                         });
                         return;
                     }
@@ -842,7 +880,10 @@ pub fn render_floating_text_toolbar(
                                     .fixed_decimals(0)
                                     .suffix(" pt"),
                             )
-                            .on_hover_text("Seret kiri/kanan atau klik untuk ubah ukuran font");
+                            .on_hover_text(lang.tr(
+                                "Seret kiri/kanan atau klik untuk ubah ukuran font",
+                                "Drag left/right or click to adjust font size",
+                            ));
                         if dv_resp.drag_started() {
                             state.push_undo(&page.id, &page.objects);
                         }
@@ -910,9 +951,21 @@ pub fn render_floating_text_toolbar(
 
                         // 4. Alignment: Left, Center, Right
                         let aligns = [
-                            (crate::model::TextAlign::Left, "⇤", "Rata Kiri"),
-                            (crate::model::TextAlign::Center, "≡", "Rata Tengah"),
-                            (crate::model::TextAlign::Right, "⇥", "Rata Kanan"),
+                            (
+                                crate::model::TextAlign::Left,
+                                "⇤",
+                                lang.tr("Rata Kiri", "Align Left"),
+                            ),
+                            (
+                                crate::model::TextAlign::Center,
+                                "≡",
+                                lang.tr("Rata Tengah", "Align Center"),
+                            ),
+                            (
+                                crate::model::TextAlign::Right,
+                                "⇥",
+                                lang.tr("Rata Kanan", "Align Right"),
+                            ),
                         ];
                         for (al, icon, tip) in aligns {
                             let is_curr = curr_align == al;
@@ -935,16 +988,22 @@ pub fn render_floating_text_toolbar(
                         ui.separator();
 
                         // 5. Palet Warna Teks
-                        ui.menu_button("🎨 Teks", |ui| {
+                        ui.menu_button(lang.tr("🎨 Teks", "🎨 Text"), |ui| {
                             let text_colors = [
-                                (Color32::from_rgb(25, 27, 32), "Hitam"),
-                                (Color32::from_rgb(100, 105, 115), "Abu-abu"),
-                                (Color32::from_rgb(15, 82, 186), "Biru Navy"),
-                                (Color32::from_rgb(2, 132, 199), "Biru Muda"),
-                                (Color32::from_rgb(22, 128, 61), "Hijau"),
-                                (Color32::from_rgb(220, 38, 38), "Merah"),
-                                (Color32::from_rgb(217, 119, 6), "Oranye"),
-                                (Color32::from_rgb(126, 34, 206), "Ungu"),
+                                (Color32::from_rgb(25, 27, 32), lang.tr("Hitam", "Black")),
+                                (Color32::from_rgb(100, 105, 115), lang.tr("Abu-abu", "Gray")),
+                                (
+                                    Color32::from_rgb(15, 82, 186),
+                                    lang.tr("Biru Navy", "Navy Blue"),
+                                ),
+                                (
+                                    Color32::from_rgb(2, 132, 199),
+                                    lang.tr("Biru Muda", "Sky Blue"),
+                                ),
+                                (Color32::from_rgb(22, 128, 61), lang.tr("Hijau", "Green")),
+                                (Color32::from_rgb(220, 38, 38), lang.tr("Merah", "Red")),
+                                (Color32::from_rgb(217, 119, 6), lang.tr("Oranye", "Orange")),
+                                (Color32::from_rgb(126, 34, 206), lang.tr("Ungu", "Purple")),
                             ];
                             for (c, label) in text_colors {
                                 ui.horizontal(|ui| {
@@ -965,14 +1024,32 @@ pub fn render_floating_text_toolbar(
                         // 6. Warna Kertas Tempel (Bila StickyNote)
                         if is_sticky {
                             ui.separator();
-                            ui.menu_button("📝 Warna Tempel", |ui| {
+                            ui.menu_button(lang.tr("📝 Warna Tempel", "📝 Note Color"), |ui| {
                                 let sticky_colors = [
-                                    (Color32::from_rgb(254, 243, 189), "Kuning Klasik"),
-                                    (Color32::from_rgb(252, 231, 243), "Pink Pastel"),
-                                    (Color32::from_rgb(220, 252, 231), "Hijau Mint"),
-                                    (Color32::from_rgb(224, 242, 254), "Biru Langit"),
-                                    (Color32::from_rgb(243, 232, 255), "Ungu Lavender"),
-                                    (Color32::from_rgb(254, 215, 170), "Oranye Peach"),
+                                    (
+                                        Color32::from_rgb(254, 243, 189),
+                                        lang.tr("Kuning Klasik", "Classic Yellow"),
+                                    ),
+                                    (
+                                        Color32::from_rgb(252, 231, 243),
+                                        lang.tr("Pink Pastel", "Pastel Pink"),
+                                    ),
+                                    (
+                                        Color32::from_rgb(220, 252, 231),
+                                        lang.tr("Hijau Mint", "Mint Green"),
+                                    ),
+                                    (
+                                        Color32::from_rgb(224, 242, 254),
+                                        lang.tr("Biru Langit", "Sky Blue"),
+                                    ),
+                                    (
+                                        Color32::from_rgb(243, 232, 255),
+                                        lang.tr("Ungu Lavender", "Lavender"),
+                                    ),
+                                    (
+                                        Color32::from_rgb(254, 215, 170),
+                                        lang.tr("Oranye Peach", "Peach Orange"),
+                                    ),
                                 ];
                                 for (c, label) in sticky_colors {
                                     ui.horizontal(|ui| {
@@ -995,8 +1072,13 @@ pub fn render_floating_text_toolbar(
                         if state.editing_text_id.as_deref() != Some(target_id) {
                             ui.separator();
                             if ui
-                                .button("✏ Sunting")
-                                .on_hover_text("Buka penyunting teks langsung")
+                                .button(lang.tr("✏ Sunting", "✏ Edit"))
+                                .on_hover_text(
+                                    lang.tr(
+                                        "Buka penyunting teks langsung",
+                                        "Open inline text editor",
+                                    ),
+                                )
                                 .clicked()
                             {
                                 state.editing_text_id = Some(target_id.to_string());
@@ -1213,7 +1295,11 @@ pub fn render_inline_text_editor(
                         .id(te_id)
                         .horizontal_align(halign)
                         .layouter(&mut layouter)
-                        .hint_text("Tulis catatan tempel...")
+                        .hint_text(
+                            state
+                                .language
+                                .tr("Tulis catatan tempel...", "Write sticky note..."),
+                        )
                         .frame(false)
                         .desired_width(edit_rect.width());
                     let te_resp = ui.put(edit_rect, te);
@@ -1294,7 +1380,7 @@ pub fn render_inline_text_editor(
                                 .id(te_id)
                                 .font(egui::FontId::proportional(scaled_font))
                                 .text_color(lbl.color.to_color32())
-                                .hint_text("Teks label...")
+                                .hint_text(state.language.tr("Teks label...", "Label text..."))
                                 .frame(false)
                                 .desired_width(screen_w);
                             let prev_bg = ui.visuals().extreme_bg_color;
@@ -1339,11 +1425,18 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
         return;
     }
 
+    let lang = state.language;
     let mut open = true;
     let title = if state.editing_equation_id.is_some() {
-        "📐 Edit LaTeX (Rumus, Tabel, Grafik, Geometri)"
+        lang.tr(
+            "📐 Edit LaTeX (Rumus, Tabel, Grafik, Geometri)",
+            "📐 Edit LaTeX (Formula, Table, Graph, Geometry)",
+        )
     } else {
-        "📐 Sisipkan LaTeX (Rumus, Tabel, Grafik, Geometri)"
+        lang.tr(
+            "📐 Sisipkan LaTeX (Rumus, Tabel, Grafik, Geometri)",
+            "📐 Insert LaTeX (Formula, Table, Graph, Geometry)",
+        )
     };
 
     let mut insert_action = false;
@@ -1384,15 +1477,15 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(is_valid, |ui| {
                         let btn_text = if state.editing_equation_id.is_some() {
-                            "Perbarui Persamaan"
+                            lang.tr("Perbarui Persamaan", "Update Equation")
                         } else {
-                            "Sisipkan ke Halaman"
+                            lang.tr("Sisipkan ke Halaman", "Insert onto Page")
                         };
                         if ui.button(btn_text).clicked() {
                             insert_action = true;
                         }
                     });
-                    if ui.button("Batal").clicked() {
+                    if ui.button(lang.tr("Batal", "Cancel")).clicked() {
                         close_action = true;
                     }
                 });
@@ -1407,7 +1500,7 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
                             ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
 
                             ui.horizontal(|ui| {
-                                ui.label("Ukuran Font:");
+                                ui.label(lang.tr("Ukuran Font:", "Font Size:"));
                                 ui.add(
                                     egui::Slider::new(&mut state.equation_font_size, 12.0..=64.0)
                                         .suffix(" pt"),
@@ -1416,9 +1509,12 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
 
                             // Quick LaTeX Snippet Buttons
                             ui.label(
-                                egui::RichText::new("Simbol & Rumus Cepat:")
-                                    .size(12.0)
-                                    .strong(),
+                                egui::RichText::new(lang.tr(
+                                    "Simbol & Rumus Cepat:",
+                                    "Quick Symbols & Formulas:",
+                                ))
+                                .size(12.0)
+                                .strong(),
                             );
                             ui.horizontal_wrapped(|ui| {
                                 let snippets = [
@@ -1449,42 +1545,45 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
                             });
 
                             ui.label(
-                                egui::RichText::new("Template Tabel, Grafik & Geometri:")
-                                    .size(12.0)
-                                    .strong(),
+                                egui::RichText::new(lang.tr(
+                                    "Template Tabel, Grafik & Geometri:",
+                                    "Table, Graph & Geometry Templates:",
+                                ))
+                                .size(12.0)
+                                .strong(),
                             );
                             ui.horizontal_wrapped(|ui| {
                                 let templates: [(&str, &str); 8] = [
                                     (
-                                        "📊 Grafik Fungsi",
+                                        lang.tr("📊 Grafik Fungsi", "📊 Function Plot"),
                                         "\\begin{axis}[title={$f(x) = x^2$}, xlabel={$x$}, ylabel={$y$}, xmin=-3, xmax=3, grid=major, axis lines=middle]\n\\addplot[blue, domain=-3:3]{x^2};\n\\addplot[red, dashed, domain=-3:3]{2*x + 1};\n\\legend{$x^2$, $2x+1$}\n\\end{axis}",
                                     ),
                                     (
-                                        "📈 Grafik Data",
+                                        lang.tr("📈 Grafik Data", "📈 Data Chart"),
                                         "\\begin{axis}[title={Data Pengamatan}, xlabel={Waktu}, ylabel={Nilai}, grid=major, ybar]\n\\addplot[teal] coordinates {(1, 3) (2, 7) (3, 5) (4, 9)};\n\\end{axis}",
                                     ),
                                     (
-                                        "🧊 Grafik 3D",
+                                        lang.tr("🧊 Grafik 3D", "🧊 3D Surface"),
                                         "\\begin{tikzpicture}\n  \\begin{axis}[domain=-1:1, y domain=-1:1, xlabel={$x$}, ylabel={$y$}, zlabel={$z$}]\n    \\addplot3[surf] {x*y*exp(x+2*y-9*x^2-9*y^2)};\n  \\end{axis}\n\\end{tikzpicture}",
                                     ),
                                     (
-                                        "📐 Geometri Segitiga",
+                                        lang.tr("📐 Geometri Segitiga", "📐 Triangle Geometry"),
                                         "\\begin{tikzpicture}\n\\filldraw[fill=blue!20, draw=blue, thick] (0,0) node[below left]{$A$} -- (4,0) node[below right]{$B$} -- (1.5,2.5) node[above]{$C$} -- cycle;\n\\draw[red, dashed] (1.5,2.5) -- (1.5,0) node[below]{$H$};\n\\end{tikzpicture}",
                                     ),
                                     (
-                                        "⭕ Geometri Lingkaran",
+                                        lang.tr("⭕ Geometri Lingkaran", "⭕ Circle Geometry"),
                                         "\\begin{tikzpicture}\n\\draw[blue, thick] (0,0) circle (2);\n\\draw[red, ->, thick] (0,0) node[below left]{$O$} -- (1.41,1.41) node[midway, above left]{$r$};\n\\draw[green] (0.6,0) arc (0:45:0.6);\n\\end{tikzpicture}",
                                     ),
                                     (
-                                        "🕸 Graf Node-Edge",
+                                        lang.tr("🕸 Graf Node-Edge", "🕸 Node-Edge Graph"),
                                         "\\begin{tikzpicture}\n\\node[circle, draw=blue, fill=blue!15] (A) at (0,0) {A};\n\\node[circle, draw=blue, fill=blue!15] (B) at (3,1.2) {B};\n\\node[circle, draw=blue, fill=blue!15] (C) at (3,-1.2) {C};\n\\draw[->, thick] (A) -- node[above]{2} (B);\n\\draw[->, thick] (A) -- node[below]{5} (C);\n\\draw[->, dashed, red] (B) -- node[right]{3} (C);\n\\end{tikzpicture}",
                                     ),
                                     (
-                                        "📋 Tabel",
+                                        lang.tr("📋 Tabel", "📋 Table"),
                                         "\\begin{tabular}{|l|c|r|}\n\\hline\n\\textbf{Fungsi} & \\textbf{Turunan} & \\textbf{Nilai} \\\\\n\\hline\n$x^2$ & $2x$ & 4 \\\\\n$\\sin(x)$ & $\\cos(x)$ & 1 \\\\\n\\hline\n\\end{tabular}",
                                     ),
                                     (
-                                        "[M] Matriks",
+                                        lang.tr("[M] Matriks", "[M] Matrix"),
                                         "A = \\begin{pmatrix}\n1 & 2 \\\\\n3 & 4\n\\end{pmatrix}",
                                     ),
                                 ];
@@ -1497,18 +1596,25 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
 
                             ui.separator();
 
-                            ui.label("Kode LaTeX:");
+                            ui.label(lang.tr("Kode LaTeX:", "LaTeX Code:"));
                             let text_edit = egui::TextEdit::multiline(&mut state.equation_latex_buffer)
                                 .desired_rows(6)
                                 .desired_width(f32::INFINITY)
                                 .font(egui::TextStyle::Monospace)
-                                .hint_text(r"Contoh rumus, \begin{tabular}, \begin{axis}, atau \begin{tikzpicture}");
+                                .hint_text(lang.tr(
+                                    r"Contoh rumus, \begin{tabular}, \begin{axis}, atau \begin{tikzpicture}",
+                                    r"Formula, \begin{tabular}, \begin{axis}, or \begin{tikzpicture}",
+                                ));
                             ui.add(text_edit);
 
                             ui.separator();
 
                             // Live Preview Box dengan batas tinggi dan auto-fit + scroll internal
-                            ui.label(egui::RichText::new("Pratinjau Visual:").size(12.0).strong());
+                            ui.label(
+                                egui::RichText::new(lang.tr("Pratinjau Visual:", "Visual Preview:"))
+                                    .size(12.0)
+                                    .strong(),
+                            );
 
                             match &parse_result {
                                 Ok(nodes) if !is_empty => {
@@ -1577,9 +1683,10 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
                                 }
                                 Ok(_) => {
                                     ui.label(
-                                        egui::RichText::new(
+                                        egui::RichText::new(lang.tr(
                                             "Ketik kode LaTeX atau pilih template di atas untuk melihat pratinjau visual.",
-                                        )
+                                            "Enter LaTeX code or pick a template above to see a visual preview.",
+                                        ))
                                         .italics()
                                         .color(Color32::GRAY),
                                     );
@@ -1587,12 +1694,17 @@ pub fn render_equation_modal_dialog(ctx: &egui::Context, state: &mut CanvasState
                                 Err(err) => {
                                     ui.colored_label(
                                         Color32::from_rgb(235, 87, 87),
-                                        format!("⚠️ Kesalahan sintaks: {}", err),
+                                        format!(
+                                            "⚠️ {}: {}",
+                                            lang.tr("Kesalahan sintaks", "Syntax error"),
+                                            err
+                                        ),
                                     );
                                     ui.label(
-                                        egui::RichText::new(
+                                        egui::RichText::new(lang.tr(
                                             "Catatan: Mendukung rumus matematika, tabel (tabular/array/pmatrix/cases), grafik 2D & 3D (axis/addplot/addplot3), geometri & graf (tikzpicture), maupun dokumen LaTeX lengkap (\\begin{document}).",
-                                        )
+                                            "Note: Supports math formulas, tables (tabular/array/pmatrix/cases), 2D & 3D plots (axis/addplot/addplot3), TikZ geometry & graphs, and full LaTeX documents (\\begin{document}).",
+                                        ))
                                         .size(11.0)
                                         .color(Color32::GRAY),
                                     );

@@ -1,5 +1,5 @@
 use super::state::RustNotesApp;
-use super::theme::resolve_theme_mode;
+use super::theme::{UiPalette, resolve_theme_mode};
 use super::types::{ViewMode, get_windows_clipboard_sequence, is_v_key_physically_pressed};
 use crate::canvas::{ActiveTool, render_page_canvas, render_zoom_window_canvas};
 use crate::model::{ShapeKind, ShortcutAction, ThemeMode};
@@ -10,8 +10,10 @@ use std::time::Instant;
 
 impl RustNotesApp {
     pub(crate) fn render_editor_view(&mut self, ctx: &egui::Context) {
-        let notebook_id = match &self.active_notebook_id {
-            Some(id) => id.clone(),
+        let lang = self.settings.language;
+        let palette = UiPalette::from_ctx(ctx, self.settings.theme_mode);
+        let notebook_id = match self.active_notebook_id.clone() {
+            Some(id) => id,
             None => return,
         };
 
@@ -157,15 +159,28 @@ impl RustNotesApp {
                 crate::app::is_action_triggered(ShortcutAction::Save, &self.settings.shortcuts, i)
             }) {
                 if self.is_read_only {
-                    self.toast_message =
-                        Some("⚠ Mode Baca-Saja: tidak dapat menyimpan perubahan.".to_string());
+                    self.toast_message = Some(
+                        lang.tr(
+                            "⚠ Mode Baca-Saja: tidak dapat menyimpan perubahan.",
+                            "⚠ Read-Only Mode: cannot save changes.",
+                        )
+                        .to_string(),
+                    );
                 } else {
                     let nb_id = notebook_id.clone();
                     if self.force_save_notebook(&nb_id) {
-                        self.toast_message = Some("💾 Dokumen berhasil disimpan.".to_string());
+                        self.toast_message = Some(
+                            lang.tr("💾 Dokumen berhasil disimpan.", "💾 Document saved.")
+                                .to_string(),
+                        );
                     } else {
-                        self.toast_message =
-                            Some("⚠ Gagal menyimpan dokumen. Periksa izin/ruang disk.".to_string());
+                        self.toast_message = Some(
+                            lang.tr(
+                                "⚠ Gagal menyimpan dokumen. Periksa izin/ruang disk.",
+                                "⚠ Failed to save document. Check disk space or permissions.",
+                            )
+                            .to_string(),
+                        );
                     }
                 }
             }
@@ -180,7 +195,10 @@ impl RustNotesApp {
             }) {
                 self.apply_zoom_anchored(nb_idx, 1.0, None);
                 self.canvas_pan_offset = Vec2::ZERO;
-                self.toast_message = Some("🔍 Zoom di-reset ke 100%.".to_string());
+                self.toast_message = Some(
+                    lang.tr("🔍 Zoom di-reset ke 100%.", "🔍 Zoom reset to 100%.")
+                        .to_string(),
+                );
             }
 
             // Keyboard canvas zoom (Ctrl++ / Ctrl+= / Ctrl+-) terbatas pada rentang MIN_ZOOM..=MAX_ZOOM
@@ -663,9 +681,13 @@ impl RustNotesApp {
                     ui.horizontal(|ui| {
                         ui.add_space(12.0);
                         ui.label(
-                            RichText::new("🔍 Zoom Window (Auto-Advance)")
-                                .strong()
-                                .size(12.0),
+                            RichText::new(lang.tr(
+                                "🔍 Zoom Window (Otomatis Geser)",
+                                "🔍 Zoom Window (Auto-Advance)",
+                            ))
+                            .strong()
+                            .size(12.0)
+                            .color(palette.text_primary),
                         );
                         ui.separator();
                         let cur_idx = self.current_page_index;
@@ -673,7 +695,11 @@ impl RustNotesApp {
                             let p = &self.library.notebooks[nb_idx].pages[cur_idx];
                             (p.width, p.height)
                         };
-                        if ui.small_button("◀").on_hover_text("Geser Kiri").clicked() {
+                        if ui
+                            .small_button("◀")
+                            .on_hover_text(lang.tr("Geser Kiri", "Pan Left"))
+                            .clicked()
+                        {
                             let w = self.canvas_state.zoom_target_rect.width();
                             let h = self.canvas_state.zoom_target_rect.height();
                             let mut min = self.canvas_state.zoom_target_rect.min;
@@ -681,10 +707,18 @@ impl RustNotesApp {
                             self.canvas_state.zoom_target_rect =
                                 Rect::from_min_size(min, Vec2::new(w, h));
                         }
-                        if ui.small_button("▶").on_hover_text("Geser Kanan").clicked() {
+                        if ui
+                            .small_button("▶")
+                            .on_hover_text(lang.tr("Geser Kanan", "Pan Right"))
+                            .clicked()
+                        {
                             self.canvas_state.advance_zoom_target(pw, ph);
                         }
-                        if ui.small_button("▲").on_hover_text("Geser Atas").clicked() {
+                        if ui
+                            .small_button("▲")
+                            .on_hover_text(lang.tr("Geser Atas", "Pan Up"))
+                            .clicked()
+                        {
                             let w = self.canvas_state.zoom_target_rect.width();
                             let h = self.canvas_state.zoom_target_rect.height();
                             let mut min = self.canvas_state.zoom_target_rect.min;
@@ -692,7 +726,11 @@ impl RustNotesApp {
                             self.canvas_state.zoom_target_rect =
                                 Rect::from_min_size(min, Vec2::new(w, h));
                         }
-                        if ui.small_button("▼").on_hover_text("Geser Bawah").clicked() {
+                        if ui
+                            .small_button("▼")
+                            .on_hover_text(lang.tr("Geser Bawah", "Pan Down"))
+                            .clicked()
+                        {
                             let w = self.canvas_state.zoom_target_rect.width();
                             let h = self.canvas_state.zoom_target_rect.height();
                             let mut min = self.canvas_state.zoom_target_rect.min;
@@ -701,14 +739,21 @@ impl RustNotesApp {
                                 Rect::from_min_size(min, Vec2::new(w, h));
                         }
                         if ui
-                            .small_button("⏎ Baris Baru")
-                            .on_hover_text("Pindah ke awal baris berikutnya")
+                            .small_button(lang.tr("⏎ Baris Baru", "⏎ New Line"))
+                            .on_hover_text(lang.tr(
+                                "Pindah ke awal baris berikutnya",
+                                "Move to start of next line",
+                            ))
                             .clicked()
                         {
                             self.canvas_state.newline_zoom_target(pw, ph);
                         }
                         ui.separator();
-                        ui.label(RichText::new("Skala:").size(11.0).color(Color32::GRAY));
+                        ui.label(
+                            RichText::new(lang.tr("Skala:", "Scale:"))
+                                .size(11.0)
+                                .color(palette.text_muted),
+                        );
                         for &s in &[2.0_f32, 2.5_f32, 3.0_f32] {
                             let is_sel = (self.settings.zoom_window_scale - s).abs() < 0.1;
                             if ui.selectable_label(is_sel, format!("{s:.1}x")).clicked() {
@@ -718,7 +763,7 @@ impl RustNotesApp {
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             ui.add_space(12.0);
-                            if ui.small_button("✕ Tutup").clicked() {
+                            if ui.small_button(lang.tr("✕ Tutup", "✕ Close")).clicked() {
                                 self.canvas_state.show_zoom_window = false;
                             }
                         });
@@ -934,8 +979,8 @@ impl RustNotesApp {
                     ui.horizontal(|ui| {
                         // Pill 1: `( ↩ | ↪ )` Undo & Redo
                         egui::Frame::NONE
-                            .fill(Color32::from_rgba_unmultiplied(30, 30, 32, 225))
-                            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(65, 65, 70)))
+                            .fill(palette.bg_elevated)
+                            .stroke(Stroke::new(1.0_f32, palette.border_subtle))
                             .corner_radius(16.0)
                             .inner_margin(egui::Margin::symmetric(8, 4))
                             .show(ui, |ui| {
@@ -951,15 +996,24 @@ impl RustNotesApp {
                                     .get(&notebook_id)
                                     .map(|s| !s.is_empty())
                                     .unwrap_or(false);
+                                let undo_enabled = can_undo_stroke || can_undo_doc;
                                 if ui
                                     .add_enabled(
-                                        can_undo_stroke || can_undo_doc,
-                                        Button::new(
-                                            RichText::new("↩").size(14.0).color(Color32::WHITE),
-                                        )
+                                        undo_enabled,
+                                        Button::new(RichText::new("↩").size(14.0).color(
+                                            if undo_enabled {
+                                                palette.text_primary
+                                            } else {
+                                                palette.text_muted
+                                            },
+                                        ))
                                         .frame(false),
                                     )
-                                    .on_hover_text("Undo (Ctrl+Z)")
+                                    .on_hover_text(self.action_hover_text(
+                                        ShortcutAction::Undo,
+                                        "Batalkan",
+                                        "Undo",
+                                    ))
                                     .clicked()
                                 {
                                     self.perform_undo(nb_idx);
@@ -974,15 +1028,24 @@ impl RustNotesApp {
                                     .get(&notebook_id)
                                     .map(|s| !s.is_empty())
                                     .unwrap_or(false);
+                                let redo_enabled = can_redo_stroke || can_redo_doc;
                                 if ui
                                     .add_enabled(
-                                        can_redo_stroke || can_redo_doc,
-                                        Button::new(
-                                            RichText::new("↪").size(14.0).color(Color32::WHITE),
-                                        )
+                                        redo_enabled,
+                                        Button::new(RichText::new("↪").size(14.0).color(
+                                            if redo_enabled {
+                                                palette.text_primary
+                                            } else {
+                                                palette.text_muted
+                                            },
+                                        ))
                                         .frame(false),
                                     )
-                                    .on_hover_text("Redo (Ctrl+Y)")
+                                    .on_hover_text(self.action_hover_text(
+                                        ShortcutAction::Redo,
+                                        "Ulangi",
+                                        "Redo",
+                                    ))
                                     .clicked()
                                 {
                                     self.perform_redo(nb_idx);
@@ -992,21 +1055,29 @@ impl RustNotesApp {
                         // Pill 2: `( ◀ 1/N ▶ )` Page Navigation Stepper
                         let page_count = self.library.notebooks[nb_idx].pages.len();
                         egui::Frame::NONE
-                            .fill(Color32::from_rgba_unmultiplied(30, 30, 32, 225))
-                            .stroke(Stroke::new(1.0_f32, Color32::from_rgb(65, 65, 70)))
+                            .fill(palette.bg_elevated)
+                            .stroke(Stroke::new(1.0_f32, palette.border_subtle))
                             .corner_radius(16.0)
                             .inner_margin(egui::Margin::symmetric(8, 4))
                             .show(ui, |ui| {
                                 ui.spacing_mut().item_spacing.x = 4.0;
+                                let has_prev = self.current_page_index > 0;
                                 if ui
                                     .add_enabled(
-                                        self.current_page_index > 0,
-                                        Button::new(
-                                            RichText::new("◀").size(11.5).color(Color32::WHITE),
-                                        )
+                                        has_prev,
+                                        Button::new(RichText::new("◀").size(11.5).color(
+                                            if has_prev {
+                                                palette.text_primary
+                                            } else {
+                                                palette.text_muted
+                                            },
+                                        ))
                                         .frame(false),
                                     )
-                                    .on_hover_text("Halaman Sebelumnya (PageUp)")
+                                    .on_hover_text(lang.tr(
+                                        "Halaman Sebelumnya (PageUp)",
+                                        "Previous Page (PageUp)",
+                                    ))
                                     .clicked()
                                 {
                                     let prev_idx = self.current_page_index - 1;
@@ -1020,17 +1091,25 @@ impl RustNotesApp {
                                     ))
                                     .size(11.5)
                                     .strong()
-                                    .color(Color32::WHITE),
+                                    .color(palette.text_primary),
                                 );
+                                let has_next = self.current_page_index + 1 < page_count;
                                 if ui
                                     .add_enabled(
-                                        self.current_page_index + 1 < page_count,
-                                        Button::new(
-                                            RichText::new("▶").size(11.5).color(Color32::WHITE),
-                                        )
+                                        has_next,
+                                        Button::new(RichText::new("▶").size(11.5).color(
+                                            if has_next {
+                                                palette.text_primary
+                                            } else {
+                                                palette.text_muted
+                                            },
+                                        ))
                                         .frame(false),
                                     )
-                                    .on_hover_text("Halaman Berikutnya (PageDown)")
+                                    .on_hover_text(lang.tr(
+                                        "Halaman Berikutnya (PageDown)",
+                                        "Next Page (PageDown)",
+                                    ))
                                     .clicked()
                                 {
                                     let next_idx = self.current_page_index + 1;
@@ -1040,15 +1119,15 @@ impl RustNotesApp {
                     });
                 });
 
-            // Floating Bottom-Left Collapsible Zoom Capsule (Ikon ringkas saat tertutup, membesar menampilkan slider saat diklik)
+            // Floating Bottom-Left Collapsible Zoom Capsule
             let zoom_pill_pos = canvas_top_rect.left_bottom() + Vec2::new(12.0, -42.0);
             egui::Area::new(egui::Id::new("goodnotes_floating_zoom_pill"))
                 .fixed_pos(zoom_pill_pos)
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
                     egui::Frame::NONE
-                        .fill(Color32::from_rgba_unmultiplied(30, 30, 32, 225))
-                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(65, 65, 70)))
+                        .fill(palette.bg_elevated)
+                        .stroke(Stroke::new(1.0_f32, palette.border_subtle))
                         .corner_radius(16.0)
                         .inner_margin(if self.show_zoom_slider_expanded {
                             egui::Margin::symmetric(10, 5)
@@ -1060,23 +1139,33 @@ impl RustNotesApp {
                                 ui.spacing_mut().item_spacing.x = 6.0;
 
                                 let zoom_pct = (self.canvas_state.zoom * 100.0).round() as i32;
-                                let toggle_btn = Button::new(
-                                    RichText::new("🔍").size(13.5).color(
-                                        if self.show_zoom_slider_expanded {
-                                            Color32::from_rgb(130, 195, 255)
-                                        } else {
-                                            Color32::WHITE
-                                        },
-                                    ),
-                                )
+                                let toggle_btn = Button::new(RichText::new("🔍").size(13.5).color(
+                                    if self.show_zoom_slider_expanded {
+                                        palette.accent_text
+                                    } else {
+                                        palette.text_primary
+                                    },
+                                ))
                                 .frame(false);
 
                                 if ui
                                     .add(toggle_btn)
                                     .on_hover_text(if self.show_zoom_slider_expanded {
-                                        format!("Zoom: {zoom_pct}% — Klik lagi untuk mengecilkan menjadi ikon")
+                                        format!(
+                                            "Zoom: {zoom_pct}% — {}",
+                                            lang.tr(
+                                                "Klik lagi untuk mengecilkan menjadi ikon",
+                                                "Click again to collapse"
+                                            )
+                                        )
                                     } else {
-                                        format!("Zoom: {zoom_pct}% — Klik untuk menampilkan slider Zoom")
+                                        format!(
+                                            "Zoom: {zoom_pct}% — {}",
+                                            lang.tr(
+                                                "Klik untuk menampilkan slider Zoom",
+                                                "Click to show Zoom slider"
+                                            )
+                                        )
                                     })
                                     .clicked()
                                 {
@@ -1093,11 +1182,13 @@ impl RustNotesApp {
                                                 RichText::new("-")
                                                     .size(13.5)
                                                     .strong()
-                                                    .color(Color32::WHITE),
+                                                    .color(palette.text_primary),
                                             )
                                             .frame(false),
                                         )
-                                        .on_hover_text("Perkecil Zoom (-10%)")
+                                        .on_hover_text(
+                                            lang.tr("Perkecil Zoom (-10%)", "Zoom Out (-10%)"),
+                                        )
                                         .clicked()
                                     {
                                         let z = (self.canvas_state.zoom - 0.1)
@@ -1116,7 +1207,10 @@ impl RustNotesApp {
                                             )
                                             .show_value(false),
                                         )
-                                        .on_hover_text("Geser untuk mengatur tingkat Zoom kanvas")
+                                        .on_hover_text(lang.tr(
+                                            "Geser untuk mengatur tingkat Zoom kanvas",
+                                            "Drag to adjust canvas Zoom level",
+                                        ))
                                         .changed()
                                     {
                                         self.apply_zoom_anchored(nb_idx, slider_zoom, None);
@@ -1128,11 +1222,13 @@ impl RustNotesApp {
                                                 RichText::new("+")
                                                     .size(13.5)
                                                     .strong()
-                                                    .color(Color32::WHITE),
+                                                    .color(palette.text_primary),
                                             )
                                             .frame(false),
                                         )
-                                        .on_hover_text("Perbesar Zoom (+10%)")
+                                        .on_hover_text(
+                                            lang.tr("Perbesar Zoom (+10%)", "Zoom In (+10%)"),
+                                        )
                                         .clicked()
                                     {
                                         let z = (self.canvas_state.zoom + 0.1)
@@ -1148,7 +1244,7 @@ impl RustNotesApp {
                                                 RichText::new(format!("{zoom_pct}%"))
                                                     .size(11.5)
                                                     .strong()
-                                                    .color(Color32::WHITE),
+                                                    .color(palette.text_primary),
                                             )
                                             .frame(false),
                                         )
